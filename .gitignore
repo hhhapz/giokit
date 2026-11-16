@@ -1,0 +1,8 @@
+/shots/
+*.png
+!testdata/golden/*.png
+*.test
+*.log
+*.prof
+/gallery
+/scrolltest

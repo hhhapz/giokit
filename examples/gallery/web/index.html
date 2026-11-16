@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>giokit gallery</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #1c1f26; color: #c9ced8; font: 14px system-ui, sans-serif; }
+  #giowindow { position: fixed; inset: 0; }
+  #status { position: fixed; inset: 0; display: grid; place-items: center; }
+</style>
+</head>
+<body>
+<div id="status">Loading the gallery…</div>
+<div id="giowindow"></div>
+<script src="wasm_exec.js"></script>
+<script>
+  const go = new Go();
+  WebAssembly.instantiateStreaming(fetch("gallery.wasm"), go.importObject)
+    .then(r => { document.getElementById("status").remove(); go.run(r.instance); })
+    .catch(e => { document.getElementById("status").textContent = "Failed to load: " + e; console.error(e); });
+</script>
+</body>
+</html>

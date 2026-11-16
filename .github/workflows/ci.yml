@@ -1,0 +1,57 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    env:
+      # Mesa llvmpipe gives EGL surfaceless without a GPU. Fail, never skip,
+      # if the headless context cannot be created.
+      LIBGL_ALWAYS_SOFTWARE: "1"
+      KITTEST_REQUIRE_GPU: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Gio build deps and Mesa
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            gcc pkg-config libwayland-dev libx11-dev libx11-xcb-dev \
+            libxkbcommon-x11-dev libgles2-mesa-dev libegl1-mesa-dev \
+            libffi-dev libxcursor-dev libvulkan-dev libegl-mesa0 mesa-utils
+      - name: gofmt
+        run: test -z "$(gofmt -l kit kittest examples desktop internal)" || { gofmt -l kit kittest examples desktop internal; exit 1; }
+      - run: go vet ./...
+      - name: Test (final frame per test and contact sheets saved)
+        run: KITTEST_SHOTS=${{ runner.temp }}/shots go test ./...
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: shots
+          path: ${{ runner.temp }}/shots
+          if-no-files-found: ignore
+
+  cross:
+    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        target: [windows/amd64, js/wasm]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Build ${{ matrix.target }}
+        shell: bash
+        env:
+          CGO_ENABLED: "0"
+          TARGET: ${{ matrix.target }}
+        run: |
+          export GOOS=${TARGET%/*} GOARCH=${TARGET#*/}
+          go build ./kit/... ./kittest/... ./examples/...

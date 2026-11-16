@@ -1,0 +1,190 @@
+# kittest reference
+
+The harness gives you real Gio layout, a real `input.Router`, and GPU rendering
+through EGL surfaceless. There's no window and no display, and it runs alongside a
+desktop session. If there's no GPU, `NewT` skips the test; with
+`KITTEST_REQUIRE_GPU=1` it fails instead (CI sets this). Without a hardware GPU,
+`LIBGL_ALWAYS_SOFTWARE=1` runs the suite on Mesa llvmpipe. Custom constructors
+that call `kittest.New` should call `kittest.NoGPU(t, err)` on error.
+
+## Setup
+
+| Call | Notes |
+|---|---|
+| `NewT(t, wdp, hdp, frame)` | Scale 1. Reports via `t`. Saves the final frame to `$KITTEST_SHOTS/<test>.png`. |
+| `New(wdp, hdp, scale, frame)` | For tools such as a `-shot` flag. Findings go to `h.Problems()`. |
+| `h.Theme = th` | Enables the missing-glyph audit. |
+| `h.Strict` | Default true: re-render after each input to catch stale frames. |
+| `h.MinTarget` | Smallest accepted clickable size, default 16dp. |
+
+## Input
+
+Every input call settles, then (in strict mode) runs a stale check.
+
+- **Pointer:**
+  - `Move(pt)`, `Click(pt)`, `Scroll(pt, dy)`
+  - `Hover(id)`, `ClickID(id)`, `ScrollID(id, dy)`
+- **Keyboard:**
+  - `Key(name, mods)`: unhandled Tab/Shift+Tab move focus, like a real window.
+  - `Tab(back)`
+  - `Type(text)`: inserts into the focused editor.
+- **Cursor:** `Cursor()` returns the cursor the UI requests at the pointer (for
+  example, the hand over buttons).
+
+## Time and motion
+
+- `h.Now` is a virtual clock passed as `gtx.Now`. Settle advances it one
+  frame (1/60 s) per immediate redraw, so finite animations (`kit.Tween`)
+  finish within one input call. `no-settle` fires after 120 such frames.
+- Scheduled redraws (`kit.Loop`, caret blink, timers) are not chased:
+  `h.Wait(d)` advances the clock and settles.
+- More input: `Drag(from, to)`, `DragID(id, dx, dy)`, `Chord("Shortcut+K")`.
+- Only one live harness per test: two share and tear down one EGL display.
+
+## Real-window diagnostics
+
+`GIOKIT_TRACE=1 go run ./examples/gallery 2>trace.log` (or
+`GIOKIT_TRACE_FILE=trace.log`) writes one ordered log, each line
+`giokit <ms> f<frame> <kind> key=value…`:
+
+- **Pacing:** `frame` (lag behind the frame time), `frame_end` (build and
+  submit ms), `pacing` once a second, `LATE_FRAME` (> 1.5× median interval).
+  Late frames with a small build time point at pacing or the compositor.
+- **Gio window events** (patched hooks, `docs/gio-patches.md`): `wl_axis*`,
+  `scroll_flush`, `wl_frame_done`, `wl_draw`, `set_animating`,
+  `schedule_timer`, `gpu_frame`, `present`.
+- **Lists:** a `list` line on every frame a `kit.List` scrolls, settles, or
+  changes items: wheel delta, glide, `pos` (last → after input → after layout),
+  `moved` vs `req`, and every visible row as `index@top+height`. Events:
+  `list_enter`/`list_leave` (with first-time build cost), `list_resize`,
+  `list_relayout`, `list_slow_item` (> 2ms), `list_thumb_jump`. `LIST_SKIP`
+  marks frames whose rows moved a different amount than asked, or unevenly
+  (`uneven` lists each row's delta).
+
+`go run ./examples/scrolltest` is the hands-on scroll bench: a plain-text
+control list beside a component list, each graphing Δ per frame with skips in
+red. `C` swaps components for same-height blocks (is it component-linked?),
+`U` A/B-toggles Gio's upstream wheel scaling (pitfalls #22), `R` resets.
+Set `GIOKIT_WHEEL_MINI_STEP_SCALE=1.5` before launch to try a different
+high-resolution wheel sub-step multiplier (default 1.2).
+
+In tests, assert `l.Jumps() == 0` after scrolling (see `TestScrollContinuity`).
+
+## Queries (semantic tree)
+
+- `Find(id)`, `FindText(s)`: pixel bounds.
+- `TextsIn(id)`: labels whose origin is inside a widget.
+- `Texts()`, `IDs()`: everything on screen.
+- `Dump(w)`: the indented tree, with `[click]` marking interactive nodes.
+
+## Pixels
+
+- `Image()`, `Pixel(pt)`, `Save(path)`.
+- `BgColor(id)`: samples 3px inside the left edge, at mid height.
+- `Near(a, b, tol)`: color comparison with tolerance.
+
+## Assertions (NewT only)
+
+- `ExpectID`, `ExpectNoID`, `ExpectText`, `ExpectTextIn(id, s)`.
+- `ExpectBg(id, color)`: ±2 per channel.
+- `ExpectClean()`: fails on every Audit finding.
+- `ExpectGolden(name)`: compares to `testdata/golden/name.png`. Set
+  `KITTEST_UPDATE=1` to write. Goldens are machine-specific; use them sparingly.
+
+## Automatic checks
+
+- **stale-frame:** after an input, one more frame (with no input) changed the
+  semantics or pixels. Catches draw-before-handle, late hover reads and a missing
+  Notify. The message includes the changed labels, or the changed pixel rectangle.
+- **no-settle:** still requesting redraws after 10 frames.
+- **Audit:**
+
+| Finding | Meaning |
+|---|---|
+| unlabeled-clickable | No id. Untestable, and silent to screen readers. |
+| tiny-target | Smaller than MinTarget, usually a collapsed box. |
+| occluded | Another interactive area covers the center. |
+| duplicate-id | Two widgets share an id. |
+| missing-glyph | Text the fonts can't draw (tofu). |
+| low-contrast | Enabled text under `MinContrast` (default 4.5, WCAG AA) or `MinContrastLarge` (3, large text) against its background, measured from pixels. 0 turns it off. |
+
+- **Contrast:** `h.Contrasts()` returns every enabled label's measured
+  ratio, text color and background. Text inside `th.Disable` is exempt, as
+  in WCAG. Thin glyphs at scale 1 never fully cover a pixel, so ink that
+  sits 60%+ of the way from the background to a theme color counts as that
+  color. **Set `h.Theme` again after switching themes**, or text is judged
+  against the old palette.
+- **Focus:** `h.FocusedID()` names the focused widget.
+  `h.FocusEscape(id, n)` / `h.ExpectFocusTrapped(id, n)` press Tab and
+  Shift+Tab n times each and report focus leaving `id` (a modal's trap).
+  `h.ExpectEscapeCloses(id)`.
+  `h.TabUnreachable()` visits enabled named controls and returns those Tab
+  skips; `h.ExpectTabReachable()` asserts the result is empty. Run it on a
+  stable screen. `h.A11yTree()` snapshots IDs, labels, classes, bounds, and
+  state as a tree.
+- **Layers:** an open popup's panel `X` and backdrop `X:backdrop` may cover
+  the page; the audit doesn't call that occlusion. Contrast skips covered
+  text. `h.RightClick(pt)` opens context menus.
+- **Disabled:** `h.Disabled(id)` reports whether a widget is disabled, itself
+  or through an ancestor. `Dump` marks `[disabled]`.
+
+## Visual review (token-cheap)
+
+```go
+h.Snap("initial"); h.Hover("row:2"); h.Snap("hover"); h.ClickID("x"); h.Snap("after")
+h.SaveSheet(dir+"/sheet.png", 2, 2) // 2 columns, frames halved → one image to read
+```
+
+Apps should expose a `-shot` flag that renders via `kittest.New`. See the
+gallery, and meetbill's `shot -hover <id>`.
+
+## Recipes
+
+- **Hover:**
+  1. Hover row B, then `ExpectBg(B, Panel)` and `ExpectBg(A, Bg)`.
+  2. Hover a child control inside B, and check B is still lit.
+  3. Move off the table, and check nothing is lit.
+- **Immediate update:** `ClickID(control)`, then assert the model, the control's
+  own label, *and* everything derived from it (totals, sidebars). Strict mode
+  covers the rest.
+- **Persistence:** after the click, reload the store from disk and assert.
+
+## Conformance suite (`kittest/conform`)
+
+Every interactive control has a row in `kit/conform_test.go`:
+
+```go
+conform.Case{Name: "Switch", ID: "wifi", Role: semantic.Switch, Label: "Wi-Fi",
+	Build: clickable(func(th *kit.Theme, gtx kit.C, c *kit.Clickable) kit.D {
+		return th.Switch(gtx, c, "wifi", "Wi-Fi", false)
+	})}
+```
+
+`Build(th, disabled)` returns a frame (which must wrap the control in
+`th.Disable` when asked) and an activation counter. Per row, subtests check:
+id, role and a spoken label that is not the id; hover changes pixels; one click
+fires once; Tab reaches it; Enter and Space activate it (`NoKeys` opts out);
+keyboard focus draws a ring; disabled blocks clicks, Tab and keys and says
+so; `ExpectClean` under every preset, at scale 1.5 and 2, density 0.8 and
+1.2, and 200dp wide. `TestCatchesBrokenControls` proves each check fires on a
+broken control (run in a child process, since a failing subtest fails its
+parent). Composite controls (menus, selects) need a richer case type; they
+are covered by gallery tests for now.
+
+## Lint (`internal/lint`)
+
+`go/ast` checks over `kit/`: no `color.NRGBA` literal outside the token files,
+no `clip.Stroke`, and two ratchets, geometry literals (`Radius: 4`,
+`gtx.Dp(22)`) and English strings, whose per-file counts may only go down.
+Lower the baseline in the same change (`LINT_BASELINE=1 go test
+./internal/lint -v` prints it). `TestRulesCatch` proves each rule on a
+broken snippet.
+
+## Writing a new check
+
+1. Reproduce the bug as a tiny widget in `kittest/kittest_test.go` and show the
+   check fails without the fix.
+2. If the bug is detectable from structure (semantics, pixels, frame stability),
+   add it to `Audit` or strict mode, so every app gets it for free.
+3. Add a one-line rule to `skills/giokit/SKILL.md`, and an entry to
+   `docs/pitfalls.md`.

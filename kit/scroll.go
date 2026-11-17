@@ -60,7 +60,7 @@ func (l *List) Jumps() int { return l.jumps }
 // list, so the frame that handles a drag also shows it.
 func (t *Theme) List(gtx C, l *List, id string, n int, item layout.ListElement) D {
 	l.Axis = layout.Vertical
-	hit := gtx.Dp(16)
+	hit := gtx.Dp(t.HitSize)
 
 	// Wheel input first (rule 1). Our wheel handler is the list's ancestor,
 	// so it only sees scrolls no item claimed (a focused slider keeps its
@@ -384,4 +384,27 @@ func (l *List) trace(id string, n, viewH, requested, wheel int, pend0 float32, g
 		"count", p.Count, "off_last", p.OffsetLast, "len", p.Length, "before_end", p.BeforeEnd,
 		"view", viewH, "laid", len(l.sizes), "rows", strings.TrimSuffix(rows.String(), ","),
 		"vp", fmt.Sprintf("%.4f-%.4f", start, end), "settle", l.scrolling)
+}
+
+// ScrollIntoView scrolls the least distance that shows item i whole, using
+// last frame's layout (rows of similar height). Call it from a handler; the
+// next frame shows the result.
+func (l *List) ScrollIntoView(i int) {
+	p := &l.Position
+	l.pending = 0
+	if p.Count == 0 {
+		p.First, p.Offset = i, 0
+		return
+	}
+	last := p.First + p.Count - 1
+	switch {
+	case i < p.First || (i == p.First && p.Offset > 0):
+		p.First, p.Offset = i, 0
+	case i > last || (i == last && p.OffsetLast < 0):
+		p.First += i - last
+		p.Offset -= p.OffsetLast // OffsetLast < 0: the hidden part of the last row
+	default:
+		return
+	}
+	p.BeforeEnd = true
 }

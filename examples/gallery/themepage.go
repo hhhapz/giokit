@@ -16,18 +16,19 @@ import (
 
 	"github.com/hhhapz/giokit/kit"
 	"github.com/hhhapz/giokit/kit/fonts"
+	"github.com/hhhapz/giokit/kit/ui"
 )
 
 type themeState struct {
 	presets  []*kit.Theme
 	preset   int // index into presets, or -1 for the custom theme
 	presetBt kit.Pool[kit.Clickable]
-	density  kit.Tabs
+	density  ui.TabsState
 	dens     int
 	motion   kit.Clickable
 	motionOn bool
 	custom   kit.Clickable
-	hue      kit.Slider
+	hue      slider
 	lastHue  float32
 	darkSeed kit.Clickable
 	seedDark bool
@@ -37,7 +38,7 @@ type themeState struct {
 
 	prevSave, prevSolid kit.Clickable
 	prevName            widget.Editor
-	prevSel             kit.Select
+	prevSel             ui.SelectState
 	prevSelI            int
 	prevCheck           kit.Clickable
 	prevChecked         bool
@@ -47,7 +48,7 @@ type themeState struct {
 type knob struct {
 	id, label string
 	names     []string
-	tabs      kit.Tabs
+	tabs      ui.TabsState
 	sel       int
 }
 
@@ -80,7 +81,6 @@ func (g *gallery) initTheme() {
 	g.presets = kit.Presets()
 	g.th = g.presets[0]
 	g.dens, g.motionOn, g.seedDark = 1, true, true
-	g.density.Style = kit.TabsSegmented
 	g.hue.Value, g.lastHue = 0.6, 0.6
 	g.themeLst.Axis = layout.Vertical
 	var fontNames []string
@@ -89,7 +89,6 @@ func (g *gallery) initTheme() {
 	}
 	add := func(id, label string, sel int, names ...string) {
 		k := &knob{id: id, label: label, names: names, sel: sel}
-		k.tabs.Style = kit.TabsSegmented
 		g.knobs = append(g.knobs, k)
 	}
 	add("corners", "Corners", 2, "Sharp", "Subtle", "Default", "Round", "Pill")
@@ -163,7 +162,7 @@ func (g *gallery) handleTheme(gtx C) {
 			g.preset, changed = i, true
 		}
 	}
-	if i, ok := g.density.Clicked(gtx); ok {
+	if i, ok := g.density.Update(gtx); ok {
 		g.dens, changed = i, true
 	}
 	if g.motion.Clicked(gtx) {
@@ -183,13 +182,13 @@ func (g *gallery) handleTheme(gtx C) {
 		g.lastHue, g.preset, changed = g.hue.Value, -1, true
 	}
 	for _, k := range g.knobs {
-		if i, ok := k.tabs.Clicked(gtx); ok && i != k.sel {
+		if i, ok := k.tabs.Update(gtx); ok && i != k.sel {
 			k.sel, changed = i, true
 		}
 	}
 	g.prevSave.Clicked(gtx)
 	g.prevSolid.Clicked(gtx)
-	if i, ok := g.prevSel.Changed(gtx); ok {
+	if i, ok := g.prevSel.Update(gtx); ok {
 		g.prevSelI = i
 	}
 	if g.prevCheck.Clicked(gtx) {
@@ -235,10 +234,12 @@ func (g *gallery) themePage(gtx C) D {
 				for i, p := range g.presets {
 					i, p := i, p
 					ws = append(ws, func(gtx C) D {
-						return th.Radio(gtx, g.presetBt.Get(p.Name), "preset:"+p.Name, p.Name, g.preset == i)
+						return ui.Radio{ID: "preset:" + p.Name, Label: p.Name, Selected: g.preset == i}.Layout(gtx, th, g.presetBt.Get(p.Name))
 					})
 				}
-				ws = append(ws, func(gtx C) D { return th.Radio(gtx, &g.custom, "preset:custom", "Custom", g.preset == -1) })
+				ws = append(ws, func(gtx C) D {
+					return ui.Radio{ID: "preset:custom", Label: "Custom", Selected: g.preset == -1}.Layout(gtx, th, &g.custom)
+				})
 				return wrapRows(gtx, 4, ws)
 			})
 		},
@@ -253,9 +254,11 @@ func (g *gallery) themePage(gtx C) D {
 						return kit.Row(gtx,
 							kit.Rigid(func(gtx C) D { return th.Text(gtx, "Hue", th.Type.Body, th.Muted, kit.Regular) }),
 							kit.Rigid(kit.Gap(12, 0)),
-							kit.Flexed(1, func(gtx C) D { return th.Slider(gtx, &g.hue, "slider:hue") }),
+							kit.Flexed(1, func(gtx C) D { return g.hue.layout(gtx, th, "slider:hue", "Hue") }),
 							kit.Rigid(kit.Gap(16, 0)),
-							kit.Rigid(func(gtx C) D { return th.Switch(gtx, &g.darkSeed, "switch:dark", "Dark", g.seedDark) }),
+							kit.Rigid(func(gtx C) D {
+								return ui.Switch{ID: "switch:dark", Label: "Dark", On: g.seedDark}.Layout(gtx, th, &g.darkSeed)
+							}),
 						)
 					}),
 				)
@@ -274,9 +277,13 @@ func (g *gallery) themePage(gtx C) D {
 			return g.section(gtx, "Spacing and motion", func(gtx C) D {
 				return kit.Row(gtx,
 					kit.Rigid(kit.Fixed(110, func(gtx C) D { return th.Text(gtx, "Density", th.Type.Body, th.Muted, kit.Regular) })),
-					kit.Rigid(func(gtx C) D { return th.Tabs(gtx, &g.density, "density", densityNames, g.dens) }),
+					kit.Rigid(func(gtx C) D {
+						return ui.Tabs{ID: "density", Labels: densityNames, Selected: g.dens, Style: ui.TabsSegmented}.Layout(gtx, th, &g.density)
+					}),
 					kit.Rigid(kit.Gap(24, 0)),
-					kit.Rigid(func(gtx C) D { return th.Switch(gtx, &g.motion, "switch:motion", "Animations", g.motionOn) }),
+					kit.Rigid(func(gtx C) D {
+						return ui.Switch{ID: "switch:motion", Label: "Animations", On: g.motionOn}.Layout(gtx, th, &g.motion)
+					}),
 				)
 			})
 		},
@@ -300,7 +307,9 @@ func (g *gallery) themePage(gtx C) D {
 					kit.Rigid(kit.Gap(0, 6)),
 					kit.Rigid(func(gtx C) D {
 						return kit.Row(gtx,
-							kit.Rigid(func(gtx C) D { return th.Button(gtx, &g.copyBt, "tokens:copy", "Copy as DTCG JSON", kit.Primary) }),
+							kit.Rigid(func(gtx C) D {
+								return ui.Button{ID: "tokens:copy", Text: "Copy as DTCG JSON", Style: ui.Primary}.Layout(gtx, th, &g.copyBt)
+							}),
 							kit.Rigid(kit.Gap(12, 0)),
 							kit.Flexed(1, func(gtx C) D {
 								return th.Paragraph(gtx, "Design-token JSON works with Figma (Tokens Studio), Penpot and Style Dictionary. Load one with -theme file.json.", th.Dim)
@@ -352,7 +361,9 @@ func (g *gallery) knobRowsW(gtx C, labelW unit.Dp, ids ...string) D {
 		rows = append(rows, kit.Rigid(func(gtx C) D {
 			return kit.Row(gtx,
 				kit.Rigid(kit.Fixed(labelW, func(gtx C) D { return th.Text(gtx, k.label, th.Type.Body, th.Muted, kit.Regular) })),
-				kit.Rigid(func(gtx C) D { return th.Tabs(gtx, &k.tabs, "knob:"+k.id, k.names, k.sel) }),
+				kit.Rigid(func(gtx C) D {
+					return ui.Tabs{ID: "knob:" + k.id, Labels: k.names, Selected: k.sel, Style: ui.TabsSegmented}.Layout(gtx, th, &k.tabs)
+				}),
 			)
 		}))
 	}
@@ -366,15 +377,21 @@ func (g *gallery) themePreview(gtx C) D {
 		kit.Rigid(func(gtx C) D { return th.Heading(gtx, "The quick brown fox") }),
 		kit.Rigid(kit.Gap(0, 10)),
 		kit.Rigid(func(gtx C) D {
-			return hrow(gtx, 10,
-				func(gtx C) D { return th.Button(gtx, &g.prevSave, "preview:save", "Save", kit.Secondary) },
-				func(gtx C) D { return th.Button(gtx, &g.prevSolid, "preview:solid", "Publish", kit.Solid) },
-				kit.Fixed(180, func(gtx C) D { return th.TextField(gtx, &g.prevName, "preview:name", "Project name") }),
-				kit.Fixed(150, func(gtx C) D {
-					return th.Select(gtx, &g.prevSel, "preview:sel", []string{"Private", "Team", "Public"}, g.prevSelI)
+			return kit.Flex{Gap: kit.Space2p5, Align: layout.Middle}.Layout(gtx, th,
+				kit.Rigid(func(gtx C) D { return ui.Button{ID: "preview:save", Text: "Save"}.Layout(gtx, th, &g.prevSave) }),
+				kit.Rigid(func(gtx C) D {
+					return ui.Button{ID: "preview:solid", Text: "Publish", Style: ui.Solid}.Layout(gtx, th, &g.prevSolid)
 				}),
-				func(gtx C) D { return th.CheckboxLabel(gtx, &g.prevCheck, "preview:check", "Notify me", g.prevChecked) },
-				func(gtx C) D { return th.Badge(gtx, kit.StatusGood, "live") },
+				kit.Rigid(kit.Fixed(180, func(gtx C) D {
+					return ui.TextField{ID: "preview:name", Placeholder: "Project name"}.Layout(gtx, th, &g.prevName)
+				})),
+				kit.Rigid(kit.Fixed(150, func(gtx C) D {
+					return ui.Select{ID: "preview:sel", Options: []string{"Private", "Team", "Public"}, Selected: g.prevSelI}.Layout(gtx, th, &g.prevSel)
+				})),
+				kit.Rigid(func(gtx C) D {
+					return ui.Checkbox{ID: "preview:check", Label: "Notify me", Checked: g.prevChecked}.Layout(gtx, th, &g.prevCheck)
+				}),
+				kit.Rigid(func(gtx C) D { return ui.Badge{Status: kit.StatusGood, Text: "live"}.Layout(gtx, th) }),
 			)
 		}),
 		kit.Rigid(kit.Gap(0, 10)),

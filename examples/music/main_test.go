@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/hhhapz/giokit/kit"
+	"github.com/hhhapz/giokit/kit/x"
 	"github.com/hhhapz/giokit/kittest"
 )
 
@@ -29,12 +29,12 @@ func TestMusicInteractions(t *testing.T) {
 	}
 	h.ClickID("music:play")
 	h.ClickID("music:queue/arcade/up")
-	if m.queue.Items[0].ID != "arcade" {
-		t.Fatalf("queue after up: %+v", m.queue.Items)
+	if m.queueItems[0].ID != "arcade" {
+		t.Fatalf("queue after up: %+v", m.queueItems)
 	}
 	h.DragID("music:queue/arcade/drag", 0, 112)
-	if m.queue.Items[2].ID != "arcade" {
-		t.Fatalf("queue after drag: %+v", m.queue.Items)
+	if m.queueItems[2].ID != "arcade" {
+		t.Fatalf("queue after drag: %+v", m.queueItems)
 	}
 	h.ClickID("music:follow")
 	if m.lyrics.Follow {
@@ -71,4 +71,4 @@ func TestActiveLyricBoundary(t *testing.T) {
 	}
 }
 
-func activeAt(at time.Duration) int { return kit.ActiveLyric(demoLyrics, at) }
+func activeAt(at time.Duration) int { return x.ActiveLyric(demoLyrics, at) }

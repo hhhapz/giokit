@@ -9,6 +9,7 @@ import (
 
 	"github.com/hhhapz/giokit/kit"
 	"github.com/hhhapz/giokit/kit/fonts"
+	"github.com/hhhapz/giokit/kit/ui"
 	"github.com/hhhapz/giokit/kittest"
 )
 
@@ -22,15 +23,17 @@ func TestControlsLineUp(t *testing.T) {
 				th.UseFonts(set)
 				var b kit.Clickable
 				var e widget.Editor
-				var s kit.Select
+				var s ui.SelectState
 				h := kittest.NewT(t, 600, 120, func(gtx kit.C) {
 					b.Clicked(gtx)
-					s.Changed(gtx)
+					s.Update(gtx)
 					gtx.Constraints.Min = image.Point{} // natural heights, not the window's
 					kit.Row(gtx,
-						kit.Rigid(func(gtx kit.C) kit.D { return th.Button(gtx, &b, "b", "Save", kit.Secondary) }),
-						kit.Rigid(kit.Fixed(160, func(gtx kit.C) kit.D { return th.TextField(gtx, &e, "f", "Name") })),
-						kit.Rigid(kit.Fixed(160, func(gtx kit.C) kit.D { return th.Select(gtx, &s, "s", []string{"One"}, 0) })),
+						kit.Rigid(func(gtx kit.C) kit.D { return ui.Button{ID: "b", Text: "Save"}.Layout(gtx, th, &b) }),
+						kit.Rigid(kit.Fixed(160, func(gtx kit.C) kit.D { return ui.TextField{ID: "f", Placeholder: "Name"}.Layout(gtx, th, &e) })),
+						kit.Rigid(kit.Fixed(160, func(gtx kit.C) kit.D {
+							return ui.Select{ID: "s", Options: []string{"One"}, Selected: 0}.Layout(gtx, th, &s)
+						})),
 					)
 				})
 				h.Theme = th
@@ -53,7 +56,7 @@ func TestControlSizeOrders(t *testing.T) {
 		var b kit.Clickable
 		h, err := kittest.New(300, 100, 1, func(gtx kit.C) {
 			gtx.Constraints.Min = image.Point{}
-			kit.Row(gtx, kit.Rigid(func(gtx kit.C) kit.D { return th.Button(gtx, &b, "b", "Save", kit.Secondary) }))
+			kit.Row(gtx, kit.Rigid(func(gtx kit.C) kit.D { return ui.Button{ID: "b", Text: "Save"}.Layout(gtx, th, &b) }))
 		})
 		if err != nil {
 			kittest.NoGPU(t, err)

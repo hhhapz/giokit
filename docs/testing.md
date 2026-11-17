@@ -151,12 +151,12 @@ gallery, and meetbill's `shot -hover <id>`.
 
 ## Conformance suite (`kittest/conform`)
 
-Every interactive control has a row in `kit/conform_test.go`:
+Every interactive component has a row in `kit/ui/conform_test.go`:
 
 ```go
 conform.Case{Name: "Switch", ID: "wifi", Role: semantic.Switch, Label: "Wi-Fi",
-	Build: clickable(func(th *kit.Theme, gtx kit.C, c *kit.Clickable) kit.D {
-		return th.Switch(gtx, c, "wifi", "Wi-Fi", false)
+	Build: conform.Clickable(func(th *kit.Theme, gtx kit.C, c *kit.Clickable) kit.D {
+		return ui.Switch{ID: "wifi", Label: "Wi-Fi"}.Layout(gtx, th, c)
 	})}
 ```
 
@@ -168,8 +168,12 @@ keyboard focus draws a ring; disabled blocks clicks, Tab and keys and says
 so; `ExpectClean` under every preset, at scale 1.5 and 2, density 0.8 and
 1.2, and 200dp wide. `TestCatchesBrokenControls` proves each check fires on a
 broken control (run in a child process, since a failing subtest fails its
-parent). Composite controls (menus, selects) need a richer case type; they
-are covered by gallery tests for now.
+parent). Controls that open a layer (menus, selects) run `conform.Composite`
+instead (`TestConformanceComposite`): a click and Enter on the trigger open
+it, Down focuses the first item, Enter picks once and returns focus to the
+trigger, Escape dismisses onto the trigger, and the open layer is clean under
+every preset, at scale 2 and in the extreme styles.
+`TestCatchesBrokenComposites` proves each step on a broken menu.
 
 ## Lint (`internal/lint`)
 

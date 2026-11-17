@@ -34,6 +34,7 @@ import (
 	"gioui.org/unit"
 
 	"github.com/hhhapz/giokit/kit"
+	"github.com/hhhapz/giokit/kit/ui"
 )
 
 type C = layout.Context
@@ -114,8 +115,8 @@ type bench struct {
 	placeholder bool
 
 	clicks  kit.Pool[kit.Clickable]
-	sliders kit.Pool[kit.Slider]
-	tabs    kit.Pool[kit.Tabs]
+	sliders kit.Pool[slider]
+	tabs    kit.Pool[ui.TabsState]
 	on      map[string]bool
 	tab     map[string]int
 }
@@ -146,8 +147,8 @@ func (b *bench) handle(gtx C) {
 			b.on[id] = !b.on[id]
 		}
 	})
-	b.tabs.Each(func(id string, t *kit.Tabs) {
-		if i, ok := t.Clicked(gtx); ok {
+	b.tabs.Each(func(id string, t *ui.TabsState) {
+		if i, ok := t.Update(gtx); ok {
 			b.tab[id] = i
 		}
 	})
@@ -197,7 +198,7 @@ func (b *bench) hint(k, label string) layout.FlexChild {
 	return kit.Rigid(func(gtx C) D {
 		return layout.Inset{Left: 12}.Layout(gtx, func(gtx C) D {
 			return kit.Row(gtx,
-				kit.Rigid(func(gtx C) D { return th.Kbd(gtx, k) }),
+				kit.Rigid(func(gtx C) D { return ui.Kbd{Chord: k}.Layout(gtx, th) }),
 				kit.Rigid(kit.Gap(4, 0)),
 				kit.Rigid(func(gtx C) D { return th.Text(gtx, label, th.Type.Small, th.Muted, kit.Regular) }),
 			)
@@ -322,35 +323,45 @@ func (b *bench) compRow(gtx C, i int) D {
 			return th.Text(gtx, "BUTTONS (SIZE FOLLOWS THE RADIOS BELOW)", th.Type.Caption, th.Dim, kit.Bold)
 		case 1:
 			return row(
-				kit.Rigid(func(gtx C) D { return th.Button(gtx, click("sec"), id("sec"), "Secondary", kit.Secondary) }), gap,
-				kit.Rigid(func(gtx C) D { return th.Button(gtx, click("pri"), id("pri"), "Primary", kit.Primary) }), gap,
-				kit.Rigid(func(gtx C) D { return th.Button(gtx, click("ghost"), id("ghost"), "Ghost", kit.Ghost) }), gap,
-				kit.Rigid(func(gtx C) D { return th.IconButton(gtx, click("icon"), id("icon"), kit.IconSun, false) }),
+				kit.Rigid(func(gtx C) D { return ui.Button{ID: id("sec"), Text: "Secondary"}.Layout(gtx, th, click("sec")) }), gap,
+				kit.Rigid(func(gtx C) D {
+					return ui.Button{ID: id("pri"), Text: "Primary", Style: ui.Primary}.Layout(gtx, th, click("pri"))
+				}), gap,
+				kit.Rigid(func(gtx C) D {
+					return ui.Button{ID: id("ghost"), Text: "Ghost", Style: ui.Ghost}.Layout(gtx, th, click("ghost"))
+				}), gap,
+				kit.Rigid(func(gtx C) D {
+					return ui.IconButton{ID: id("icon"), Icon: kit.IconSun, Label: id("icon")}.Layout(gtx, th, click("icon"))
+				}),
 			)
 		case 2:
 			return row(
-				kit.Rigid(func(gtx C) D { return th.Switch(gtx, click("sw"), id("sw"), "Switch", b.on[id("sw")]) }), gap,
 				kit.Rigid(func(gtx C) D {
-					return th.CheckboxLabel(gtx, click("cb"), id("cb"), "Checkbox", b.on[id("cb")])
+					return ui.Switch{ID: id("sw"), Label: "Switch", On: b.on[id("sw")]}.Layout(gtx, th, click("sw"))
 				}), gap,
-				kit.Rigid(func(gtx C) D { return th.Radio(gtx, click("ra"), id("ra"), "Radio", b.on[id("ra")]) }),
+				kit.Rigid(func(gtx C) D {
+					return ui.Checkbox{ID: id("cb"), Label: "Checkbox", Checked: b.on[id("cb")]}.Layout(gtx, th, click("cb"))
+				}), gap,
+				kit.Rigid(func(gtx C) D {
+					return ui.Radio{ID: id("ra"), Label: "Radio", Selected: b.on[id("ra")]}.Layout(gtx, th, click("ra"))
+				}),
 			)
 		case 3:
-			return kit.Fixed(240, func(gtx C) D { return th.Slider(gtx, b.sliders.Get(id("sl")), id("sl")) })(gtx)
+			return kit.Fixed(240, func(gtx C) D { return b.sliders.Get(id("sl")).layout(gtx, th, id("sl"), "Slider") })(gtx)
 		case 4:
-			return th.Tabs(gtx, b.tabs.Get(id("tabs")), id("tabs"), []string{"One", "Two", "Three"}, b.tab[id("tabs")])
+			return ui.Tabs{ID: id("tabs"), Labels: []string{"One", "Two", "Three"}, Selected: b.tab[id("tabs")]}.Layout(gtx, th, b.tabs.Get(id("tabs")))
 		case 5:
 			return row(
 				kit.Rigid(func(gtx C) D { return th.Spinner(gtx, 18) }), gap,
 				kit.Rigid(kit.Fixed(160, func(gtx C) D { return th.Progress(gtx, float32(i%10)/10) })), gap,
-				kit.Rigid(func(gtx C) D { return th.Badge(gtx, kit.StatusInfo, "Badge") }),
+				kit.Rigid(func(gtx C) D { return ui.Badge{Status: kit.StatusInfo, Text: "Badge"}.Layout(gtx, th) }),
 			)
 		case 6:
 			return th.Paragraph(gtx, "A paragraph that wraps. Text is shaped the first time it is laid out, "+
 				"so rows entering the view for the first time cost more than rows coming back.", th.Muted)
 		default:
 			return row(
-				kit.Rigid(func(gtx C) D { return th.Kbd(gtx, "Ctrl+K") }), gap,
+				kit.Rigid(func(gtx C) D { return ui.Kbd{Chord: "Ctrl+K"}.Layout(gtx, th) }), gap,
 				kit.Rigid(func(gtx C) D { return th.Text(gtx, "Keyboard: command palette", th.Type.Body, th.Fg, kit.Regular) }),
 			)
 		}
@@ -359,4 +370,18 @@ func (b *bench) compRow(gtx C, i int) D {
 
 func main() {
 	kit.NewApp("giokit-scrolltest", "giokit scroll bench", 1100, 760).Run(newBench().Frame)
+}
+
+// slider pairs a ui.Slider's value with its state, for sliders that keep
+// their own value.
+type slider struct {
+	Value float32
+	state ui.SliderState
+}
+
+func (s *slider) layout(gtx C, th *kit.Theme, id, label string) D {
+	if v, ok := s.state.Update(gtx); ok {
+		s.Value = v
+	}
+	return ui.Slider{ID: id, Label: label, Value: s.Value}.Layout(gtx, th, &s.state)
 }

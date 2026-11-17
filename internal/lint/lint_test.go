@@ -23,18 +23,14 @@ var tokenFiles = []string{"color.go", "theme.go", "tokens.go"}
 // dpBaseline is the number of geometry literals per file today (audit 04
 // F1). They move into Theme metrics during the component sweep.
 var dpBaseline = map[string]int{
-	"collection.go": 1, "combo.go": 2, "date.go": 4, "disclosure.go": 2, "draw.go": 2,
-	"feedback.go": 14, "inputs.go": 11, "logview.go": 6, "lyrics.go": 4, "menu.go": 19,
-	"navigation.go": 1, "overlay.go": 15, "patterns.go": 4, "reorder.go": 3, "scroll.go": 9,
-	"split.go": 3, "table.go": 1, "tabs.go": 3, "widgets.go": 9,
+	"draw.go": 2, "feedback.go": 1, "menu.go": 1, "overlay.go": 6, "scroll.go": 8,
+	"ui/collections.go": 2, "ui/datefield.go": 3, "ui/display.go": 6, "ui/navigation.go": 1, "ui/overlays.go": 3,
+	"widgets.go": 4, "x/logview.go": 4,
 }
 
 // englishBaseline is the number of English string literals shown or
 // announced per file today (audit 04 F5). They move into Theme strings.
-var englishBaseline = map[string]int{
-	"collection.go": 2, "command.go": 3, "datatable.go": 2, "date.go": 2, "form.go": 5,
-	"logview.go": 3, "navigation.go": 2, "patterns.go": 2, "reorder.go": 6, "widgets.go": 2,
-}
+var englishBaseline = map[string]int{}
 
 type finding struct {
 	file string
@@ -71,8 +67,8 @@ func strokes(fset *token.FileSet, f *ast.File) []finding {
 
 // dpLiterals: fixed sizes, radii and insets written as numbers instead of
 // theme tokens. Counted: numeric arguments of Dp/Box/Fixed/Gap/
-// UniformInset/unit.Dp, and numeric Radius/Top/Bottom/Left/Right fields.
-// t.Space(n) is the density-scaled token form and is not counted.
+// UniformInset/Space, and numeric Radius/Top/Bottom/Left/Right/Gap/Pad
+// fields. Spacing uses the scale: t.Space(kit.Space2), kit.Flex{Gap: kit.Space2}.
 func dpLiterals(fset *token.FileSet, f *ast.File) []finding {
 	var out []finding
 	add := func(n ast.Node, what string) {
@@ -83,7 +79,7 @@ func dpLiterals(fset *token.FileSet, f *ast.File) []finding {
 		case *ast.CallExpr:
 			name := callName(n.Fun)
 			switch name {
-			case "Dp", "Box", "Fixed", "Gap", "UniformInset":
+			case "Dp", "Box", "Fixed", "Gap", "UniformInset", "Space":
 				for _, a := range n.Args {
 					if isNumber(a) && !isZero(a) {
 						add(a, name)
@@ -93,7 +89,7 @@ func dpLiterals(fset *token.FileSet, f *ast.File) []finding {
 		case *ast.KeyValueExpr:
 			if k, ok := n.Key.(*ast.Ident); ok && isNumber(n.Value) && !isZero(n.Value) {
 				switch k.Name {
-				case "Radius", "Top", "Bottom", "Left", "Right":
+				case "Radius", "Top", "Bottom", "Left", "Right", "Gap", "Pad", "PadX", "PadY":
 					add(n.Value, k.Name)
 				}
 			}
@@ -178,24 +174,27 @@ func isZero(e ast.Expr) bool {
 	return b != nil && (b.Value == "0" || b.Value == "0.0")
 }
 
-// parseKit parses kit/*.go, tests excluded.
+// parseKit parses kit/*.go, kit/ui/*.go and kit/x/*.go, tests excluded. Keys are paths
+// relative to kit: "menu.go", "ui/combobox.go".
 func parseKit(t *testing.T) (*token.FileSet, map[string]*ast.File) {
 	t.Helper()
 	fset := token.NewFileSet()
-	paths, err := filepath.Glob("../../kit/*.go")
-	if err != nil || len(paths) == 0 {
-		t.Fatalf("no kit sources: %v", err)
-	}
 	files := map[string]*ast.File{}
-	for _, p := range paths {
-		if strings.HasSuffix(p, "_test.go") {
-			continue
+	for _, dir := range []string{"", "ui/", "x/"} {
+		paths, err := filepath.Glob("../../kit/" + dir + "*.go")
+		if err != nil || len(paths) == 0 {
+			t.Fatalf("no kit/%s sources: %v", dir, err)
 		}
-		f, err := parser.ParseFile(fset, p, nil, 0)
-		if err != nil {
-			t.Fatal(err)
+		for _, p := range paths {
+			if strings.HasSuffix(p, "_test.go") {
+				continue
+			}
+			f, err := parser.ParseFile(fset, p, nil, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			files[dir+filepath.Base(p)] = f
 		}
-		files[filepath.Base(p)] = f
 	}
 	return fset, files
 }
@@ -279,7 +278,7 @@ func TestGeometryRatchet(t *testing.T) {
 
 // keymap.go names keys for chord parsing and display; trace.go writes
 // diagnostics; the token files name tokens and presets.
-var englishExempt = append([]string{"keymap.go", "trace.go"}, tokenFiles...)
+var englishExempt = append([]string{"keymap.go", "trace.go", "metrics.go"}, tokenFiles...)
 
 func TestEnglishRatchet(t *testing.T) {
 	ratchet(t, english, englishBaseline, "English strings", englishExempt)
@@ -299,8 +298,11 @@ func bad(gtx C, t *Theme, id string) {
 	label += " (asc)"
 	Tag(gtx, Part(id, "Sort Key")) // ids: fine
 	panic("kit: Bad state")       // developer message: fine
-	_ = t.Space(8) // a token: fine
-	_ = gtx.Dp(0)  // zero: fine
+	_ = t.Space(8)       // off the scale
+	_ = Flex{Gap: 6}     // off the scale
+	_ = t.Space(Space2)  // the scale: fine
+	_ = Flex{Pad: Space4} // fine
+	_ = gtx.Dp(0)        // zero: fine
 }`
 	fset := token.NewFileSet()
 	f, err := parser.ParseFile(fset, "bad.go", src, 0)
@@ -310,7 +312,7 @@ func bad(gtx C, t *Theme, id string) {
 	for name, c := range map[string]struct {
 		r    rule
 		want int
-	}{"colour": {colorLiterals, 1}, "stroke": {strokes, 1}, "geometry": {dpLiterals, 2}, "english": {english, 4}} {
+	}{"colour": {colorLiterals, 1}, "stroke": {strokes, 1}, "geometry": {dpLiterals, 4}, "english": {english, 4}} {
 		if got := len(c.r(fset, f)); got != c.want {
 			t.Errorf("%s rule found %d, want %d: %v", name, got, c.want, c.r(fset, f))
 		}

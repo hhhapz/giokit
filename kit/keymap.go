@@ -111,7 +111,7 @@ func (k *Keymap) MustBind(chord, title string, run func()) {
 func (k *Keymap) Bindings() []Binding { return k.binds }
 
 // Hint returns the display chord bound to the action with this title ("" if
-// none), for showing beside a button or menu item: th.Kbd(gtx, km.Hint("Save")).
+// none), for showing beside a button or menu item: ui.Kbd{Chord: km.Hint("Save")}.Layout(gtx, th).
 func (k *Keymap) Hint(title string) string {
 	for _, b := range k.binds {
 		if b.Title == title {

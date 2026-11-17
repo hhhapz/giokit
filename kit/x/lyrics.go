@@ -1,9 +1,11 @@
-package kit
+package x
 
 import (
 	"time"
 
 	"gioui.org/layout"
+
+	"github.com/hhhapz/giokit/kit"
 )
 
 // LyricLine starts at At and remains current until the next line starts.
@@ -26,17 +28,28 @@ func ActiveLyric(lines []LyricLine, at time.Duration) int {
 	return lo - 1
 }
 
-// Lyrics is a timed, scrollable line view. Follow may be turned off when the
-// listener browses the transcript; turning it on jumps to the current line.
+// Lyrics is a timed, scrollable line view of Lines at time At; the current
+// line is highlighted and, while following, kept in view. The scroll region's
+// id is ID.
 type Lyrics struct {
-	List       List
+	ID    string
+	Lines []LyricLine
+	At    time.Duration
+}
+
+// LyricsState is a Lyrics' scroll position and follow mode. Follow turns off
+// when the listener scrolls the transcript; turning it on jumps to the
+// current line.
+type LyricsState struct {
+	List       kit.List
 	Follow     bool
 	lastActive int
 	lastFollow bool
 	seen       bool
 }
 
-func (t *Theme) Lyrics(gtx C, l *Lyrics, id string, lines []LyricLine, at time.Duration) D {
+func (ly Lyrics) Layout(gtx C, t *kit.Theme, l *LyricsState) D {
+	id, lines, at := ly.ID, ly.Lines, ly.At
 	active := ActiveLyric(lines, at)
 	jumped := l.Follow && (active != l.lastActive || !l.lastFollow) && active >= 0
 	if jumped {
@@ -46,18 +59,18 @@ func (t *Theme) Lyrics(gtx C, l *Lyrics, id string, lines []LyricLine, at time.D
 	l.lastActive, l.lastFollow = active, l.Follow
 	d := t.List(gtx, &l.List, id, len(lines), func(gtx C, i int) D {
 		line := lines[i]
-		fg, weight := t.Muted, Regular
+		fg, weight := t.Muted, kit.Regular
 		if i == active {
-			fg, weight = t.Fg, SemiBold
+			fg, weight = t.Fg, kit.SemiBold
 		}
-		return layout.Inset{Top: 8, Bottom: 8, Left: 12, Right: 12}.Layout(gtx, func(gtx C) D {
+		return layout.Inset{Top: t.Space(kit.Space2), Bottom: t.Space(kit.Space2), Left: t.Space(kit.Space3), Right: t.Space(kit.Space3)}.Layout(gtx, func(gtx C) D {
 			gtx.Constraints.Min.X = gtx.Constraints.Max.X
 			return t.ParagraphLine(gtx, line.Text, fg, weight)
 		})
 	})
 	if l.seen && l.Follow && !jumped && (l.List.Position.First != prior.First || l.List.Position.Offset != prior.Offset) {
 		l.Follow = false
-		Notify(gtx)
+		kit.Notify(gtx)
 	}
 	l.seen = true
 	return d

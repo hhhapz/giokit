@@ -18,6 +18,7 @@ import (
 	"gioui.org/widget/material"
 
 	"github.com/hhhapz/giokit/kit"
+	"github.com/hhhapz/giokit/kit/ui"
 )
 
 // Each test rebuilds a real bug from giokit's history as a tiny widget and
@@ -131,7 +132,7 @@ func TestCatchesTabUnreachable(t *testing.T) {
 				semantic.Button.Add(gtx.Ops)
 				return box(gtx, 80, 32)
 			}),
-			kit.Rigid(func(gtx C) D { return th.Button(gtx, &good, "good", "Good", kit.Secondary) }),
+			kit.Rigid(func(gtx C) D { return ui.Button{ID: "good", Text: "Good"}.Layout(gtx, th, &good) }),
 		)
 	})
 	got := h.TabUnreachable()
@@ -173,7 +174,7 @@ func TestTabAuditTraversesExtraFocusStops(t *testing.T) {
 				}
 			}
 		}
-		children := []layout.FlexChild{kit.Rigid(func(gtx C) D { return th.Button(gtx, &first, "first", "First", kit.Secondary) })}
+		children := []layout.FlexChild{kit.Rigid(func(gtx C) D { return ui.Button{ID: "first", Text: "First"}.Layout(gtx, th, &first) })}
 		for i := range tags {
 			i := i
 			children = append(children, kit.Rigid(func(gtx C) D {
@@ -182,7 +183,7 @@ func TestTabAuditTraversesExtraFocusStops(t *testing.T) {
 				return D{Size: image.Pt(12, 32)}
 			}))
 		}
-		children = append(children, kit.Rigid(func(gtx C) D { return th.Button(gtx, &last, "last", "Last", kit.Secondary) }))
+		children = append(children, kit.Rigid(func(gtx C) D { return ui.Button{ID: "last", Text: "Last"}.Layout(gtx, th, &last) }))
 		kit.Row(gtx, children...)
 	})
 	h.ClickID("first")
@@ -241,7 +242,7 @@ func TestCleanWidgetsPass(t *testing.T) {
 					return kit.Fill(gtx, bg, func(gtx C) D { return box(gtx, 200, 40) })
 				})
 			}),
-			kit.Rigid(func(gtx C) D { return th.Button(gtx, &c, "btn", "Count", kit.Primary) }),
+			kit.Rigid(func(gtx C) D { return ui.Button{ID: "btn", Text: "Count", Style: ui.Primary}.Layout(gtx, th, &c) }),
 			kit.Rigid(func(gtx C) D { return th.Text(gtx, string(rune('0'+n)), kit.SizeText, th.Fg, kit.Regular) }),
 		)
 	})
@@ -298,7 +299,7 @@ func TestAnimationSettles(t *testing.T) {
 			target = 1
 		}
 		v := tw.To(gtx, target, 300*time.Millisecond)
-		th.Button(gtx, &c, "btn", "Go", kit.Secondary)
+		ui.Button{ID: "btn", Text: "Go"}.Layout(gtx, th, &c)
 		layout.Inset{Top: 60}.Layout(gtx, func(gtx C) D {
 			return kit.Fill(gtx, kit.LerpColor(th.Bg, th.Accent, v), func(gtx C) D {
 				defer clip.Rect{Max: image.Pt(60, 30)}.Push(gtx.Ops).Pop() // Tag names the current clip area
@@ -324,8 +325,8 @@ func TestLoopSettlesAndTabStillWorks(t *testing.T) {
 	h := NewT(t, 300, 200, func(gtx C) {
 		kit.Loop(gtx, time.Second)
 		kit.Col(gtx,
-			kit.Rigid(func(gtx C) D { return th.Button(gtx, &a, "a", "A", kit.Secondary) }),
-			kit.Rigid(func(gtx C) D { return th.Button(gtx, &b, "b", "B", kit.Secondary) }),
+			kit.Rigid(func(gtx C) D { return ui.Button{ID: "a", Text: "A"}.Layout(gtx, th, &a) }),
+			kit.Rigid(func(gtx C) D { return ui.Button{ID: "b", Text: "B"}.Layout(gtx, th, &b) }),
 		)
 		focusedB = gtx.Focused(b.FocusTag())
 	})
@@ -342,7 +343,7 @@ func TestEditorLabeling(t *testing.T) {
 	var labeled, bare widget.Editor
 	h := harness(t, func(gtx C) {
 		kit.Col(gtx,
-			kit.Rigid(func(gtx C) D { return th.TextField(gtx, &labeled, "name", "Name") }),
+			kit.Rigid(func(gtx C) D { return ui.TextField{ID: "name", Placeholder: "Name"}.Layout(gtx, th, &labeled) }),
 			kit.Rigid(func(gtx C) D { return material.Editor(th.Material(), &bare, "bare").Layout(gtx) }),
 		)
 	})
@@ -440,12 +441,12 @@ func TestCatchesLeakyFocusTrap(t *testing.T) {
 		ok.Clicked(gtx)
 		cancel.Clicked(gtx)
 		pageW := func(gtx C) D {
-			return kit.Fill(gtx, th.Bg, func(gtx C) D { return th.Button(gtx, &page, "page", "Page button", kit.Secondary) })
+			return kit.Fill(gtx, th.Bg, func(gtx C) D { return ui.Button{ID: "page", Text: "Page button"}.Layout(gtx, th, &page) })
 		}
 		dialogW := func(gtx C) D {
 			return kit.Row(gtx,
-				kit.Rigid(func(gtx C) D { return th.Button(gtx, &cancel, "cancel", "Cancel", kit.Secondary) }),
-				kit.Rigid(func(gtx C) D { return th.Button(gtx, &ok, "ok", "OK", kit.Solid) }),
+				kit.Rigid(func(gtx C) D { return ui.Button{ID: "cancel", Text: "Cancel"}.Layout(gtx, th, &cancel) }),
+				kit.Rigid(func(gtx C) D { return ui.Button{ID: "ok", Text: "OK", Style: ui.Solid}.Layout(gtx, th, &ok) }),
 			)
 		}
 		if !leaky {
@@ -491,12 +492,12 @@ func TestLayersAndRealOcclusion(t *testing.T) {
 		kit.Fill(gtx, th.Bg, func(gtx C) D {
 			return kit.Col(gtx,
 				kit.Rigid(func(gtx C) D {
-					return th.Popover(gtx, &p, "pop", func(gtx C) D { return th.Button(gtx, &trig, "trig", "Open", kit.Secondary) },
+					return th.Popover(gtx, &p, "pop", func(gtx C) D { return ui.Button{ID: "trig", Text: "Open"}.Layout(gtx, th, &trig) },
 						func(gtx C) D {
-							return kit.Pad(30, 30, func(gtx C) D { return th.Button(gtx, &item, "item", "Item", kit.Ghost) })(gtx)
+							return kit.Pad(30, 30, func(gtx C) D { return ui.Button{ID: "item", Text: "Item", Style: ui.Ghost}.Layout(gtx, th, &item) })(gtx)
 						})
 				}),
-				kit.Rigid(func(gtx C) D { return th.Button(gtx, &under, "under", "Under the popup", kit.Secondary) }),
+				kit.Rigid(func(gtx C) D { return ui.Button{ID: "under", Text: "Under the popup"}.Layout(gtx, th, &under) }),
 				kit.Rigid(func(gtx C) D { return th.Text(gtx, "hidden text", th.Type.Body, th.Dim, kit.Regular) }),
 			)
 		})
@@ -515,23 +516,29 @@ func TestLayersAndRealOcclusion(t *testing.T) {
 // virtualized list and is no longer laid out, so arrow keys stop working.
 // A focus group holds focus on the container instead.
 func TestFocusGroupSurvivesVirtualizedRows(t *testing.T) {
-	var s kit.SelectableList
-	choices := make([]kit.Choice, 100)
+	var s ui.SelectableListState
+	sel := ""
+	choices := make([]ui.Choice, 100)
 	for i := range choices {
-		choices[i] = kit.Choice{ID: fmt.Sprint(i), Label: fmt.Sprint("Item ", i)}
+		choices[i] = ui.Choice{ID: fmt.Sprint(i), Label: fmt.Sprint("Item ", i)}
 	}
-	h := harness(t, func(gtx C) { th.SelectableList(gtx, &s, "list", choices) })
+	h := harness(t, func(gtx C) {
+		if id, ok := s.Update(gtx); ok {
+			sel = id
+		}
+		ui.SelectableList{ID: "list", Items: choices, Selected: sel}.Layout(gtx, th, &s)
+	})
 	h.ClickID("list/0")
 	h.Key(key.NameEnd, 0) // row 99 is far below the 200px viewport
-	if s.Selected != "99" || h.FocusedID() != "list/99" {
-		t.Fatalf("after End: selected %q, focus %q", s.Selected, h.FocusedID())
+	if sel != "99" || h.FocusedID() != "list/99" {
+		t.Fatalf("after End: selected %q, focus %q", sel, h.FocusedID())
 	}
 	if r, ok := h.Find("list/99"); !ok || r.Max.Y > h.Size.Y {
 		t.Fatalf("End did not scroll the last row into view: %v %v", r, ok)
 	}
 	h.Key(key.NameUpArrow, 0)
-	if s.Selected != "98" {
-		t.Fatalf("arrow after scrolling out: selected %q", s.Selected)
+	if sel != "98" {
+		t.Fatalf("arrow after scrolling out: selected %q", sel)
 	}
 }
 
@@ -548,7 +555,7 @@ func TestScopeSeparatesInstances(t *testing.T) {
 		}
 		card := func(c *kit.Clickable, name string) kit.W {
 			return func(gtx C) D {
-				w := func(gtx C) D { return th.Button(gtx, c, "save", "Save", kit.Secondary) }
+				w := func(gtx C) D { return ui.Button{ID: "save", Text: "Save"}.Layout(gtx, th, c) }
 				if scoped {
 					return kit.Scope(gtx, name, w)
 				}
@@ -589,8 +596,8 @@ func TestEscapeClosesInnermostLayer(t *testing.T) {
 		item.Clicked(gtx)
 		th.Modal(gtx, &d, "dialog", func(gtx C) D { return D{Size: gtx.Constraints.Max} }, func(gtx C) D {
 			return th.Popover(gtx, &p, "pop", func(gtx C) D {
-				return th.Button(gtx, &trigger, "trigger", "Open", kit.Secondary)
-			}, func(gtx C) D { return th.Button(gtx, &item, "item", "Item", kit.Secondary) })
+				return ui.Button{ID: "trigger", Text: "Open"}.Layout(gtx, th, &trigger)
+			}, func(gtx C) D { return ui.Button{ID: "item", Text: "Item"}.Layout(gtx, th, &item) })
 		})
 	})
 	d.Show()
@@ -623,10 +630,10 @@ func TestAuditIgnoresHalfScrolledRows(t *testing.T) {
 		}
 		kit.Fill(gtx, th.Bg, func(gtx C) D {
 			return kit.Col(gtx,
-				kit.Rigid(func(gtx C) D { return th.Button(gtx, &header, "header", "Header", kit.Secondary) }),
+				kit.Rigid(func(gtx C) D { return ui.Button{ID: "header", Text: "Header"}.Layout(gtx, th, &header) }),
 				kit.Flexed(1, func(gtx C) D {
 					return th.List(gtx, &l, "list", len(rows), func(gtx C, i int) D {
-						return th.Button(gtx, &rows[i], fmt.Sprint("row:", i), fmt.Sprint("Row ", i), kit.Secondary)
+						return ui.Button{ID: fmt.Sprint("row:", i), Text: fmt.Sprint("Row ", i)}.Layout(gtx, th, &rows[i])
 					})
 				}),
 			)
@@ -650,7 +657,7 @@ func TestTextFieldWholeTarget(t *testing.T) {
 	h := harness(t, func(gtx C) {
 		tiny.Clicked(gtx)
 		kit.Col(gtx,
-			kit.Rigid(kit.Fixed(200, func(gtx C) D { return small.TextField(gtx, &e, "name", "Name") })),
+			kit.Rigid(kit.Fixed(200, func(gtx C) D { return ui.TextField{ID: "name", Placeholder: "Name"}.Layout(gtx, small, &e) })),
 			kit.Rigid(func(gtx C) D {
 				return tiny.Press(gtx, "tiny", func(gtx C, st kit.State) D {
 					semantic.Button.Add(gtx.Ops)
@@ -673,5 +680,24 @@ func TestTextFieldWholeTarget(t *testing.T) {
 	}
 	if !slices.Equal(tinies, []string{"tiny"}) {
 		t.Fatalf("tiny targets = %q, want only the bare tiny button", tinies)
+	}
+}
+
+// A named group exactly the size of its only control (a one-action toolbar)
+// gives two nodes with the focused bounds: FocusedID must name the control,
+// the innermost, not the group. Found by the Toolbar conformance row.
+func TestFocusedIDPrefersInnermost(t *testing.T) {
+	th := kit.Dark()
+	var c kit.Clickable
+	h := NewT(t, 300, 120, func(gtx kit.C) {
+		c.Clicked(gtx)
+		gtx.Constraints.Min = image.Point{}
+		kit.Group(gtx, "group", "Actions", func(gtx kit.C) kit.D {
+			return ui.Button{ID: "group/save", Text: "Save"}.Layout(gtx, th, &c)
+		})
+	})
+	h.Tab(false)
+	if got := h.FocusedID(); got != "group/save" {
+		t.Fatalf("FocusedID %q, want the button inside the same-sized group", got)
 	}
 }

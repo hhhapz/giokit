@@ -15,7 +15,7 @@ Docs: `$(go list -m -f '{{.Dir}}' github.com/hhhapz/giokit)/docs/`. Read only wh
    then draw. Drawing first shows stale state until the next mouse move.
    `Clickable.Layout` drops unread clicks.
 2. **Read hover/press only inside the component callback**
-   (`Press(gtx, id, func(gtx, st State))`, `Hover.Layout`). A value read before
+   (`th.Press(gtx, c, id, func(gtx, st kit.State) D)`, `Hover.Layout`). A value read before
    layout is one event old, so the highlight lands on the wrong row.
 3. **Mid-frame mutation → `kit.Notify(gtx)`.** `kit.Clickable` does this for you.
 4. **UI goroutine owns state.** No mutexes or snapshots. Background work goes
@@ -28,7 +28,7 @@ Docs: `$(go list -m -f '{{.Dir}}' github.com/hhhapz/giokit)/docs/`. Read only wh
    nothing.
 8. **Icons are vectors (`kit.Icon`), not symbol characters.** The bundled fonts
    lack ✓ ↻ ▾ ▸. System fonts are disabled on purpose.
-9. **Lists use `th.List` with a `*kit.List`** (overlay scrollbar, smooth wheel). The default scrollbar steals width
+9. **Lists use `th.List` with a `*kit.List`** (or `ui.SelectableList` for selection) (overlay scrollbar, smooth wheel). The default scrollbar steals width
    and misaligns columns.
 10. **Animations:** `kit.Tween.To(gtx, target, th.Dur(d))` for finite ones,
     `kit.Loop` for continuous ones (spinners). Never `Notify` every frame.
@@ -52,8 +52,18 @@ Docs: `$(go list -m -f '{{.Dir}}' github.com/hhhapz/giokit)/docs/`. Read only wh
 17. **Consumers need the Gio patch:**
     `replace gioui.org => <giokit>/third_party/gioui.org`. It also makes plain
     `go build` work on Linux (OpenGL; Vulkan is opt-in via `-tags vulkan`).
-18. **Custom buttons must be Tab reachable:** give icon-only controls a human label with `TagLabel` or `IconButtonLabel`, then check `h.TabUnreachable()`.
+18. **Custom buttons must be Tab reachable:** give icon-only controls a human label with `TagLabel` or `ui.IconButton{Label: ...}`, then check `h.TabUnreachable()`.
 19. **Alternative text is not painted text:** tag artwork with `semantic.Image`; keep its label for accessibility without applying text contrast checks to pixels.
+20. **Spacing comes from the scale:** `kit.Space2` (8dp), `kit.Space3` (12dp)…
+    through `th.Space(...)` or a `kit.Flex{Gap, Pad}`, so Density applies. One
+    styled `kit.Flex` replaces Col + Gap + Pad + Surface nesting.
+21. **Components live in `kit/ui` and are props structs:**
+    `ui.Combobox{ID: "city", Options: opts}.Layout(gtx, th, &v.city)`; read
+    events with `v.x.Update(gtx)` in the handle pass. Props are the value
+    (controlled); the state struct holds interaction state only.
+22. **Changing images (video, camera, remote screens) use `paint.Stream` +
+    `ui.Video`,** never `paint.NewImageOp` per frame (a new texture and
+    mipmaps every frame). Submit from any goroutine; `OnFrame` → `app.Invalidate`.
 
 ## Verify every UI change headlessly (no window needed)
 

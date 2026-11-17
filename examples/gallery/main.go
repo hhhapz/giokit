@@ -17,6 +17,7 @@ import (
 	"gioui.org/layout"
 
 	"github.com/hhhapz/giokit/kit"
+	"github.com/hhhapz/giokit/kit/ui"
 )
 
 type C = layout.Context
@@ -32,7 +33,7 @@ type gallery struct {
 	trans     kit.Transition
 	keys      kit.Keymap
 	actions   kit.Actions
-	palette   kit.CommandPalette
+	palette   ui.CommandPaletteState
 	primary   kit.Clickable
 	themeBt   kit.Clickable
 	clicks    int
@@ -46,6 +47,7 @@ type gallery struct {
 	themeState
 	workspaceState
 	patternsState
+	mediaState
 }
 
 func newGallery() *gallery {
@@ -57,6 +59,7 @@ func newGallery() *gallery {
 	g.initOverlays()
 	g.initWorkspace()
 	g.initPatterns()
+	g.initMedia()
 	defaults := map[string]string{"theme.next": "Shortcut+T", "palette.open": "Shortcut+P"}
 	for i, p := range pages {
 		p := p
@@ -124,15 +127,16 @@ func (g *gallery) handle(gtx C) {
 	g.handleTheme(gtx)
 	g.handleWorkspace(gtx)
 	g.handlePatterns(gtx)
+	g.handleMedia(gtx)
 }
 
 func (g *gallery) layout(gtx C) D {
 	th := g.th
-	return th.CommandPalette(gtx, &g.palette, "commands", &g.actions, func(gtx C) D {
-		return th.ToastHost(gtx, &g.toasts, func(gtx C) D {
+	return ui.CommandPalette{ID: "commands", Actions: &g.actions, Page: func(gtx C) D {
+		return ui.ToastHost{Page: func(gtx C) D {
 			return th.Modal(gtx, &g.dialog, "dialog", g.window, g.deleteDialog)
-		})
-	})
+		}}.Layout(gtx, th, &g.toasts)
+	}}.Layout(gtx, th, &g.palette)
 }
 
 // window is the whole window: title bar, sidebar, page, status bar.
@@ -149,10 +153,12 @@ func (g *gallery) window(gtx C) D {
 						kit.Rigid(func(gtx C) D { return th.Pill(gtx, "v0", th.Muted, th.Surface) }),
 						kit.Flexed(1, kit.Grow),
 						kit.Rigid(func(gtx C) D {
-							return th.IconLabelButton(gtx, &g.themeBt, "theme-next", kit.IconSun, th.Name, kit.Ghost)
+							return ui.Button{ID: "theme-next", Text: th.Name, Icon: kit.IconSun, Style: ui.Ghost}.Layout(gtx, th, &g.themeBt)
 						}),
 						kit.Rigid(kit.Gap(8, 0)),
-						kit.Rigid(func(gtx C) D { return th.Button(gtx, &g.primary, "primary", "Primary", kit.Primary) }),
+						kit.Rigid(func(gtx C) D {
+							return ui.Button{ID: "primary", Text: "Primary", Style: ui.Primary}.Layout(gtx, th, &g.primary)
+						}),
 					)
 				})
 			}),
@@ -179,7 +185,7 @@ func (g *gallery) window(gtx C) D {
 						kit.Flexed(1, kit.Grow),
 						kit.Rigid(func(gtx C) D { return th.Text(gtx, "Next theme", th.Type.Small, th.Dim, kit.Regular) }),
 						kit.Rigid(kit.Gap(6, 0)),
-						kit.Rigid(func(gtx C) D { return th.Kbd(gtx, g.keys.Hint("Next theme")) }),
+						kit.Rigid(func(gtx C) D { return ui.Kbd{Chord: g.keys.Hint("Next theme")}.Layout(gtx, th) }),
 					)
 				})
 			}),

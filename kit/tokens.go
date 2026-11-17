@@ -174,8 +174,8 @@ func ThemeFromTokens(data []byte, base *Theme) (*Theme, error) {
 				t.Controls = ControlSmall
 			case "large":
 				t.Controls = ControlLarge
-			default:
-				t.Controls = ControlMedium
+			default: // medium is the theme default
+				t.Controls = ControlDefault
 			}
 		}
 	}
@@ -289,7 +289,7 @@ func (t *Theme) Tokens() []byte {
 		"ring":           tok("dimension", dim(float32(t.Ring))),
 		"elevation":      tok("number", round3(float64(t.Elevation))),
 		"heading-weight": tok("fontWeight", int(t.HeadingWeight)+400), // DTCG: 100..900
-		"controls":       tok("string", [...]string{"medium", "small", "large"}[t.Controls]),
+		"controls":       tok("string", [...]string{"medium", "small", "medium", "large"}[t.Controls]),
 		"fonts":          tok("string", t.Fonts),
 		"density":        tok("number", t.Density), "motion": tok("number", t.Motion),
 		"disabled-opacity": tok("number", round3(float64(t.DisabledAlpha))),

@@ -8,6 +8,7 @@ import (
 
 	"gioui.org/io/key"
 	"github.com/hhhapz/giokit/kit"
+	"github.com/hhhapz/giokit/kit/ui"
 	"github.com/hhhapz/giokit/kittest"
 )
 
@@ -18,19 +19,19 @@ func TestWorkspaceInteractions(t *testing.T) {
 	h.ExpectTextIn("work/icons", "Review icons")
 	h.Hover("work/spec")
 	h.ClickID("work/spec")
-	if g.workItems.Selected != "spec" {
-		t.Fatalf("selected %q", g.workItems.Selected)
+	if g.workSel != "spec" {
+		t.Fatalf("selected %q", g.workSel)
 	}
 	h.Key(key.NameDownArrow, 0)
-	if g.workItems.Selected != "icons" {
-		t.Fatalf("arrow selected %q", g.workItems.Selected)
+	if g.workSel != "icons" {
+		t.Fatalf("arrow selected %q", g.workSel)
 	}
 	h.ClickID("folders/project/toggle")
 	h.ExpectNoID("folders/design")
 	h.ClickID("folders/project/toggle")
 	h.ClickID("folders/design")
-	if g.folders.Selected != "design" {
-		t.Fatalf("folder selected %q", g.folders.Selected)
+	if g.folderSel != "design" {
+		t.Fatalf("folder selected %q", g.folderSel)
 	}
 	h.ClickID("folders/project")
 	h.Key(key.NameLeftArrow, 0)
@@ -70,8 +71,8 @@ func TestWorkspaceInteractions(t *testing.T) {
 		t.Fatal("table did not reverse sort")
 	}
 	h.ClickID("worktable/icons")
-	if g.workTable.Selected != "icons" {
-		t.Fatalf("table row %q", g.workTable.Selected)
+	if g.workSel != "icons" {
+		t.Fatalf("table row %q", g.workSel)
 	}
 	h.ClickID("work:secret")
 	h.Type("hidden")
@@ -115,10 +116,10 @@ func TestScopedShortcuts(t *testing.T) {
 			kit.Rigid(func(gtx C) D {
 				return kit.KeyContext(gtx, "editor", func(gtx C) D {
 					editor.Attach(gtx)
-					return th.Button(gtx, &inside, "inside", "Inside", kit.Secondary)
+					return ui.Button{ID: "inside", Text: "Inside"}.Layout(gtx, th, &inside)
 				})
 			}),
-			kit.Rigid(func(gtx C) D { return th.Button(gtx, &outside, "outside", "Outside", kit.Secondary) }),
+			kit.Rigid(func(gtx C) D { return ui.Button{ID: "outside", Text: "Outside"}.Layout(gtx, th, &outside) }),
 		)
 	})
 	h.Tab(false) // keyboard focus on "inside"
@@ -158,12 +159,12 @@ func TestSelectableListOneTabStop(t *testing.T) {
 		t.Fatalf("click focused %q, want the list on its active row", got)
 	}
 	h.Key(key.NameEnd, 0)
-	if g.workItems.Selected != "release" {
-		t.Fatalf("End selected %q", g.workItems.Selected)
+	if g.workSel != "release" {
+		t.Fatalf("End selected %q", g.workSel)
 	}
 	h.Key(key.NameHome, 0)
-	if g.workItems.Selected != "spec" {
-		t.Fatalf("Home selected %q", g.workItems.Selected)
+	if g.workSel != "spec" {
+		t.Fatalf("Home selected %q", g.workSel)
 	}
 	h.Tab(false)
 	if got := h.FocusedID(); got == "work" || got == "" || isRow(h, got) {
@@ -186,8 +187,8 @@ func TestSelectableListOneTabStop(t *testing.T) {
 	quiet := crop(h.Image(), r)
 	h.Key(key.NameUpArrow, 0)
 	h.Key(key.NameDownArrow, 0)
-	if g.workItems.Selected != "icons" {
-		t.Fatalf("selected %q", g.workItems.Selected)
+	if g.workSel != "icons" {
+		t.Fatalf("selected %q", g.workSel)
 	}
 	if bytes.Equal(quiet, crop(h.Image(), r)) {
 		t.Fatal("arrow keys after a click did not show the focus ring")
@@ -232,8 +233,8 @@ func TestTreeAndTableKeyboard(t *testing.T) {
 	for i, s := range steps {
 		h.Key(s.key, 0)
 		_, shown := h.Find("folders/design")
-		if g.folders.Selected != s.selected || shown != s.design {
-			t.Fatalf("step %d (%s): selected %q, design shown %v", i, s.key, g.folders.Selected, shown)
+		if g.folderSel != s.selected || shown != s.design {
+			t.Fatalf("step %d (%s): selected %q, design shown %v", i, s.key, g.folderSel, shown)
 		}
 	}
 	h.Tab(false)
@@ -243,12 +244,12 @@ func TestTreeAndTableKeyboard(t *testing.T) {
 
 	h.ClickID("worktable/icons")
 	h.Key(key.NameDownArrow, 0)
-	if g.workTable.Selected != "tests" {
-		t.Fatalf("table Down selected %q", g.workTable.Selected)
+	if g.workSel != "tests" {
+		t.Fatalf("table Down selected %q", g.workSel)
 	}
 	h.Key(key.NameHome, 0)
-	if g.workTable.Selected != "spec" {
-		t.Fatalf("table Home selected %q", g.workTable.Selected)
+	if g.workSel != "spec" {
+		t.Fatalf("table Home selected %q", g.workSel)
 	}
 	h.ExpectTabReachable()
 	h.ExpectClean()

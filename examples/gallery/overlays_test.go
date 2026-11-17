@@ -9,7 +9,7 @@ import (
 
 	"gioui.org/io/key"
 
-	"github.com/hhhapz/giokit/kit"
+	"github.com/hhhapz/giokit/kit/ui"
 	"github.com/hhhapz/giokit/kittest"
 )
 
@@ -241,7 +241,7 @@ func TestToasts(t *testing.T) {
 	if g.toasts.Len() != 1 {
 		t.Fatalf("close button: %d left", g.toasts.Len())
 	}
-	h.Wait(kit.ToastDuration)
+	h.Wait(ui.ToastDuration)
 	if g.toasts.Len() != 0 {
 		t.Fatalf("after ToastDuration: %d left", g.toasts.Len())
 	}
@@ -309,6 +309,63 @@ func TestDateField(t *testing.T) {
 		t.Fatalf("click: date %v", g.dueDate)
 	}
 	h.ExpectTextIn("due/field", "Tue, Nov 3, 2026")
+}
+
+// DateField zooms out for far dates: title to months, again to years,
+// prev steps a decade; a year opens its months, a month its days. The
+// keyboard moves across the month and year grids.
+func TestDateFieldYearsAndMonths(t *testing.T) {
+	g, h := overlaysPage(t, "pickers")
+	h.ClickID("due/field")
+	h.ClickID("due/view")
+	h.ExpectText("2026")
+	if f := h.FocusedID(); f != "due/2026-11" {
+		t.Fatalf("months view: focus %q, want the shown month", f)
+	}
+	h.ClickID("due/view")
+	h.ExpectText("2020–2029")
+	if f := h.FocusedID(); f != "due/2026" {
+		t.Fatalf("years view: focus %q, want the shown year", f)
+	}
+	h.ExpectClean()
+	for range 7 {
+		h.ClickID("due/prev")
+	}
+	h.ExpectText("1950–1959")
+	h.ClickID("due/1950")
+	h.ExpectText("1950")
+	h.ClickID("due/1950-03")
+	h.ExpectText("March 1950")
+	h.ClickID("due/1950-03-14")
+	if g.due.Opened() || !g.dueDate.Equal(time.Date(1950, 3, 14, 0, 0, 0, 0, time.Local)) {
+		t.Fatalf("birthday: open %v, date %v", g.due.Opened(), g.dueDate)
+	}
+
+	// Keyboard: reopen on March 1950, zoom out, move, pick with Enter.
+	h.ClickID("due/field")
+	h.ClickID("due/view")        // months of 1950, focus on March
+	h.Key(key.NameDownArrow, 0)  // June
+	h.Key(key.NameRightArrow, 0) // July
+	if f := h.FocusedID(); f != "due/1950-07" {
+		t.Fatalf("month keys: focus %q, want due/1950-07", f)
+	}
+	h.Key(key.NameRightArrow, 0) // Aug
+	h.Key(key.NameDownArrow, 0)  // Nov
+	h.Key(key.NameDownArrow, 0)  // past December: Feb 1951
+	h.ExpectText("1951")
+	h.Key(key.NameReturn, 0) // into February 1951's days
+	h.ExpectText("February 1951")
+	if f := h.FocusedID(); f != "due/1951-02-01" {
+		t.Fatalf("Enter on a month: focus %q, want its first day", f)
+	}
+	h.ClickID("due/view")
+	h.ClickID("due/view")     // years: 1950–1959, focus 1951
+	h.Key(key.NameUpArrow, 0) // 1948: the previous decade
+	h.ExpectText("1940–1949")
+	if f := h.FocusedID(); f != "due/1948" {
+		t.Fatalf("year keys: focus %q, want due/1948", f)
+	}
+	h.ExpectClean()
 }
 
 // Combobox: typing filters, Down/Enter takes a suggestion, a click does too,

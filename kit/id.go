@@ -7,7 +7,7 @@ import "strings"
 // prefixes everything laid out within it. Tag emits the full path:
 //
 //	kit.Scope(gtx, "invoice:42", func(gtx C) D {
-//		return th.Button(gtx, &v.pay, "pay", "Pay", kit.Solid) // id "invoice:42/pay"
+//		return ui.Button{ID: "pay", Text: "Pay", Style: ui.Solid}.Layout(gtx, th, &v.pay) // id "invoice:42/pay"
 //	})
 //
 // "/" separates levels; ":" is free for "kind:record" names. Part and Scope

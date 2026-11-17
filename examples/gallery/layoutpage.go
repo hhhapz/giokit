@@ -6,15 +6,17 @@ import (
 	"gioui.org/layout"
 
 	"github.com/hhhapz/giokit/kit"
+	"github.com/hhhapz/giokit/kit/ui"
+	"github.com/hhhapz/giokit/kit/x"
 )
 
 type layoutState struct {
-	outer, inner kit.Split
+	outer, inner ui.SplitState
 	files        kit.List
 	fileClicks   kit.Pool[kit.Clickable]
 	fileGroup    kit.FocusGroup
 	openFile     string
-	termView     kit.LogView
+	termView     x.LogViewState
 }
 
 var fileNames = []string{"main.go", "controls.go", "logs.go", "layoutpage.go", "themepage.go", "gallery_test.go", "go.mod", "README.md"}
@@ -33,8 +35,7 @@ func (g *gallery) panelTitle(gtx C, title string) D {
 func (g *gallery) layoutPage(gtx C) D {
 	th := g.th
 	if g.outer.Ratio == 0 {
-		g.outer.Ratio, g.outer.Min = 0.25, 120
-		g.inner.Axis, g.inner.Ratio, g.inner.Min = layout.Vertical, 0.62, 60
+		g.outer.Ratio, g.inner.Ratio = 0.25, 0.62
 		g.openFile = fileNames[0]
 		g.termView.NoTime = true
 	}
@@ -53,7 +54,7 @@ func (g *gallery) layoutPage(gtx C) D {
 					return navKeys(gtx, &g.fileGroup, g.files.ScrollIntoView, "files", fileNames, g.openFile, func(f string) { g.openFile = f }, func(gtx C) D {
 						return th.List(gtx, &g.files, "files", len(fileNames), func(gtx C, i int) D {
 							f := fileNames[i]
-							return th.NavItem(gtx, g.fileClicks.Get(f), "file:"+f, f, "", th.Dim, f == g.openFile)
+							return ui.NavItem{ID: "file:" + f, Label: f, Active: f == g.openFile}.Layout(gtx, th, g.fileClicks.Get(f))
 						})
 					})
 				})(gtx)
@@ -80,16 +81,16 @@ func (g *gallery) layoutPage(gtx C) D {
 	terminal := func(gtx C) D {
 		return kit.Col(gtx,
 			kit.Rigid(func(gtx C) D { return g.panelTitle(gtx, "Output") }),
-			kit.Flexed(1, func(gtx C) D { return th.LogView(gtx, &g.termView, &g.logBuf, "output") }),
+			kit.Flexed(1, func(gtx C) D { return x.LogView{ID: "output", Buffer: &g.logBuf}.Layout(gtx, th, &g.termView) }),
 		)
 	}
 	return g.pageFrame(gtx, "Layout", nil, func(gtx C) D {
 		return layout.Inset{Left: 24, Right: 24, Bottom: 20}.Layout(gtx, func(gtx C) D {
 			return kit.Surface{Border: th.Border, Radius: th.Radius}.Layout(gtx, func(gtx C) D {
 				gtx.Constraints.Min = gtx.Constraints.Max
-				return th.Split(gtx, &g.outer, "split:outer", files, func(gtx C) D {
-					return th.Split(gtx, &g.inner, "split:inner", editor, terminal)
-				})
+				return ui.Split{ID: "split:outer", Min: 120, A: files, B: func(gtx C) D {
+					return ui.Split{ID: "split:inner", Axis: layout.Vertical, Min: 60, A: editor, B: terminal}.Layout(gtx, th, &g.inner)
+				}}.Layout(gtx, th, &g.outer)
 			})
 		})
 	})

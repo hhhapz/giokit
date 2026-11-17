@@ -10,6 +10,7 @@ import (
 	"gioui.org/op/paint"
 
 	"github.com/hhhapz/giokit/kit"
+	"github.com/hhhapz/giokit/kit/ui"
 )
 
 // Lights Out: a 5×5 grid of lights. Pressing one toggles it and its four
@@ -125,7 +126,7 @@ func (g *gallery) demoGame(gtx C) D {
 							if lo.solved {
 								label = "Play again"
 							}
-							return th.Button(gtx, &lo.newGame, "game:new", label, kit.Primary)
+							return ui.Button{ID: "game:new", Text: label, Style: ui.Primary}.Layout(gtx, th, &lo.newGame)
 						}),
 					)
 				}),

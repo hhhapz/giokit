@@ -123,7 +123,7 @@ correct because screenshots looked fine. Static screenshots never exercise input
 ## 17. Split divider ran away from the pointer (~2.5×)
 - **Cause:** Gio reports drag positions relative to the handle *as it was at
   press time*; adding them to the handle's current position compounded.
-- **Rule:** anchor drags to the press-time position (`kit.Split` does).
+- **Rule:** anchor drags to the press-time position (`ui.Split` does).
 - **Detection:** `TestSplitDragAndKeys` asserts the divider moves exactly
   with the pointer. A "moved right" check missed it: assert amounts.
 

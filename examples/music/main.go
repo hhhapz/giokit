@@ -14,6 +14,8 @@ import (
 	"gioui.org/unit"
 
 	"github.com/hhhapz/giokit/kit"
+	"github.com/hhhapz/giokit/kit/ui"
+	"github.com/hhhapz/giokit/kit/x"
 	"github.com/hhhapz/giokit/kittest"
 )
 
@@ -26,12 +28,13 @@ type track struct {
 type music struct {
 	th                              *kit.Theme
 	tracks                          []track
-	queue                           kit.ReorderList
-	lyrics                          kit.Lyrics
-	seek                            kit.Slider
+	queue                           ui.ReorderListState
+	queueItems                      []ui.Choice
+	lyrics                          x.LyricsState
+	seek                            slider
 	play, next, prev, follow, theme kit.Clickable
 	selectTrack                     kit.Pool[kit.Clickable]
-	context                         kit.Pool[kit.Menu]
+	context                         kit.Pool[ui.MenuState]
 	selected                        string
 	playing                         bool
 	position                        time.Duration
@@ -39,7 +42,7 @@ type music struct {
 	status                          string
 }
 
-var demoLyrics = []kit.LyricLine{
+var demoLyrics = []x.LyricLine{
 	{At: 0, Text: "A quiet room, a window full of light"},
 	{At: 8 * time.Second, Text: "The city turns its colors into sound"},
 	{At: 16 * time.Second, Text: "We find a rhythm in the passing lines"},
@@ -72,7 +75,7 @@ func newMusic() *music {
 	}
 	for i := range m.tracks {
 		m.tracks[i].art.Set(cover(colors[i][0], colors[i][1]))
-		m.queue.Items = append(m.queue.Items, kit.Choice{ID: m.tracks[i].id, Label: m.tracks[i].title})
+		m.queueItems = append(m.queueItems, ui.Choice{ID: m.tracks[i].id, Label: m.tracks[i].title})
 	}
 	m.lyrics.Follow = true
 	m.seek.Value = float32(m.position) / float32(m.current().duration)
@@ -112,16 +115,16 @@ func (m *music) choose(id string) {
 }
 
 func (m *music) step(direction int) {
-	for i, c := range m.queue.Items {
+	for i, c := range m.queueItems {
 		if c.ID == m.selected {
-			m.choose(m.queue.Items[(i+direction+len(m.queue.Items))%len(m.queue.Items)].ID)
+			m.choose(m.queueItems[(i+direction+len(m.queueItems))%len(m.queueItems)].ID)
 			return
 		}
 	}
 }
 
 func (m *music) handle(gtx kit.C) {
-	if from, to, ok := m.queue.Changed(); ok {
+	if from, to, ok := m.queue.Update(gtx); ok && ui.Move(m.queueItems, from, to) {
 		m.status = fmt.Sprintf("Queue moved from %d to %d", from+1, to+1)
 	}
 	if m.play.Clicked(gtx) {
@@ -144,24 +147,24 @@ func (m *music) handle(gtx kit.C) {
 			m.th = kit.Dark()
 		}
 	}
-	for _, c := range m.queue.Items {
+	for _, c := range m.queueItems {
 		if m.selectTrack.Get(c.ID).Clicked(gtx) {
 			m.choose(c.ID)
 		}
-		if action, ok := m.context.Get(c.ID).Clicked(gtx); ok {
+		if action, ok := m.context.Get(c.ID).Update(gtx); ok {
 			switch action {
 			case "play":
 				m.choose(c.ID)
 				m.playing = true
 			case "remove":
-				for i := range m.queue.Items {
-					if m.queue.Items[i].ID == c.ID {
-						m.queue.Items = append(m.queue.Items[:i], m.queue.Items[i+1:]...)
+				for i := range m.queueItems {
+					if m.queueItems[i].ID == c.ID {
+						m.queueItems = append(m.queueItems[:i], m.queueItems[i+1:]...)
 						break
 					}
 				}
-				if m.selected == c.ID && len(m.queue.Items) > 0 {
-					m.choose(m.queue.Items[0].ID)
+				if m.selected == c.ID && len(m.queueItems) > 0 {
+					m.choose(m.queueItems[0].ID)
 				}
 			}
 		}
@@ -221,9 +224,11 @@ func (m *music) header(gtx kit.C) kit.D {
 		return kit.Row(gtx,
 			kit.Rigid(func(gtx kit.C) kit.D { return th.Text(gtx, "Music Lab", th.Type.Title, th.Fg, kit.Bold) }),
 			kit.Rigid(kit.Gap(12, 0)),
-			kit.Rigid(func(gtx kit.C) kit.D { return th.Badge(gtx, kit.StatusInfo, "UI prototype") }),
+			kit.Rigid(func(gtx kit.C) kit.D { return ui.Badge{Status: kit.StatusInfo, Text: "UI prototype"}.Layout(gtx, th) }),
 			kit.Flexed(1, kit.Grow),
-			kit.Rigid(func(gtx kit.C) kit.D { return th.Button(gtx, &m.theme, "music:theme", "Switch theme", kit.Ghost) }),
+			kit.Rigid(func(gtx kit.C) kit.D {
+				return ui.Button{ID: "music:theme", Text: "Switch theme", Style: ui.Ghost}.Layout(gtx, th, &m.theme)
+			}),
 		)
 	})(gtx)
 }
@@ -237,7 +242,9 @@ func (m *music) hero(gtx kit.C) kit.D {
 			kit.Rigid(kit.Gap(0, 14)),
 			kit.Rigid(func(gtx kit.C) kit.D {
 				return kit.Row(gtx,
-					kit.Rigid(func(gtx kit.C) kit.D { return th.Artwork(gtx, &cur.art, "music:art", cur.album+" album art", 132) }),
+					kit.Rigid(func(gtx kit.C) kit.D {
+						return ui.Artwork{ID: "music:art", Label: cur.album + " album art", Size: 132}.Layout(gtx, th, &cur.art)
+					}),
 					kit.Rigid(kit.Gap(18, 0)),
 					kit.Flexed(1, func(gtx kit.C) kit.D {
 						return kit.Col(gtx,
@@ -260,7 +267,7 @@ func (m *music) hero(gtx kit.C) kit.D {
 						if m.lyrics.Follow {
 							label = "Following"
 						}
-						return th.Button(gtx, &m.follow, "music:follow", label, kit.Ghost)
+						return ui.Button{ID: "music:follow", Text: label, Style: ui.Ghost}.Layout(gtx, th, &m.follow)
 					}),
 				)
 			}),
@@ -268,7 +275,7 @@ func (m *music) hero(gtx kit.C) kit.D {
 			kit.Flexed(1, func(gtx kit.C) kit.D {
 				return kit.Surface{Bg: th.Panel, Radius: th.Radius}.Layout(gtx, func(gtx kit.C) kit.D {
 					gtx.Constraints.Min = gtx.Constraints.Max
-					return th.Lyrics(gtx, &m.lyrics, "music:lyrics", demoLyrics, m.position)
+					return x.Lyrics{ID: "music:lyrics", Lines: demoLyrics, At: m.position}.Layout(gtx, th, &m.lyrics)
 				})
 			}),
 		)
@@ -291,13 +298,13 @@ func (m *music) queuePane(gtx kit.C) kit.D {
 			}),
 			kit.Rigid(kit.Gap(0, 10)),
 			kit.Flexed(1, func(gtx kit.C) kit.D {
-				return th.ReorderList(gtx, &m.queue, "music:queue", m.queueItem)
+				return ui.ReorderList{ID: "music:queue", Items: m.queueItems, Item: m.queueItem}.Layout(gtx, th, &m.queue)
 			}),
 		)
 	})(gtx)
 }
 
-func (m *music) queueItem(gtx kit.C, c kit.Choice) kit.D {
+func (m *music) queueItem(gtx kit.C, c ui.Choice) kit.D {
 	th := m.th
 	var tr *track
 	for i := range m.tracks {
@@ -309,7 +316,7 @@ func (m *music) queueItem(gtx kit.C, c kit.Choice) kit.D {
 	if tr == nil {
 		return kit.D{}
 	}
-	return th.ContextArea(gtx, m.context.Get(c.ID), "music:menu:"+c.ID, func(gtx kit.C) kit.D {
+	return ui.ContextMenu{ID: "music:menu:" + c.ID, Items: []ui.MenuItem{{ID: "play", Label: "Play this track"}, {ID: "remove", Label: "Remove from queue"}}, Content: func(gtx kit.C) kit.D {
 		return m.selectTrack.Get(c.ID).Press(gtx, "music:track:"+c.ID, func(gtx kit.C, st kit.State) kit.D {
 			bg := th.Panel
 			if c.ID == m.selected {
@@ -319,7 +326,9 @@ func (m *music) queueItem(gtx kit.C, c kit.Choice) kit.D {
 			}
 			return kit.Surface{Bg: bg, Radius: th.Radius}.Layout(gtx, kit.Pad(5, 8, func(gtx kit.C) kit.D {
 				return kit.Row(gtx,
-					kit.Rigid(func(gtx kit.C) kit.D { return th.Artwork(gtx, &tr.art, "music:cover:"+c.ID, tr.album+" cover", 38) }),
+					kit.Rigid(func(gtx kit.C) kit.D {
+						return ui.Artwork{ID: "music:cover:" + c.ID, Label: tr.album + " cover", Size: 38}.Layout(gtx, th, &tr.art)
+					}),
 					kit.Rigid(kit.Gap(8, 0)),
 					kit.Flexed(1, func(gtx kit.C) kit.D {
 						return th.StyledText(gtx,
@@ -330,7 +339,7 @@ func (m *music) queueItem(gtx kit.C, c kit.Choice) kit.D {
 				)
 			}))
 		})
-	}, []kit.MenuItem{{ID: "play", Label: "Play this track"}, {ID: "remove", Label: "Remove from queue"}})
+	}}.Layout(gtx, th, m.context.Get(c.ID))
 }
 
 func (m *music) compact(gtx kit.C) kit.D {
@@ -350,7 +359,7 @@ func (m *music) transport(gtx kit.C) kit.D {
 			kit.Rigid(func(gtx kit.C) kit.D {
 				return kit.Row(gtx,
 					kit.Rigid(func(gtx kit.C) kit.D {
-						return th.IconButtonLabel(gtx, &m.prev, "music:previous", "Previous track", kit.IconChevronLeft, false)
+						return ui.IconButton{ID: "music:previous", Icon: kit.IconChevronLeft, Label: "Previous track"}.Layout(gtx, th, &m.prev)
 					}),
 					kit.Rigid(kit.Gap(8, 0)),
 					kit.Rigid(func(gtx kit.C) kit.D {
@@ -358,14 +367,14 @@ func (m *music) transport(gtx kit.C) kit.D {
 						if m.playing {
 							label = "Pause"
 						}
-						return th.Button(gtx, &m.play, "music:play", label, kit.Solid)
+						return ui.Button{ID: "music:play", Text: label, Style: ui.Solid}.Layout(gtx, th, &m.play)
 					}),
 					kit.Rigid(kit.Gap(8, 0)),
 					kit.Rigid(func(gtx kit.C) kit.D {
-						return th.IconButtonLabel(gtx, &m.next, "music:next", "Next track", kit.IconChevronRight, false)
+						return ui.IconButton{ID: "music:next", Icon: kit.IconChevronRight, Label: "Next track"}.Layout(gtx, th, &m.next)
 					}),
 					kit.Rigid(kit.Gap(16, 0)),
-					kit.Flexed(1, func(gtx kit.C) kit.D { return th.Slider(gtx, &m.seek, "music:seek") }),
+					kit.Flexed(1, func(gtx kit.C) kit.D { return m.seek.layout(gtx, th, "music:seek", "Seek") }),
 					kit.Rigid(kit.Gap(10, 0)),
 					kit.Rigid(func(gtx kit.C) kit.D {
 						return th.Text(gtx, clock(m.position)+" / "+clock(cur.duration), th.Type.Small, th.Muted, kit.Regular)
@@ -397,4 +406,18 @@ func main() {
 		return
 	}
 	kit.NewApp("giokit-music", "Music Lab", unit.Dp(*width), unit.Dp(*height)).Run(m.Frame)
+}
+
+// slider pairs a ui.Slider's value with its state, for sliders that keep
+// their own value.
+type slider struct {
+	Value float32
+	state ui.SliderState
+}
+
+func (s *slider) layout(gtx kit.C, th *kit.Theme, id, label string) kit.D {
+	if v, ok := s.state.Update(gtx); ok {
+		s.Value = v
+	}
+	return ui.Slider{ID: id, Label: label, Value: s.Value}.Layout(gtx, th, &s.state)
 }

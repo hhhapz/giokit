@@ -1,4 +1,6 @@
-package kit
+// Package x holds specialised widgets built on kit and kit/ui: a log view
+// and a lyrics view. They follow kit/ui's props-struct shape.
+package x
 
 import (
 	"image"
@@ -9,6 +11,9 @@ import (
 	"gioui.org/layout"
 	"gioui.org/op"
 	"gioui.org/unit"
+
+	"github.com/hhhapz/giokit/kit"
+	"github.com/hhhapz/giokit/kit/ui"
 )
 
 // LogLevel orders log severity.
@@ -67,17 +72,23 @@ func (b *LogBuffer) Clear() { b.lines, b.head = b.lines[:0], 0 }
 
 func (b *LogBuffer) first() uint64 { return b.total - uint64(len(b.lines)) }
 
-// LogView shows a LogBuffer: virtualized, monospace, colored by level. It
+// LogView shows Buffer: virtualized, monospace, coloured by level. It
 // follows the tail while scrolled to the bottom; scrolling up pauses that and
-// shows a "jump to latest" button. Filtering is incremental, so it stays
-// cheap on large buffers.
+// shows a "jump to latest" button (ID/jump). Filtering is incremental, so
+// it stays cheap on large buffers. The scroll region's id is ID.
 type LogView struct {
+	ID     string
+	Buffer *LogBuffer
+}
+
+// LogViewState is a LogView's filter, scroll position and filter index.
+type LogViewState struct {
 	Filter   string   // case-insensitive substring; "" shows everything
 	MinLevel LogLevel // hide lines below this level
 	NoTime   bool     // hide the timestamp column
 
-	list    List
-	jump    Clickable
+	list    kit.List
+	jump    kit.Clickable
 	key     string   // filter key the index was built for
 	matched []uint64 // sequence numbers of matching lines
 	scanned uint64   // lines scanned so far (sequence)
@@ -85,9 +96,9 @@ type LogView struct {
 }
 
 // Following reports whether the view is pinned to the newest line.
-func (v *LogView) Following() bool { return !v.list.Position.BeforeEnd }
+func (v *LogViewState) Following() bool { return !v.list.Position.BeforeEnd }
 
-func (v *LogView) refresh(b *LogBuffer) {
+func (v *LogViewState) refresh(b *LogBuffer) {
 	k := strings.ToLower(v.Filter) + "\x00" + v.MinLevel.String()
 	if k != v.key {
 		v.key, v.matched, v.scanned = k, v.matched[:0], b.first()
@@ -120,9 +131,9 @@ func (v *LogView) refresh(b *LogBuffer) {
 // Count is the number of lines of b the view shows. It syncs the filter
 // index first, so it is safe to draw above the view (a toolbar) in the same
 // frame.
-func (v *LogView) Count(b *LogBuffer) int { v.refresh(b); return len(v.matched) }
+func (v *LogViewState) Count(b *LogBuffer) int { v.refresh(b); return len(v.matched) }
 
-func (t *Theme) levelColor(l LogLevel) color.NRGBA {
+func levelColor(t *kit.Theme, l LogLevel) color.NRGBA {
 	switch l {
 	case LogDebug:
 		return t.Dim
@@ -134,8 +145,8 @@ func (t *Theme) levelColor(l LogLevel) color.NRGBA {
 	return t.Accent
 }
 
-// LogView lays out v over b. ids: id (scroll region), <id>/jump.
-func (t *Theme) LogView(gtx C, v *LogView, b *LogBuffer, id string) D {
+func (lv LogView) Layout(gtx C, t *kit.Theme, v *LogViewState) D {
+	b, id := lv.Buffer, lv.ID
 	if !v.init {
 		v.init = true
 		v.list.ScrollToEnd = true
@@ -152,26 +163,26 @@ func (t *Theme) LogView(gtx C, v *LogView, b *LogBuffer, id string) D {
 	// show the button depends on the scroll position the list just applied.
 	// (layout.Stack would lay out the button first and show it a frame late.)
 	gtx.Constraints.Min = gtx.Constraints.Max
-	dims := Fill(gtx, t.Bg, func(gtx C) D {
+	dims := kit.Fill(gtx, t.Bg, func(gtx C) D {
 		if len(v.matched) == 0 {
 			return layout.Center.Layout(gtx, func(gtx C) D {
-				msg := "No log lines yet"
+				msg := t.Strings.NoLogLines
 				if v.Filter != "" || v.MinLevel > 0 {
-					msg = "No lines match the filter"
+					msg = t.Strings.NoLogMatches
 				}
-				return t.Text(gtx, msg, t.Type.Body, t.Dim, Regular)
+				return t.Text(gtx, msg, t.Type.Body, t.Dim, kit.Regular)
 			})
 		}
-		levelW := t.levelWidth(gtx, size)
+		levelW := levelWidth(gtx, t, size)
 		return t.List(gtx, &v.list, id, len(v.matched), func(gtx C, i int) D {
-			return t.logRow(gtx, v, b.At(int(v.matched[i]-first)), size, levelW)
+			return logRow(gtx, t, v, b.At(int(v.matched[i]-first)), size, levelW)
 		})
 	})
 	if !v.Following() && len(v.matched) > 0 {
 		m := op.Record(gtx.Ops)
 		gtx := gtx
 		gtx.Constraints.Min = image.Point{}
-		d := t.IconLabelButton(gtx, &v.jump, Part(id, "jump"), IconArrowDown, "Latest", Primary)
+		d := ui.Button{ID: kit.Part(id, "jump"), Text: t.Strings.Latest, Icon: kit.IconArrowDown, Style: ui.Primary}.Layout(gtx, t, &v.jump)
 		call := m.Stop()
 		off := image.Pt(dims.Size.X-d.Size.X-gtx.Dp(24), dims.Size.Y-d.Size.Y-gtx.Dp(12))
 		st := op.Offset(off).Push(gtx.Ops)
@@ -183,7 +194,7 @@ func (t *Theme) LogView(gtx C, v *LogView, b *LogBuffer, id string) D {
 
 // levelWidth is the level column's width: the widest level name in the mono
 // face at size, plus a gap, so the column follows the font and text size.
-func (t *Theme) levelWidth(gtx C, size unit.Sp) int {
+func levelWidth(gtx C, t *kit.Theme, size unit.Sp) int {
 	m := op.Record(gtx.Ops) // measured, then dropped
 	g := gtx
 	g.Constraints = layout.Constraints{Max: image.Pt(1<<20, 1<<20)}
@@ -195,31 +206,31 @@ func (t *Theme) levelWidth(gtx C, size unit.Sp) int {
 	return w + gtx.Sp(size)/2
 }
 
-func (t *Theme) logRow(gtx C, v *LogView, l LogLine, size unit.Sp, levelW int) D {
+func logRow(gtx C, t *kit.Theme, v *LogViewState, l LogLine, size unit.Sp, levelW int) D {
 	gtx.Constraints.Min.X = gtx.Constraints.Max.X
-	return layout.Inset{Top: 1, Bottom: 1, Left: t.Space(10), Right: t.Space(10)}.Layout(gtx, func(gtx C) D {
-		return Row(gtx,
-			Rigid(func(gtx C) D {
+	return layout.Inset{Top: 1, Bottom: 1, Left: t.Space(kit.Space2p5), Right: t.Space(kit.Space2p5)}.Layout(gtx, func(gtx C) D {
+		return kit.Row(gtx,
+			kit.Rigid(func(gtx C) D {
 				if v.NoTime || l.Time.IsZero() {
 					return D{}
 				}
-				return layout.Inset{Right: 10}.Layout(gtx, func(gtx C) D {
+				return layout.Inset{Right: t.Space(kit.Space2p5)}.Layout(gtx, func(gtx C) D {
 					return t.Code(gtx, l.Time.Format("15:04:05.000"), size, t.Dim)
 				})
 			}),
-			Rigid(func(gtx C) D {
+			kit.Rigid(func(gtx C) D {
 				gtx.Constraints = layout.Exact(image.Pt(levelW, gtx.Constraints.Max.Y))
 				gtx.Constraints.Min.Y = 0
-				d := t.Code(gtx, l.Level.String(), size, t.levelColor(l.Level))
+				d := t.Code(gtx, l.Level.String(), size, levelColor(t, l.Level))
 				return D{Size: image.Pt(levelW, d.Size.Y), Baseline: d.Baseline}
 			}),
-			Rigid(func(gtx C) D {
+			kit.Rigid(func(gtx C) D {
 				if l.Source == "" {
 					return D{}
 				}
-				return layout.Inset{Right: 8}.Layout(gtx, func(gtx C) D { return t.Code(gtx, l.Source, size, t.Muted) })
+				return layout.Inset{Right: t.Space(kit.Space2)}.Layout(gtx, func(gtx C) D { return t.Code(gtx, l.Source, size, t.Muted) })
 			}),
-			Flexed(1, func(gtx C) D {
+			kit.Flexed(1, func(gtx C) D {
 				fg := t.Fg
 				if l.Level == LogDebug {
 					fg = t.Muted
@@ -231,4 +242,9 @@ func (t *Theme) logRow(gtx C, v *LogView, l LogLine, size unit.Sp, levelW int) D
 }
 
 // ListPos exposes the list position (tests and debugging).
-func (v *LogView) ListPos() layout.Position { return v.list.Position }
+func (v *LogViewState) ListPos() layout.Position { return v.list.Position }
+
+type (
+	C = kit.C
+	D = kit.D
+)

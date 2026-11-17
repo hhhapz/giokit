@@ -40,6 +40,10 @@ func (a *App) Post(f func()) {
 	a.win.Invalidate()
 }
 
+// Invalidate requests a frame. Safe from any goroutine: wire a
+// paint.Stream's OnFrame to it so new video frames get drawn.
+func (a *App) Invalidate() { a.win.Invalidate() }
+
 // Drain runs pending posts. Run calls it each frame; harnesses may call it too.
 func (a *App) Drain() {
 	a.mu.Lock()

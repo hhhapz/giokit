@@ -4,6 +4,7 @@ import (
 	"image"
 
 	"gioui.org/io/event"
+	"gioui.org/op"
 	"gioui.org/op/clip"
 )
 
@@ -26,4 +27,17 @@ func windowBounds(gtx C) image.Rectangle {
 		return r
 	}
 	return image.Rect(-1<<20, -1<<20, 1<<20, 1<<20)
+}
+
+// Layer draws w above everything else in the window, offset from the
+// current origin: tooltips, toasts and other floating content go through it,
+// never through op.Defer directly, so the host can later show a layer as an
+// OS popup window without the component changing (docs/design/phase1.md).
+// w is laid out with the current constraints; it gets no input priority
+// beyond being drawn last.
+func Layer(gtx C, offset image.Point, w W) {
+	m := op.Record(gtx.Ops)
+	op.Offset(offset).Add(gtx.Ops)
+	w(gtx)
+	op.Defer(gtx.Ops, m.Stop())
 }

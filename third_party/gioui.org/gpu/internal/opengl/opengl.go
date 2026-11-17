@@ -22,6 +22,8 @@ import (
 type Backend struct {
 	funcs *gl.Functions
 
+	dmabuf dmabufState // giokit patch
+
 	clear      bool
 	glstate    glState
 	state      state
@@ -110,7 +112,22 @@ type texture struct {
 	mipmap   bool
 	bindings driver.BufferBinding
 	foreign  bool
+
+	// An imported DMA-BUF (giokit patch): the EGLImage and, when sampling
+	// goes through an sRGB view, the texture holding its storage.
+	dmabufImage unsafe.Pointer
+	dmabufBase  gl.Texture
 }
+
+// dmabufState records whether DMA-BUF import works (giokit patch): resolved
+// on the first import, on the render goroutine.
+type dmabufState struct {
+	loaded bool
+	level  int // 0 impossible, 1 import without views, 2 with views
+}
+
+// releaseDMABufImage destroys an EGLImage; set where import is supported.
+var releaseDMABufImage func(unsafe.Pointer)
 
 type pipeline struct {
 	prog     *program
@@ -1244,6 +1261,13 @@ func (t *texture) Release() {
 		t.backend.glstate.deleteFramebuffer(t.backend.funcs, t.fbo)
 	}
 	t.backend.glstate.deleteTexture(t.backend.funcs, t.obj)
+	if t.dmabufImage != nil {
+		if t.dmabufBase.V != 0 {
+			t.backend.glstate.deleteTexture(t.backend.funcs, t.dmabufBase)
+		}
+		releaseDMABufImage(t.dmabufImage)
+		t.dmabufImage = nil
+	}
 }
 
 func (t *texture) Upload(offset, size image.Point, pixels []byte, stride int) {

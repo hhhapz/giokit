@@ -103,3 +103,46 @@ branch.
 - **Verify:** `go run ./examples/gallery` builds with no tags and no Vulkan headers.
 - **When bumping Gio:** re-apply. Alternative if we ever want Vulkan by default:
   vendor `vulkan_core.h` into `internal/vk` (Apache-2.0/MIT).
+
+## Streaming images (`op/paint/stream.go`, `internal/stream`, `gpu/gpu.go`)
+
+- **Gap:** an `ImageOp` is immutable. Showing video meant `paint.NewImageOp`
+  per frame: a new cache key each time, so a new texture, a full upload and a
+  mipmap rebuild every frame, with the old texture evicted a frame later.
+- **Patch:** `paint.Stream` (`NewStream`, `Submit(StreamFrame)`, `Size`, `Add`,
+  `Filter`, `OnFrame`). A producer on any goroutine submits RGBA frames
+  (latest wins; the replaced frame's `Release` runs). `Add` encodes an ordinary
+  image op whose handle is the stream's `*internal/stream.Stream` and whose
+  `src` is a size-only placeholder (the renderer reads `src` only for its
+  size). `renderer.texHandle` recognises that handle and calls `streamTex`:
+  one texture per stream, linear or nearest filter, **no mipmaps**, re-created
+  on size change, uploaded only when the stream's sequence number moved. The
+  upload holds the stream's lock, so `Submit` cannot release a frame mid-copy.
+  If the stream is not drawn for a frame the cache frees its texture; the next
+  draw re-uploads the retained current frame.
+- **Verify:** `go test ./kit/ui -run Video` (new frame reaches the screen, size
+  change, release once, hide/show), `go test ./examples/gallery -run VideoDemo`,
+  `go test -run x -bench Video ./internal/bench` (Nov 2026, RX 6700 XT:
+  0.84 ms/frame at 1080p, 2.2 ms at 2960×1848, 0.12–0.16 ms without a new
+  frame; CPU time is on par with ImageOp-per-frame, the saving is GPU mipmaps
+  and texture churn, which this headless bench does not time).
+- **DMA-BUF frames (zero copy, Linux OpenGL):** `StreamFrame.DMABuf` (`paint.DMABuf`:
+  ID, fd, offset, pitch, DRM fourcc and modifier, size) and
+  `Stream.ImportState()`. `driver.DMABufImporter` is implemented by the
+  OpenGL backend in `gpu/internal/opengl/dmabuf_linux.go`: `eglCreateImageKHR`
+  (`EGL_LINUX_DMA_BUF_EXT`, modifiers when given) on the current display,
+  `glEGLImageTargetTexStorageEXT` for immutable storage, then a
+  `glTextureViewOES` with `SRGB8_ALPHA8` so it samples as sRGB like every Gio
+  texture (Mesa has no `EGL_EXT_image_gl_colorspace`). `streamTex` imports
+  each buffer ID once (≤ 12 kept, LRU, never the bound one), **holds** the
+  bound frame (`stream.Use.Hold`/`Unhold`) because it is sampled in place,
+  and releases it only after binding a newer one or when the cache drops the
+  texture. A failed import sets `ImportUnsupported` and draws the last good
+  texture or a 1×1 transparent one; producers then send CPU frames.
+  Other backends (Vulkan, Metal, D3D11) report unsupported.
+- **Verify (zero copy):** `cd media && go test .` (`TestZeroCopyRender` compares the
+  imported frames with the software decode, `TestZeroCopyColour`,
+  `TestImportFailureDegrades`); `go test -run x -bench Render ./media`
+  (Nov 2026: 3.2 ms/frame decode+render at 2960×1848 zero copy vs 8.0 ms
+  software decode + upload).
+- **When bumping Gio:** re-apply. Written to be proposed upstream.

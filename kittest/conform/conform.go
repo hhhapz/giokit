@@ -280,3 +280,18 @@ func find(nodes []kittest.A11yNode, id string) (kittest.A11yNode, bool) {
 	}
 	return kittest.A11yNode{}, false
 }
+
+// Clickable builds a Case's Build around one Clickable: draw lays the
+// control out, and every click it reports counts as an activation.
+func Clickable(draw func(th *kit.Theme, gtx kit.C, c *kit.Clickable) kit.D) func(*kit.Theme, bool) (func(kit.C), *int) {
+	return func(th *kit.Theme, disabled bool) (func(kit.C), *int) {
+		var c kit.Clickable
+		n := new(int)
+		return func(gtx kit.C) {
+			if c.Clicked(gtx) {
+				*n++
+			}
+			th.Disable(gtx, disabled, func(gtx kit.C) kit.D { return draw(th, gtx, &c) })
+		}, n
+	}
+}

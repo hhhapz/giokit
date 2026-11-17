@@ -347,6 +347,11 @@ func (g *FocusGroup) Has(gtx C) bool { return g.focus.Has(gtx) }
 // Focus gives the group keyboard focus.
 func (g *FocusGroup) Focus(gtx C) { g.focus.Request(gtx) }
 
+// FocusHandle is the group's focus: a popup focuses it on open
+// (Popup.FocusOnOpen), and keys the group leaves unclaimed are read with
+// it as the key.Filter's Focus.
+func (g *FocusGroup) FocusHandle() *Focus { return &g.focus }
+
 // FocusQuiet gives the group focus without a ring until the keyboard is used.
 func (g *FocusGroup) FocusQuiet(gtx C) { g.focus.RequestQuiet(gtx) }
 

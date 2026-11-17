@@ -7,6 +7,7 @@ import (
 	"gioui.org/unit"
 
 	"github.com/hhhapz/giokit/kit"
+	"github.com/hhhapz/giokit/kit/ui"
 )
 
 type item struct {
@@ -18,8 +19,9 @@ type item struct {
 }
 
 type rowState struct {
-	hover          kit.Hover
-	done, dec, inc kit.Clickable
+	hover kit.Hover
+	done  kit.Clickable
+	step  ui.StepperState
 }
 
 type overviewState struct {
@@ -27,7 +29,7 @@ type overviewState struct {
 	ovScroll  kit.List
 	items     []*item
 	game      lightsOut
-	quickSel  kit.Select
+	quickSel  ui.SelectState
 	surprise  kit.Clickable
 	toTheme   kit.Clickable
 	explore   kit.Pool[kit.Clickable]
@@ -74,14 +76,14 @@ func (g *gallery) handleOverview(gtx C) {
 		switch {
 		case rs.done.Clicked(gtx):
 			it.Done = !it.Done
-		case rs.dec.Clicked(gtx):
+		case rs.step.Minus.Clicked(gtx):
 			it.Qty = max(0, it.Qty-0.5)
-		case rs.inc.Clicked(gtx):
+		case rs.step.Plus.Clicked(gtx):
 			it.Qty += 0.5
 		}
 	})
 	g.handleGame(gtx)
-	if i, ok := g.quickSel.Changed(gtx); ok {
+	if i, ok := g.quickSel.Update(gtx); ok {
 		g.preset = i
 		if i == len(g.presets) {
 			g.preset = -1 // Custom: the seed from the Theme page
@@ -120,7 +122,7 @@ func (g *gallery) surpriseTheme() {
 func (g *gallery) overview(gtx C) D {
 	th := g.th
 	actions := func(gtx C) D {
-		return th.Button(gtx, &g.toTheme, "overview:theme", "Open the theme editor", kit.Secondary)
+		return ui.Button{ID: "overview:theme", Text: "Open the theme editor"}.Layout(gtx, th, &g.toTheme)
 	}
 	rows := []kit.W{
 		func(gtx C) D {
@@ -171,9 +173,13 @@ func (g *gallery) quickTheme(gtx C) D {
 		kit.Rigid(func(gtx C) D {
 			return kit.Row(gtx,
 				kit.Rigid(kit.Fixed(76, func(gtx C) D { return th.Text(gtx, "Theme", th.Type.Body, th.Muted, kit.Regular) })),
-				kit.Rigid(kit.Fixed(150, func(gtx C) D { return th.Select(gtx, &g.quickSel, "quick:preset", names, sel) })),
+				kit.Rigid(kit.Fixed(150, func(gtx C) D {
+					return ui.Select{ID: "quick:preset", Options: names, Selected: sel}.Layout(gtx, th, &g.quickSel)
+				})),
 				kit.Rigid(kit.Gap(10, 0)),
-				kit.Rigid(func(gtx C) D { return th.Button(gtx, &g.surprise, "quick:surprise", "Surprise me", kit.Ghost) }),
+				kit.Rigid(func(gtx C) D {
+					return ui.Button{ID: "quick:surprise", Text: "Surprise me", Style: ui.Ghost}.Layout(gtx, th, &g.surprise)
+				}),
 			)
 		}),
 		kit.Rigid(kit.Gap(0, 10)),
@@ -195,11 +201,15 @@ func (g *gallery) tasks(gtx C) D {
 	rows := []layout.FlexChild{
 		kit.Rigid(func(gtx C) D {
 			return layout.Flex{}.Layout(gtx,
-				kit.Flexed(1, th.Stat("Items", fmt.Sprint(len(g.items)), th.Fg)),
+				kit.Flexed(1, func(gtx C) D { return ui.Stat{Title: "Items", Value: fmt.Sprint(len(g.items))}.Layout(gtx, th) }),
 				kit.Rigid(kit.Gap(10, 0)),
-				kit.Flexed(1, th.Stat("Quantity", fmt.Sprintf("%g", qty), th.Fg)),
+				kit.Flexed(1, func(gtx C) D {
+					return ui.Stat{Title: "Quantity", Value: fmt.Sprintf("%g", qty), ValueColor: th.Fg}.Layout(gtx, th)
+				}),
 				kit.Rigid(kit.Gap(10, 0)),
-				kit.Flexed(1, th.Stat("Done", fmt.Sprintf("%d/%d", done, len(g.items)), th.Good)),
+				kit.Flexed(1, func(gtx C) D {
+					return ui.Stat{Title: "Done", Value: fmt.Sprintf("%d/%d", done, len(g.items)), ValueColor: th.Good}.Layout(gtx, th)
+				}),
 			)
 		}),
 		kit.Rigid(kit.Gap(0, 12)),
@@ -214,32 +224,36 @@ func (g *gallery) tasks(gtx C) D {
 // playground is a handful of controls wired to visible results.
 func (g *gallery) playground(gtx C) D {
 	th := g.th
-	return kit.Col(gtx,
+	row := kit.Flex{Gap: kit.Space3, Align: layout.Middle}
+	return kit.Flex{Axis: layout.Vertical, Gap: kit.Space3p5}.Layout(gtx, th,
 		kit.Rigid(func(gtx C) D {
-			return hrow(gtx, 24,
-				func(gtx C) D { return th.Switch(gtx, &g.wifi, "switch:wifi", "Wi-Fi", g.wifiOn) },
-				func(gtx C) D { return th.CheckboxLabel(gtx, &g.agree, "check:agree", "I agree", g.agreed) },
+			return kit.Flex{Gap: kit.Space6, Align: layout.Middle}.Layout(gtx, th,
+				kit.Rigid(func(gtx C) D {
+					return ui.Switch{ID: "switch:wifi", Label: "Wi-Fi", On: g.wifiOn}.Layout(gtx, th, &g.wifi)
+				}),
+				kit.Rigid(func(gtx C) D {
+					return ui.Checkbox{ID: "check:agree", Label: "I agree", Checked: g.agreed}.Layout(gtx, th, &g.agree)
+				}),
 			)
 		}),
-		kit.Rigid(kit.Gap(0, 14)),
 		kit.Rigid(func(gtx C) D {
-			return kit.Row(gtx,
+			return row.Layout(gtx, th,
 				kit.Rigid(func(gtx C) D { return th.Text(gtx, "Volume", th.Type.Body, th.Muted, kit.Regular) }),
-				kit.Rigid(kit.Gap(12, 0)),
-				kit.Flexed(1, func(gtx C) D { return th.Slider(gtx, &g.volume, "slider:volume") }),
-				kit.Rigid(kit.Gap(12, 0)),
+				kit.Flexed(1, func(gtx C) D { return g.volume.layout(gtx, th, "slider:volume", "Volume") }),
 				kit.Rigid(kit.Fixed(40, func(gtx C) D {
 					return th.Text(gtx, fmt.Sprintf("%d%%", int(g.volume.Value*100+0.5)), th.Type.Body, th.Fg, kit.Medium)
 				})),
 			)
 		}),
-		kit.Rigid(kit.Gap(0, 10)),
 		kit.Rigid(func(gtx C) D { return th.Progress(gtx, g.volume.Value) }),
-		kit.Rigid(kit.Gap(0, 14)),
 		kit.Rigid(func(gtx C) D {
-			return hrow(gtx, 10,
-				func(gtx C) D { return th.Button(gtx, &g.toastBtns[1], "toast:good", "Show a toast", kit.Secondary) },
-				func(gtx C) D { return th.Button(gtx, &g.delBtn, "dialog:open", "Open a dialog", kit.Danger) },
+			return kit.Flex{Gap: kit.Space2p5, Align: layout.Middle}.Layout(gtx, th,
+				kit.Rigid(func(gtx C) D {
+					return ui.Button{ID: "toast:good", Text: "Show a toast"}.Layout(gtx, th, &g.toastBtns[1])
+				}),
+				kit.Rigid(func(gtx C) D {
+					return ui.Button{ID: "dialog:open", Text: "Open a dialog", Style: ui.Danger}.Layout(gtx, th, &g.delBtn)
+				}),
 			)
 		}),
 	)
@@ -267,7 +281,7 @@ func (g *gallery) exploreLinks(gtx C) D {
 		rows = append(rows, kit.Rigid(func(gtx C) D {
 			return layout.Inset{Bottom: 8}.Layout(gtx, func(gtx C) D {
 				return kit.Row(gtx,
-					kit.Rigid(func(gtx C) D { return th.Link(gtx, g.explore.Get(id), "explore:"+id, title) }),
+					kit.Rigid(func(gtx C) D { return ui.Link{ID: "explore:" + id, Text: title}.Layout(gtx, th, g.explore.Get(id)) }),
 					kit.Rigid(kit.Gap(8, 0)),
 					kit.Flexed(1, func(gtx C) D { return th.Text(gtx, blurbs[id], th.Type.Body, th.Dim, kit.Regular) }),
 				)
@@ -283,7 +297,7 @@ func (g *gallery) row(gtx C, it *item, last bool) D {
 	return table.Row(gtx, th, &rs.hover, "row:"+it.ID, last, func(gtx C, col int, hovered bool) D {
 		switch col {
 		case 0:
-			return th.Checkbox(gtx, &rs.done, "done:"+it.ID, it.Done)
+			return ui.Checkbox{ID: "done:" + it.ID, Checked: it.Done}.Layout(gtx, th, &rs.done)
 		case 1:
 			fg := th.Fg
 			if it.Done {
@@ -293,12 +307,12 @@ func (g *gallery) row(gtx C, it *item, last bool) D {
 		case 2:
 			return th.Text(gtx, it.Notes, th.Type.Body, th.Dim, kit.Regular)
 		case 3:
-			return th.Stepper(gtx, &rs.dec, &rs.inc, "qty:"+it.ID, fmt.Sprintf("%g", it.Qty), th.Fg, hovered)
+			return ui.Stepper{ID: "qty:" + it.ID, Label: it.Name, Value: fmt.Sprintf("%g", it.Qty), Active: hovered}.Layout(gtx, th, &rs.step)
 		default:
 			if it.Done {
-				return th.Badge(gtx, kit.StatusGood, "done")
+				return ui.Badge{Status: kit.StatusGood, Text: "done"}.Layout(gtx, th)
 			}
-			return th.Badge(gtx, kit.StatusInfo, "open")
+			return ui.Badge{Status: kit.StatusInfo, Text: "open"}.Layout(gtx, th)
 		}
 	})
 }

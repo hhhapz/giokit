@@ -4,6 +4,7 @@ import (
 	"gioui.org/widget"
 
 	"github.com/hhhapz/giokit/kit"
+	"github.com/hhhapz/giokit/kit/ui"
 )
 
 type patternsState struct {
@@ -11,7 +12,8 @@ type patternsState struct {
 	patSave, patReset, patLocked kit.Clickable
 	patLink, patCreate           kit.Clickable
 	patShowError, patCreated     bool
-	patAccordion                 kit.Accordion
+	patAccordion                 ui.AccordionState
+	patOpen                      string
 	patCrumbRoot, patCrumbGuide  kit.Clickable
 }
 
@@ -25,7 +27,7 @@ func (g *gallery) handlePatterns(gtx C) {
 	}
 	if g.patSave.Clicked(gtx) {
 		g.patShowError = true
-		if kit.Required("patterns:name", g.patName.Text()).Message == "" {
+		if g.th.Required("patterns:name", g.patName.Text()).Message == "" {
 			g.status = "Saved pattern: " + g.patName.Text()
 		}
 	}
@@ -54,14 +56,16 @@ func (g *gallery) demoToolbar(gtx C) D {
 	th := g.th
 	return kit.Col(gtx,
 		kit.Rigid(func(gtx C) D {
-			return th.Toolbar(gtx, "patterns:toolbar", []kit.ToolbarAction{
-				{ID: "save", Label: "Save", Icon: kit.IconCheck, Clickable: &g.patSave, Kind: kit.Solid},
-				{ID: "reset", Label: "Reset", Clickable: &g.patReset, Kind: kit.Secondary},
-				{ID: "unavailable", Label: "Unavailable", Clickable: &g.patLocked, Kind: kit.Secondary, Disabled: true},
-			})
+			return ui.Toolbar{ID: "patterns:toolbar", Actions: []ui.ToolbarAction{
+				{ID: "save", Text: "Save", Icon: kit.IconCheck, Clickable: &g.patSave, Style: ui.Solid},
+				{ID: "reset", Text: "Reset", Clickable: &g.patReset},
+				{ID: "unavailable", Text: "Unavailable", Clickable: &g.patLocked, Disabled: true},
+			}}.Layout(gtx, th)
 		}),
 		kit.Rigid(kit.Gap(0, 8)),
-		kit.Rigid(func(gtx C) D { return th.Link(gtx, &g.patLink, "patterns:link", "Read the component guide") }),
+		kit.Rigid(func(gtx C) D {
+			return ui.Link{ID: "patterns:link", Text: "Read the component guide"}.Layout(gtx, th, &g.patLink)
+		}),
 	)
 }
 
@@ -69,41 +73,48 @@ func (g *gallery) demoForm(gtx C) D {
 	th := g.th
 	nameError := ""
 	if g.patShowError {
-		nameError = kit.Required("patterns:name", g.patName.Text()).Message
+		nameError = g.th.Required("patterns:name", g.patName.Text()).Message
 	}
-	return th.Form(gtx, "patterns:form", []kit.FormField{
-		{ID: "name", Label: "Name", Error: nameError, Control: func(gtx C) D { return th.TextField(gtx, &g.patName, "patterns:name", "Enter a name") }},
-		{ID: "note", Label: "Note", Help: "Optional details", Control: func(gtx C) D { return th.TextArea(gtx, &g.patNote, "patterns:note", "Add a note", 2) }},
-	})
+	return ui.Form{ID: "patterns:form", Fields: []ui.FormField{
+		{ID: "name", Label: "Name", Error: nameError, Control: func(gtx C) D {
+			return ui.TextField{ID: "patterns:name", Placeholder: "Enter a name"}.Layout(gtx, th, &g.patName)
+		}},
+		{ID: "note", Label: "Note", Help: "Optional details", Control: func(gtx C) D {
+			return ui.TextArea{ID: "patterns:note", Placeholder: "Add a note", Lines: 2}.Layout(gtx, th, &g.patNote)
+		}},
+	}}.Layout(gtx, th)
 }
 
 func (g *gallery) demoEmpty(gtx C) D {
 	th := g.th
 	if g.patCreated {
-		return th.Banner(gtx, kit.StatusGood, "Item created", "The empty state action worked.")
+		return ui.Banner{Status: kit.StatusGood, Title: "Item created", Body: "The empty state action worked."}.Layout(gtx, th)
 	}
 	gtx.Constraints.Min.Y, gtx.Constraints.Max.Y = gtx.Dp(160), gtx.Dp(160)
-	return th.EmptyState(gtx, "patterns:empty", "Nothing here yet", "Create an item to get started.", func(gtx C) D {
-		return th.Button(gtx, &g.patCreate, "patterns:create", "Create item", kit.Primary)
-	})
+	return ui.EmptyState{ID: "patterns:empty", Title: "Nothing here yet", Body: "Create an item to get started.", Action: func(gtx C) D {
+		return ui.Button{ID: "patterns:create", Text: "Create item", Style: ui.Primary}.Layout(gtx, th, &g.patCreate)
+	}}.Layout(gtx, th)
 }
 
 func (g *gallery) demoBreadcrumbs(gtx C) D {
 	th := g.th
 	return kit.Col(gtx,
 		kit.Rigid(func(gtx C) D {
-			return th.Breadcrumbs(gtx, "patterns:crumbs", []kit.Breadcrumb{
+			return ui.Breadcrumbs{ID: "patterns:crumbs", Path: []ui.Breadcrumb{
 				{ID: "home", Label: "Home", Clickable: &g.patCrumbRoot},
 				{ID: "guide", Label: "Guide", Clickable: &g.patCrumbGuide},
 				{ID: "components", Label: "Components"},
-			})
+			}}.Layout(gtx, th)
 		}),
 		kit.Rigid(kit.Gap(0, 12)),
 		kit.Rigid(func(gtx C) D {
-			return th.Accordion(gtx, &g.patAccordion, "patterns:accordion", []kit.AccordionSection{
+			if id, ok := g.patAccordion.Update(gtx); ok {
+				g.patOpen = id
+			}
+			return ui.Accordion{ID: "patterns:accordion", Sections: []ui.AccordionSection{
 				{ID: "first", Title: "First section", Summary: "Details", Body: func(gtx C) D { return th.Paragraph(gtx, "The first section is open.", th.Muted) }},
 				{ID: "second", Title: "Second section", Summary: "More", Body: func(gtx C) D { return th.Paragraph(gtx, "The second section is open.", th.Muted) }},
-			})
+			}, Open: g.patOpen}.Layout(gtx, th, &g.patAccordion)
 		}),
 	)
 }

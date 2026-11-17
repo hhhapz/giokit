@@ -11,13 +11,15 @@ import (
 	"gioui.org/widget"
 
 	"github.com/hhhapz/giokit/kit"
+	"github.com/hhhapz/giokit/kit/ui"
+	"github.com/hhhapz/giokit/kit/x"
 )
 
 type logsState struct {
-	logBuf    kit.LogBuffer
-	logView   kit.LogView
+	logBuf    x.LogBuffer
+	logView   x.LogViewState
 	logFilter widget.Editor
-	levels    kit.Tabs
+	levels    ui.TabsState
 	stream    kit.Clickable
 	addMany   kit.Clickable
 	clear     kit.Clickable
@@ -46,25 +48,24 @@ func (g *gallery) initLogs() {
 	g.rng = rand.New(rand.NewSource(7))
 	g.logBuf.Cap = 50000
 	g.logFilter.SingleLine = true
-	g.levels.Style = kit.TabsSegmented
 	base := time.Date(2026, 11, 15, 9, 30, 0, 0, time.UTC)
 	for i := 0; i < 200; i++ {
 		g.logBuf.Append(g.fakeLine(base.Add(time.Duration(i) * 137 * time.Millisecond)))
 	}
 }
 
-func (g *gallery) fakeLine(t time.Time) kit.LogLine {
+func (g *gallery) fakeLine(t time.Time) x.LogLine {
 	i := g.rng.Intn(len(logMsgs))
-	lvl := kit.LogInfo
+	lvl := x.LogInfo
 	switch {
 	case i == 5 || i == 6:
-		lvl = kit.LogWarn
+		lvl = x.LogWarn
 	case i == 7:
-		lvl = kit.LogError
+		lvl = x.LogError
 	case i == 1 || i == 3 || i == 9:
-		lvl = kit.LogDebug
+		lvl = x.LogDebug
 	}
-	return kit.LogLine{Time: t, Level: lvl, Source: logSources[g.rng.Intn(len(logSources))], Text: logMsgs[i]}
+	return x.LogLine{Time: t, Level: lvl, Source: logSources[g.rng.Intn(len(logSources))], Text: logMsgs[i]}
 }
 
 func (g *gallery) handleLogs(gtx C) {
@@ -80,7 +81,7 @@ func (g *gallery) handleLogs(gtx C) {
 	if g.clear.Clicked(gtx) {
 		g.logBuf.Clear()
 	}
-	if i, ok := g.levels.Clicked(gtx); ok {
+	if i, ok := g.levels.Update(gtx); ok {
 		g.level = i
 	}
 	for {
@@ -89,7 +90,7 @@ func (g *gallery) handleLogs(gtx C) {
 		}
 	}
 	g.logView.Filter = g.logFilter.Text()
-	g.logView.MinLevel = []kit.LogLevel{kit.LogDebug, kit.LogInfo, kit.LogWarn, kit.LogError}[g.level]
+	g.logView.MinLevel = []x.LogLevel{x.LogDebug, x.LogInfo, x.LogWarn, x.LogError}[g.level]
 	// Streaming without a goroutine: emit lines on a timer driven by the frame
 	// clock. (A real tail would run in a goroutine and hand lines over with
 	// app.Post; see kit.Spawn.)
@@ -112,20 +113,26 @@ func (g *gallery) logs(gtx C) D {
 					// wraps instead of squeezing the last buttons to nothing.
 					return kit.Flow(gtx, 10, 8,
 						kit.Fixed(260, func(gtx C) D {
-							return th.TextFieldIcon(gtx, &g.logFilter, "logs:filter", kit.IconSearch, "Filter lines")
+							return ui.TextField{ID: "logs:filter", Placeholder: "Filter lines", Icon: kit.IconSearch}.Layout(gtx, th, &g.logFilter)
 						}),
-						func(gtx C) D { return th.Tabs(gtx, &g.levels, "level", levelNames, g.level) },
-						func(gtx C) D { return th.Switch(gtx, &g.stream, "logs:stream", "Stream", g.streaming) },
+						func(gtx C) D {
+							return ui.Tabs{ID: "level", Labels: levelNames, Selected: g.level, Style: ui.TabsSegmented}.Layout(gtx, th, &g.levels)
+						},
+						func(gtx C) D {
+							return ui.Switch{ID: "logs:stream", Label: "Stream", On: g.streaming}.Layout(gtx, th, &g.stream)
+						},
 						func(gtx C) D {
 							return th.Text(gtx, fmt.Sprintf("%d of %d lines", g.logView.Count(&g.logBuf), g.logBuf.Len()), th.Type.Small, th.Dim, kit.Regular)
 						},
-						func(gtx C) D { return th.Button(gtx, &g.addMany, "logs:add", "Add 1000", kit.Secondary) },
-						func(gtx C) D { return th.Button(gtx, &g.clear, "logs:clear", "Clear", kit.Ghost) },
+						func(gtx C) D { return ui.Button{ID: "logs:add", Text: "Add 1000"}.Layout(gtx, th, &g.addMany) },
+						func(gtx C) D {
+							return ui.Button{ID: "logs:clear", Text: "Clear", Style: ui.Ghost}.Layout(gtx, th, &g.clear)
+						},
 					)
 				})
 			}),
 			kit.Rigid(kit.HLine(th.Border)),
-			kit.Flexed(1, func(gtx C) D { return th.LogView(gtx, &g.logView, &g.logBuf, "logs") }),
+			kit.Flexed(1, func(gtx C) D { return x.LogView{ID: "logs", Buffer: &g.logBuf}.Layout(gtx, th, &g.logView) }),
 		)
 	})
 }

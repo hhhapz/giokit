@@ -378,20 +378,26 @@ func (h *Harness) focusedTagID() string {
 	if !ok {
 		return ""
 	}
-	best, area := "", -1
+	// Nodes come parents first, so the last exact match is the innermost:
+	// a group exactly the size of its only control names the control.
+	exact, best, area := "", "", -1
 	for _, n := range h.nodes() {
 		d := n.Desc
 		if d.Description == "" {
 			continue
 		}
 		if d.Bounds == b {
-			return d.Description
+			exact = d.Description
+			continue
 		}
 		if b.In(d.Bounds) {
 			if a := d.Bounds.Dx() * d.Bounds.Dy(); area < 0 || a < area {
 				best, area = d.Description, a
 			}
 		}
+	}
+	if exact != "" {
+		return exact
 	}
 	return best
 }

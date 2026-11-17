@@ -48,7 +48,7 @@ func (tb Table) Cells(gtx C, cell func(gtx C, col int) D) D {
 func (tb Table) Header(gtx C, t *Theme) D {
 	return Col(gtx,
 		Rigid(func(gtx C) D {
-			return layout.Inset{Left: tb.Inset, Right: tb.Inset, Bottom: 8}.Layout(gtx, func(gtx C) D {
+			return layout.Inset{Left: tb.Inset, Right: tb.Inset, Bottom: t.Space(Space2)}.Layout(gtx, func(gtx C) D {
 				return tb.Cells(gtx, func(gtx C, i int) D { return t.Caption(gtx, tb.Cols[i].Title) })
 			})
 		}),

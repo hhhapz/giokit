@@ -26,7 +26,7 @@ replace gioui.org => /path/to/giokit/third_party/gioui.org   # patched Gio; requ
 
 ## For AI agents
 
-`AGENTS.md` is the guide for working on this repo. `CLAUDE.md` imports it.
+`AGENTS.md` is the guide for working on this repo.
 Projects that use giokit should load `skills/giokit/SKILL.md` (Agent Skills
 format). Link or copy it into the agent's skills directory, for example
 `.claude/skills/`, `.codex/skills/`, `.opencode/skills/` or `.agents/skills/`.

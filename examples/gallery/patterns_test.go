@@ -70,13 +70,13 @@ func TestPatternsInteractions(t *testing.T) {
 		t.Fatalf("breadcrumb status: %q", g.status)
 	}
 	h.ClickID("patterns:accordion/first")
-	if g.patAccordion.Open != "first" {
-		t.Fatalf("first accordion section: %q", g.patAccordion.Open)
+	if g.patOpen != "first" {
+		t.Fatalf("first accordion section: %q", g.patOpen)
 	}
 	h.ExpectText("The first section is open.")
 	h.ClickID("patterns:accordion/second")
-	if g.patAccordion.Open != "second" {
-		t.Fatalf("second accordion section: %q", g.patAccordion.Open)
+	if g.patOpen != "second" {
+		t.Fatalf("second accordion section: %q", g.patOpen)
 	}
 	if _, ok := h.FindText("The first section is open."); ok {
 		t.Fatal("closed accordion body is still visible")

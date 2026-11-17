@@ -24,6 +24,7 @@ import (
 	"gioui.org/internal/f32color"
 	"gioui.org/internal/ops"
 	"gioui.org/internal/scene"
+	"gioui.org/internal/stream"
 	"gioui.org/internal/stroke"
 	"gioui.org/layout"
 	"gioui.org/op"
@@ -66,6 +67,7 @@ type renderer struct {
 	intersections packer
 	layers        packer
 	layerFBOs     fboSet
+	blank         driver.Texture // 1x1 transparent, for streams with nothing drawable (giokit patch)
 }
 
 type drawOps struct {
@@ -256,6 +258,17 @@ type resource interface {
 type texture struct {
 	src *image.RGBA
 	tex driver.Texture
+
+	// paint.Stream textures (giokit patch): the uploaded frame's size and
+	// sequence number, imported DMA-BUFs by buffer ID, the texture last
+	// bound, and the DMA-BUF frame held while bound.
+	stream  *stream.Stream
+	size    image.Point
+	seq     uint64
+	imports map[uint64]*streamImport
+	bound   driver.Texture
+	held    bool
+	heldSeq uint64
 }
 
 type blitter struct {
@@ -453,6 +466,9 @@ func (r *renderer) texHandle(cache *textureCache, data imageOpData) driver.Textu
 		handle: data.handle,
 	}
 
+	if st, ok := data.handle.(*stream.Stream); ok {
+		return r.streamTex(cache, key, st)
+	}
 	var tex *texture
 	t, exists := cache.get(key)
 	if !exists {
@@ -487,9 +503,149 @@ func (r *renderer) texHandle(cache *textureCache, data imageOpData) driver.Textu
 	return tex.tex
 }
 
+// streamTex returns the texture of a paint.Stream (giokit patch). CPU frames
+// are uploaded into one reused texture, without mipmaps, when the stream's
+// sequence number moved. DMA-BUF frames are imported where the device can
+// (one import per buffer ID, reused when the producer cycles its buffers)
+// and held until a newer frame is bound, since they are sampled in place.
+func (r *renderer) streamTex(cache *textureCache, key textureCacheKey, st *stream.Stream) driver.Texture {
+	t, exists := cache.get(key)
+	if !exists {
+		t = &texture{stream: st}
+		cache.put(key, t)
+	}
+	tex := t.(*texture)
+	filter := driver.FilterLinear
+	if key.filter == filterNearest {
+		filter = driver.FilterNearest
+	}
+	var out driver.Texture
+	st.Use(func(u *stream.Use) {
+		switch f := u.Frame; {
+		case f.DMA != nil:
+			out = r.streamImport(tex, st, u, filter)
+		case f.Img != nil:
+			if sz := f.Img.Rect.Size(); tex.tex == nil || tex.size != sz {
+				if tex.tex != nil {
+					tex.tex.Release()
+				}
+				h, err := r.ctx.NewTexture(driver.TextureFormatSRGBA, sz.X, sz.Y, filter, filter, driver.BufferBindingTexture)
+				if err != nil {
+					panic(err)
+				}
+				tex.tex, tex.size, tex.seq = h, sz, 0
+			}
+			if tex.seq != u.Seq {
+				driver.UploadImage(tex.tex, image.Pt(0, 0), f.Img)
+				tex.seq = u.Seq
+			}
+			tex.unhold(u)
+			tex.bound = tex.tex
+			out = tex.tex
+		}
+	})
+	if out == nil {
+		// Nothing drawable yet (an import that failed before any frame):
+		// draw transparent rather than handing the draw code a nil texture.
+		out = r.blankTexture()
+	}
+	return out
+}
+
+// streamImport binds the current DMA-BUF frame of st.
+func (r *renderer) streamImport(tex *texture, st *stream.Stream, u *stream.Use, filter driver.TextureFilter) driver.Texture {
+	if tex.held && tex.heldSeq == u.Seq {
+		return tex.bound
+	}
+	d := u.Frame.DMA
+	imp, ok := r.ctx.(driver.DMABufImporter)
+	if !ok {
+		st.SetImportState(stream.ImportUnsupported)
+		return tex.bound
+	}
+	e := tex.imports[d.ID]
+	if e == nil {
+		it, err := imp.ImportDMABuf(driver.DMABuf{
+			FD: d.FD, Offset: d.Offset, Pitch: d.Pitch, Fourcc: d.Fourcc, Modifier: d.Modifier,
+			Width: d.Width, Height: d.Height,
+		}, filter)
+		if err != nil {
+			st.SetImportState(stream.ImportUnsupported)
+			return tex.bound
+		}
+		if tex.imports == nil {
+			tex.imports = make(map[uint64]*streamImport)
+		}
+		e = &streamImport{tex: it}
+		tex.imports[d.ID] = e
+		tex.evictImports()
+	}
+	st.SetImportState(stream.ImportSupported)
+	e.used = u.Seq
+	tex.unhold(u)
+	u.Hold()
+	tex.held, tex.heldSeq, tex.bound = true, u.Seq, e.tex
+	return e.tex
+}
+
+// streamImport is one imported DMA-BUF of a stream.
+type streamImport struct {
+	tex  driver.Texture
+	used uint64 // sequence number of the last frame that bound it
+}
+
+// maxStreamImports bounds the imports kept per stream: a producer cycles a
+// handful of buffers; IDs beyond that are stale.
+const maxStreamImports = 12
+
+func (t *texture) evictImports() {
+	for len(t.imports) > maxStreamImports {
+		var oldest uint64
+		var e *streamImport
+		for id, v := range t.imports {
+			if v.tex != t.bound && (e == nil || v.used < e.used) {
+				oldest, e = id, v
+			}
+		}
+		if e == nil {
+			return
+		}
+		e.tex.Release()
+		delete(t.imports, oldest)
+	}
+}
+
+// unhold lets go of the DMA-BUF frame bound before, if any.
+func (t *texture) unhold(u *stream.Use) {
+	if t.held {
+		u.Unhold(t.heldSeq)
+		t.held = false
+	}
+}
+
+func (r *renderer) blankTexture() driver.Texture {
+	if r.blank == nil {
+		h, err := r.ctx.NewTexture(driver.TextureFormatSRGBA, 1, 1, driver.FilterNearest, driver.FilterNearest, driver.BufferBindingTexture)
+		if err != nil {
+			panic(err)
+		}
+		h.Upload(image.Point{}, image.Pt(1, 1), make([]byte, 4), 4)
+		r.blank = h
+	}
+	return r.blank
+}
+
 func (t *texture) release() {
 	if t.tex != nil {
 		t.tex.Release()
+	}
+	for _, e := range t.imports {
+		e.tex.Release()
+	}
+	t.imports = nil
+	if t.held {
+		t.stream.Unhold(t.heldSeq)
+		t.held = false
 	}
 }
 
@@ -515,6 +671,9 @@ func newRenderer(ctx driver.Device) *renderer {
 }
 
 func (r *renderer) release() {
+	if r.blank != nil {
+		r.blank.Release()
+	}
 	r.pather.release()
 	r.blitter.release()
 	r.layerFBOs.delete(r.ctx, 0)

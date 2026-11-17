@@ -8,6 +8,7 @@ import (
 	"gioui.org/layout"
 
 	"github.com/hhhapz/giokit/kit"
+	"github.com/hhhapz/giokit/kit/ui"
 )
 
 // demo is one titled card: a component or a small group of related ones.
@@ -71,6 +72,9 @@ var categories = []category{
 	{"Data display", []page{
 		{id: "collections", title: "Lists, trees, tables", layout: (*gallery).workspace},
 		{id: "logs", title: "Logs", layout: (*gallery).logs},
+		{id: "video", title: "Video", demos: []demo{
+			{"Video stream", (*gallery).demoVideo},
+		}},
 	}},
 	{"Feedback", []page{
 		{id: "status", title: "Status", demos: []demo{
@@ -166,7 +170,7 @@ func (g *gallery) sidebar(gtx C) D {
 							trail, tc = fmt.Sprint(g.openCount()), th.Warn
 						}
 						return layout.Inset{Bottom: 1}.Layout(gtx, func(gtx C) D {
-							return th.NavItem(gtx, g.nav.Get(p.id), "nav:"+p.id, p.title, trail, tc, g.page == p.id)
+							return ui.NavItem{ID: "nav:" + p.id, Label: p.title, Trailing: trail, TrailColor: tc, Active: g.page == p.id}.Layout(gtx, th, g.nav.Get(p.id))
 						})
 					})
 				})

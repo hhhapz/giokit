@@ -91,6 +91,9 @@ type Theme struct {
 	// DisabledAlpha is the opacity of controls inside Theme.Disable.
 	DisabledAlpha float32
 
+	Metrics         // fixed sizes: icons, controls, overlay widths
+	Strings Strings // text kit shows or speaks (English by default)
+
 	UI, Mono font.Typeface // bundled typefaces for UI text and code/logs
 	Fonts    string        // name of the font set (UseFonts); "Go" by default
 
@@ -129,7 +132,7 @@ func New(p Palette) *Theme {
 	// hides missing glyphs on the dev box that show as tofu elsewhere.
 	sh := text.NewShaper(text.NoSystemFonts(), text.WithCollection(gofont.Collection()))
 	t := &Theme{Palette: p, Type: DefaultType, Radius: 6, Stroke: 1, Ring: 2, Density: 1, Motion: 1,
-		Elevation: 1, HeadingWeight: font.Bold, DisabledAlpha: 0.45,
+		Elevation: 1, HeadingWeight: font.Bold, DisabledAlpha: 0.45, Metrics: DefaultMetrics, Strings: English,
 		UI: "Go", Mono: "Go Mono", Fonts: "Go", Shaper: sh}
 	t.syncMaterial()
 	return t
@@ -159,20 +162,26 @@ func (t *Theme) Derive(f func(t *Theme)) *Theme {
 	return &c
 }
 
-// ControlSize is the height class of controls (Theme.Controls).
+// ControlSize is the height class of controls: Theme.Controls for the whole
+// theme, a component's Size for one instance.
 type ControlSize int
 
 const (
-	ControlMedium ControlSize = iota // the default
+	ControlDefault ControlSize = iota // on a component: the theme's size; on a theme: medium
 	ControlSmall
+	ControlMedium
 	ControlLarge
 )
 
-// control scales a control's inner padding by density and Controls, so
-// buttons, fields and selects keep the same height as each other.
-func (t *Theme) control(v unit.Dp) unit.Dp {
+// ControlPad scales a control's inner padding v by density and size
+// (ControlDefault: the theme's Controls), so buttons, fields and selects of
+// one size share a height.
+func (t *Theme) ControlPad(size ControlSize, v unit.Dp) unit.Dp {
+	if size == ControlDefault {
+		size = t.Controls
+	}
 	f := float32(1)
-	switch t.Controls {
+	switch size {
 	case ControlSmall:
 		f = 0.55
 	case ControlLarge:
@@ -180,6 +189,9 @@ func (t *Theme) control(v unit.Dp) unit.Dp {
 	}
 	return t.Space(v) * unit.Dp(f)
 }
+
+// control is ControlPad at the theme's size.
+func (t *Theme) control(v unit.Dp) unit.Dp { return t.ControlPad(ControlDefault, v) }
 
 // RadiusSm is the corner of small parts: checkboxes, menu rows, tabs.
 func (t *Theme) RadiusSm() unit.Dp { return min(t.Radius*2/3, 8) }

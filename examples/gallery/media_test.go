@@ -9,6 +9,8 @@ import (
 	"gioui.org/io/key"
 
 	"github.com/hhhapz/giokit/kit"
+	"github.com/hhhapz/giokit/kit/ui"
+	"github.com/hhhapz/giokit/kit/x"
 	"github.com/hhhapz/giokit/kittest"
 )
 
@@ -17,19 +19,25 @@ func TestMediaPrimitives(t *testing.T) {
 	th := kit.Dark()
 	var art kit.Image
 	art.Set(image.NewNRGBA(image.Rect(0, 0, 20, 20)))
-	r := kit.ReorderList{Items: []kit.Choice{{ID: "a", Label: "First"}, {ID: "b", Label: "Second"}, {ID: "c", Label: "Third"}}}
-	l := kit.Lyrics{Follow: true}
+	var rs ui.ReorderListState
+	r := struct{ Items []ui.Choice }{[]ui.Choice{{ID: "a", Label: "First"}, {ID: "b", Label: "Second"}, {ID: "c", Label: "Third"}}}
+	l := x.LyricsState{Follow: true}
 	frame := func(gtx C) {
+		if from, to, ok := rs.Update(gtx); ok {
+			ui.Move(r.Items, from, to)
+		}
 		kit.Col(gtx,
-			kit.Rigid(func(gtx C) D { return th.Artwork(gtx, &art, "media:art", "Album cover", 60) }),
+			kit.Rigid(func(gtx C) D {
+				return ui.Artwork{ID: "media:art", Label: "Album cover", Size: 60}.Layout(gtx, th, &art)
+			}),
 			kit.Rigid(func(gtx C) D {
 				return th.StyledText(gtx, kit.TextSpan{Text: "Featured ", Strong: true}, kit.TextSpan{Text: "track", Muted: true})
 			}),
 			kit.Flexed(1, func(gtx C) D {
-				return th.ReorderList(gtx, &r, "media:queue", func(gtx C, c kit.Choice) D { return th.Text(gtx, c.Label, th.Type.Body, th.Fg, kit.Regular) })
+				return ui.ReorderList{ID: "media:queue", Items: r.Items, Item: func(gtx C, c ui.Choice) D { return th.Text(gtx, c.Label, th.Type.Body, th.Fg, kit.Regular) }}.Layout(gtx, th, &rs)
 			}),
 			kit.Flexed(1, func(gtx C) D {
-				return th.Lyrics(gtx, &l, "media:lyrics", []kit.LyricLine{{At: 0, Text: "First line"}, {At: time.Second, Text: "Second line"}}, 2*time.Second)
+				return x.Lyrics{ID: "media:lyrics", Lines: []x.LyricLine{{At: 0, Text: "First line"}, {At: time.Second, Text: "Second line"}}, At: 2 * time.Second}.Layout(gtx, th, &l)
 			}),
 		)
 	}
@@ -85,6 +93,36 @@ func TestAnchoredListKeepsVisibleItemAfterPrepend(t *testing.T) {
 	h.Settle()
 	if ids[feed.List.Position.First] != anchor || feed.List.Position.Offset != offset {
 		t.Fatalf("anchor moved: got %s at %d, offset %d; want %s offset %d", ids[feed.List.Position.First], feed.List.Position.First, feed.List.Position.Offset, anchor, offset)
+	}
+	h.ExpectClean()
+}
+
+func TestVideoDemo(t *testing.T) {
+	g, h := newHarness(t)
+	goTo(t, h, g, "video")
+	r, ok := h.Find("video-screen")
+	if !ok {
+		t.Fatal("video not on the page")
+	}
+	// The first bar is near-white: the stream's frame reached the screen.
+	s := min(float64(r.Dx())/320, float64(r.Dy())/180)
+	fw := int(320 * s)
+	c := h.Pixel(image.Pt(r.Min.X+(r.Dx()-fw)/2+fw/14, r.Min.Y+r.Dy()/3))
+	if c.R < 200 || c.G < 200 || c.B < 200 {
+		t.Fatalf("first bar = %v, want near white", c)
+	}
+	before := g.frames
+	h.Wait(200 * time.Millisecond)
+	if g.frames == before {
+		t.Fatal("pattern did not advance")
+	}
+	h.ClickID("video-play")
+	if g.playing {
+		t.Fatal("play switch did not pause")
+	}
+	h.ClickID("video-fit/Fill")
+	if got := g.video.Content(); got.Dx() != r.Dx() || got.Dy() != r.Dy() {
+		t.Fatalf("Fill content %v, want the whole %v", got, r.Size())
 	}
 	h.ExpectClean()
 }

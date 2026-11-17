@@ -8,16 +8,19 @@ import (
 	"gioui.org/widget"
 
 	"github.com/hhhapz/giokit/kit"
+	"github.com/hhhapz/giokit/kit/ui"
 )
 
 // The workspace page is a small project organizer: folders, selectable work
 // items, and an editable detail form using the same pieces as an actual app.
 type workspaceState struct {
-	folders   kit.Tree
-	workItems kit.SelectableList
-	workTable kit.DataTable
+	folders   ui.TreeState
+	workItems ui.SelectableListState
+	workTable ui.DataTableState
+	folderSel string // the selected folder
+	workSel   string // the selected record: the list and the table show it
 	records   []workRecord
-	priority  kit.NumberField
+	priority  ui.NumberFieldState
 	workName  widget.Editor
 	secret    widget.Editor
 	save      kit.Clickable
@@ -29,24 +32,26 @@ type workRecord struct {
 	Priority                 float64
 }
 
-var workspaceFolders = []kit.TreeNode{
-	{ID: "project", Label: "Project", Children: []kit.TreeNode{
+var workspaceFolders = []ui.TreeNode{
+	{ID: "project", Label: "Project", Children: []ui.TreeNode{
 		{ID: "design", Label: "Design"}, {ID: "build", Label: "Build"}, {ID: "review", Label: "Review"},
 	}},
 	{ID: "archive", Label: "Archive"},
 }
 
-func (g *gallery) workChoices() []kit.Choice {
-	out := make([]kit.Choice, len(g.records))
+var workColumns = []kit.Column{{Title: "Item"}, {Title: "Status", Width: unit.Dp(110)}}
+
+func (g *gallery) workChoices() []ui.Choice {
+	out := make([]ui.Choice, len(g.records))
 	for i, r := range g.records {
-		out[i] = kit.Choice{ID: r.ID, Label: r.Name}
+		out[i] = ui.Choice{ID: r.ID, Label: r.Name}
 	}
 	return out
 }
-func (g *gallery) workRows() []kit.DataRow {
-	out := make([]kit.DataRow, len(g.records))
+func (g *gallery) workRows() []ui.DataRow {
+	out := make([]ui.DataRow, len(g.records))
 	for i, r := range g.records {
-		out[i] = kit.DataRow{ID: r.ID, Cells: []string{r.Name, r.Status}}
+		out[i] = ui.DataRow{ID: r.ID, Cells: []string{r.Name, r.Status}}
 	}
 	return out
 }
@@ -55,7 +60,7 @@ func (g *gallery) loadWork(id string) {
 		if r.ID != id {
 			continue
 		}
-		g.workItems.Selected, g.workTable.Selected = id, id
+		g.workSel = id
 		g.workName.SetText(r.Name)
 		g.priority.SetValue(r.Priority)
 		g.secret.SetText(r.Secret)
@@ -72,32 +77,31 @@ func (g *gallery) initWorkspace() {
 		{ID: "release", Name: "Prepare release", Status: "Planned", Priority: 4},
 	}
 	g.folders.SetExpanded("project", true)
-	g.workTable.Table.Cols = []kit.Column{{Title: "Item"}, {Title: "Status", Width: unit.Dp(110)}}
-	g.priority.Min, g.priority.Max = 1, 5
 	g.workName.SingleLine = true
 	g.loadWork("spec")
 }
 
 func (g *gallery) handleWorkspace(gtx C) {
-	if id, ok := g.folders.Changed(); ok {
+	if id, ok := g.folders.Update(gtx); ok {
+		g.folderSel = id
 		g.status = "Folder: " + id
 	}
-	if id, ok := g.workItems.Changed(); ok {
+	if id, ok := g.workItems.Update(gtx); ok {
 		g.loadWork(id)
 		g.status = "Item: " + id
 	}
-	if id, ok := g.workTable.Changed(); ok {
+	if id, ok := g.workTable.Update(gtx); ok {
 		g.loadWork(id)
 		g.status = "Table row: " + id
 	}
-	if _, ok := g.priority.Changed(); ok {
+	if _, ok := g.priority.Update(gtx); ok {
 		g.status = fmt.Sprintf("Priority: %g", g.priority.Value)
 	}
 	if g.save.Clicked(gtx) {
 		g.showError = true
-		if kit.Required("work:name", g.workName.Text()).Message == "" && g.priority.Error == "" {
+		if g.th.Required("work:name", g.workName.Text()).Message == "" && g.priority.Error == "" {
 			for i := range g.records {
-				if g.records[i].ID == g.workItems.Selected {
+				if g.records[i].ID == g.workSel {
 					g.records[i].Name = g.workName.Text()
 					g.records[i].Priority = g.priority.Value
 					g.records[i].Secret = g.secret.Text()
@@ -120,7 +124,9 @@ func (g *gallery) workspace(gtx C) D {
 						return kit.Col(gtx,
 							kit.Rigid(func(gtx C) D { return th.Caption(gtx, "Folders") }),
 							kit.Rigid(kit.Gap(0, 8)),
-							kit.Flexed(1, func(gtx C) D { return th.Tree(gtx, &g.folders, "folders", workspaceFolders) }),
+							kit.Flexed(1, func(gtx C) D {
+								return ui.Tree{ID: "folders", Roots: workspaceFolders, Selected: g.folderSel}.Layout(gtx, th, &g.folders)
+							}),
 						)
 					})
 				})),
@@ -135,12 +141,14 @@ func (g *gallery) workspace(gtx C) D {
 									kit.Rigid(kit.Gap(0, 8)),
 									kit.Rigid(func(gtx C) D {
 										gtx.Constraints.Min.Y, gtx.Constraints.Max.Y = gtx.Dp(145), gtx.Dp(145)
-										return th.SelectableList(gtx, &g.workItems, "work", g.workChoices())
+										return ui.SelectableList{ID: "work", Items: g.workChoices(), Selected: g.workSel}.Layout(gtx, th, &g.workItems)
 									}),
 									kit.Rigid(kit.Gap(0, 8)),
 									kit.Rigid(func(gtx C) D { return th.Caption(gtx, "Sortable table") }),
 									kit.Rigid(kit.Gap(0, 6)),
-									kit.Flexed(1, func(gtx C) D { return th.DataTable(gtx, &g.workTable, "worktable", g.workRows()) }),
+									kit.Flexed(1, func(gtx C) D {
+										return ui.DataTable{ID: "worktable", Columns: workColumns, Rows: g.workRows(), Selected: g.workSel}.Layout(gtx, th, &g.workTable)
+									}),
 								)
 							})
 						}),
@@ -151,25 +159,33 @@ func (g *gallery) workspace(gtx C) D {
 								return kit.Col(gtx,
 									kit.Rigid(func(gtx C) D { return th.Caption(gtx, "Edit item") }),
 									kit.Rigid(kit.Gap(0, 10)),
-									kit.Rigid(func(gtx C) D { return th.TextField(gtx, &g.workName, "work:name", "Item name") }),
+									kit.Rigid(func(gtx C) D {
+										return ui.TextField{ID: "work:name", Placeholder: "Item name"}.Layout(gtx, th, &g.workName)
+									}),
 									kit.Rigid(func(gtx C) D {
 										if g.showError {
-											return th.FieldError(gtx, kit.Required("work:name", g.workName.Text()))
+											return ui.FieldError{Message: g.th.Required("work:name", g.workName.Text()).Message}.Layout(gtx, th)
 										}
 										return D{}
 									}),
 									kit.Rigid(kit.Gap(0, 8)),
 									kit.Rigid(func(gtx C) D {
 										return kit.Row(gtx,
-											kit.Flexed(1, func(gtx C) D { return th.NumberField(gtx, &g.priority, "work:priority", "Priority") }),
+											kit.Flexed(1, func(gtx C) D {
+												return ui.NumberField{ID: "work:priority", Placeholder: "Priority", Min: 1, Max: 5}.Layout(gtx, th, &g.priority)
+											}),
 											kit.Rigid(kit.Gap(10, 0)),
-											kit.Flexed(1, func(gtx C) D { return th.PasswordField(gtx, &g.secret, "work:secret", "Private token") }),
+											kit.Flexed(1, func(gtx C) D {
+												return ui.TextField{ID: "work:secret", Placeholder: "Private token", Password: true}.Layout(gtx, th, &g.secret)
+											}),
 											kit.Rigid(kit.Gap(10, 0)),
-											kit.Rigid(func(gtx C) D { return th.Button(gtx, &g.save, "work:save", "Save", kit.Solid) }),
+											kit.Rigid(func(gtx C) D {
+												return ui.Button{ID: "work:save", Text: "Save", Style: ui.Solid}.Layout(gtx, th, &g.save)
+											}),
 										)
 									}),
 									kit.Rigid(func(gtx C) D {
-										return th.FieldError(gtx, kit.Validation{FieldID: "work:priority", Message: g.priority.Error})
+										return ui.FieldError{Message: g.priority.Error}.Layout(gtx, th)
 									}),
 								)
 							})

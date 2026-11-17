@@ -187,8 +187,11 @@ func (c *Clickable) press(gtx C, id string, d time.Duration, w func(gtx C, st St
 	})
 }
 
-// press is Clickable.Press with the theme's motion setting.
-func (t *Theme) press(gtx C, c *Clickable, id string, w func(gtx C, st State) D) D {
+// Press makes w a pressable target with id: c's clicks, hover and focus,
+// with hover animated at the theme's motion speed. w draws from the State.
+// Every kit button, row and cell is built on it; so can yours (add a
+// semantic role and label inside w).
+func (t *Theme) Press(gtx C, c *Clickable, id string, w func(gtx C, st State) D) D {
 	return c.press(gtx, id, t.Dur(DurFast), w)
 }
 
@@ -211,7 +214,7 @@ func disabledArea(gtx C, id string, w W) D {
 // the Tab order, the semantics say disabled (screen readers, kittest), and it
 // draws at the theme's DisabledAlpha. Wrap one control or a whole section:
 //
-//	th.Disable(gtx, !v.dirty, func(gtx C) D { return th.Button(gtx, &v.save, "save", "Save", kit.Solid) })
+//	th.Disable(gtx, !v.dirty, func(gtx C) D { return ui.Button{ID: "save", Text: "Save"}.Layout(gtx, th, &v.save) })
 func (t *Theme) Disable(gtx C, disabled bool, w W) D {
 	if !disabled || !gtx.Enabled() { // already disabled: don't dim twice
 		return w(gtx)
@@ -220,6 +223,10 @@ func (t *Theme) Disable(gtx C, disabled bool, w W) D {
 	defer paint.PushOpacity(gtx.Ops, t.DisabledAlpha).Pop()
 	return disabledArea(gtx, "", w) // the whole subtree reads as disabled
 }
+
+// Anim is a per-control animation slot for the component drawing c (a
+// switch's thumb, a radio's dot): animate it with Tween.To or ToEase.
+func (c *Clickable) Anim() *Tween { return &c.anim }
 
 // Focus gives c keyboard focus (e.g. the first field of a dialog).
 func (c *Clickable) Focus(gtx C) { c.quiet = false; gtx.Execute(key.FocusCmd{Tag: c}) }

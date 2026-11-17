@@ -13,6 +13,7 @@ import (
 	"gioui.org/layout"
 
 	"github.com/hhhapz/giokit/kit"
+	"github.com/hhhapz/giokit/kit/ui"
 	"github.com/hhhapz/giokit/kittest"
 )
 
@@ -213,7 +214,7 @@ func TestTooltipAfterDelay(t *testing.T) {
 	if _, ok := h.FindText("Search (tooltip)"); ok {
 		t.Fatal("tooltip showed before the delay")
 	}
-	h.Wait(kit.TooltipDelay + 50*time.Millisecond)
+	h.Wait(ui.TooltipDelay + 50*time.Millisecond)
 	h.ExpectText("Search (tooltip)")
 	h.Hover("btn:Ghost")
 	if _, ok := h.FindText("Search (tooltip)"); ok {
@@ -564,7 +565,7 @@ func TestSheet(t *testing.T) {
 	h.Snap("overview, hover row 2")
 	goTo(t, h, g, "all")
 	h.Hover("btn:search")
-	h.Wait(kit.TooltipDelay + 100*time.Millisecond)
+	h.Wait(ui.TooltipDelay + 100*time.Millisecond)
 	h.Snap("controls: tooltip")
 	for i := 0; i < 12; i++ { // keyboard focus ring somewhere on the page
 		h.Tab(false)
@@ -716,9 +717,9 @@ func TestDisabledSkipsTabOrder(t *testing.T) {
 		kit.Fill(gtx, th.Bg, func(gtx C) D {
 			return kit.Row(gtx,
 				kit.Rigid(func(gtx C) D {
-					return th.Disable(gtx, off, func(gtx C) D { return th.Button(gtx, &a, "a", "A", kit.Secondary) })
+					return th.Disable(gtx, off, func(gtx C) D { return ui.Button{ID: "a", Text: "A"}.Layout(gtx, th, &a) })
 				}),
-				kit.Rigid(func(gtx C) D { return th.Button(gtx, &b, "b", "B", kit.Secondary) }),
+				kit.Rigid(func(gtx C) D { return ui.Button{ID: "b", Text: "B"}.Layout(gtx, th, &b) }),
 			)
 		})
 	})

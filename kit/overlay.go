@@ -2,8 +2,6 @@ package kit
 
 import (
 	"image"
-	"strconv"
-	"time"
 
 	"gioui.org/gesture"
 	"gioui.org/io/event"
@@ -53,6 +51,19 @@ type Popup struct {
 
 // Opened reports whether the panel is open.
 func (p *Popup) Opened() bool { return p.open }
+
+// Opening reports that the popup opened since its last layout, which moves
+// focus into it: a component picks what to focus (a calendar's day), or
+// keeps a just-opened list from closing.
+func (p *Popup) Opening() bool { return p.focusNext }
+
+// FocusOnOpen makes the popup focus f when it opens, instead of its panel
+// (a menu focuses its item group). Set it before laying out the Popover.
+func (p *Popup) FocusOnOpen(f *Focus) { p.focusTo = f }
+
+// PanelFocus is the panel's own focus, for reading keys (Tab) while the
+// panel holds it.
+func (p *Popup) PanelFocus() *Focus { return &p.focus }
 
 // Show opens the panel below its anchor.
 func (p *Popup) Show() {
@@ -144,15 +155,16 @@ func (t *Theme) Popover(gtx C, p *Popup, id string, anchor W, content W) D {
 		area.Pop()
 		if p.open {
 			t.float(gtx, p, id, dims.Size, func(gtx C) D {
-				return t.panel(gtx, content)
+				return t.FloatingPanel(gtx, content)
 			})
 		}
 		return dims
 	})
 }
 
-// panel is the floating surface: overlay fill, hairline border, soft shadow.
-func (t *Theme) panel(gtx C, content W) D {
+// FloatingPanel is the floating surface of menus, popovers, dialogs and
+// toasts: overlay fill, hairline border, a shadow scaled by Elevation.
+func (t *Theme) FloatingPanel(gtx C, content W) D {
 	m := op.Record(gtx.Ops)
 	dims := t.Styled(Surface{Bg: t.Overlay, Border: t.Border, Radius: t.RadiusLg()}).Layout(gtx, content)
 	call := m.Stop()
@@ -198,7 +210,7 @@ func (t *Theme) float(gtx C, p *Popup, id string, anchorSz image.Point, panel W)
 	// Measure the panel.
 	pgtx := gtx
 	pgtx.Constraints = layout.Constraints{Max: image.Pt(
-		max(0, min(win.Dx()-2*margin, gtx.Dp(420))),
+		max(0, min(win.Dx()-2*margin, gtx.Dp(t.PopoverMaxWidth))),
 		max(0, max(ab.Min.Y-win.Min.Y, win.Max.Y-ab.Max.Y)-gap-margin),
 	)}
 	if p.MatchWidth {
@@ -329,7 +341,7 @@ func (t *Theme) Modal(gtx C, d *Dialog, id string, page W, dialog W) D {
 	// The card: centered, at most 480dp wide, sliding up a little as it fades in.
 	cgtx := gtx
 	cgtx.Constraints = layout.Constraints{Max: image.Pt(
-		min(gtx.Constraints.Max.X-2*gtx.Dp(24), gtx.Dp(480)),
+		min(gtx.Constraints.Max.X-2*gtx.Dp(24), gtx.Dp(t.DialogMaxWidth)),
 		gtx.Constraints.Max.Y-2*gtx.Dp(24))}
 	cgtx.Constraints.Min.X = cgtx.Constraints.Max.X
 	cm := op.Record(gtx.Ops)
@@ -341,8 +353,8 @@ func (t *Theme) Modal(gtx C, d *Dialog, id string, page W, dialog W) D {
 		if !d.Persistent {
 			OnAction(gtx, ActCancel, func() { d.open, d.dismissed = false, true })
 		}
-		return t.panel(gtx, func(gtx C) D {
-			return layout.UniformInset(t.Space(20)).Layout(gtx, dialog)
+		return t.FloatingPanel(gtx, func(gtx C) D {
+			return layout.UniformInset(t.Space(Space5)).Layout(gtx, dialog)
 		})
 	})
 	call := cm.Stop()
@@ -360,137 +372,4 @@ func (t *Theme) Modal(gtx C, d *Dialog, id string, page W, dialog W) D {
 	o.Pop()
 	op.Defer(gtx.Ops, m.Stop())
 	return dims
-}
-
-// DialogContent is the standard dialog body: a title, a body, and buttons
-// right-aligned at the bottom (pass the primary action last).
-func (t *Theme) DialogContent(gtx C, title string, body W, actions ...W) D {
-	var acts []layout.FlexChild
-	acts = append(acts, Flexed(1, Grow))
-	for i, a := range actions {
-		if i > 0 {
-			acts = append(acts, Rigid(Gap(t.Space(8), 0)))
-		}
-		acts = append(acts, Rigid(a))
-	}
-	return Col(gtx,
-		Rigid(func(gtx C) D { return t.Text(gtx, title, t.Type.Text*1.15, t.Fg, SemiBold) }),
-		Rigid(Gap(0, t.Space(10))),
-		Rigid(body),
-		Rigid(Gap(0, t.Space(20))),
-		Rigid(func(gtx C) D { return Row(gtx, acts...) }),
-	)
-}
-
-// ToastDuration is how long a toast stays before it dismisses itself.
-const ToastDuration = 5 * time.Second
-
-// Toasts is a stack of transient notifications (th.ToastHost). Push from
-// your handle pass or a Spawn callback; the UI goroutine owns it.
-type Toasts struct {
-	items []*toast
-	seq   int
-	close Pool[Clickable]
-}
-
-type toast struct {
-	id          string
-	status      Status
-	title, body string
-	at          time.Time // first shown (stamped at layout, on the frame clock)
-	fade        Tween
-}
-
-// Push adds a toast; it shows on the next frame. Its close button's id is
-// "toast:<n>/close", n counting from 1.
-func (ts *Toasts) Push(s Status, title, body string) {
-	ts.seq++
-	ts.items = append(ts.items, &toast{id: "toast:" + strconv.Itoa(ts.seq), status: s, title: title, body: body})
-}
-
-// Len is the number of toasts showing.
-func (ts *Toasts) Len() int { return len(ts.items) }
-
-// ToastHost lays out w with the toasts stacked above it, bottom right, the
-// newest at the bottom. Each one closes itself after ToastDuration, or with
-// its close button. Wrap your whole window with it.
-func (t *Theme) ToastHost(gtx C, ts *Toasts, w W) D {
-	// Expire and close first (rule 1).
-	kept := ts.items[:0]
-	for _, it := range ts.items {
-		if it.at.IsZero() {
-			it.at = gtx.Now
-			it.fade.To(gtx, 0, 0) // start transparent; fades in below
-		}
-		if ts.close.Get(it.id).Clicked(gtx) || gtx.Now.Sub(it.at) >= ToastDuration {
-			ts.close.Delete(it.id)
-			continue
-		}
-		gtx.Execute(op.InvalidateCmd{At: it.at.Add(ToastDuration)})
-		kept = append(kept, it)
-	}
-	if len(kept) != len(ts.items) {
-		Notify(gtx)
-	}
-	clear(ts.items[len(kept):])
-	ts.items = kept
-	dims := w(gtx)
-	if len(ts.items) == 0 {
-		return dims
-	}
-	m := op.Record(gtx.Ops)
-	margin := gtx.Dp(16)
-	width := min(gtx.Dp(340), gtx.Constraints.Max.X-2*margin)
-	y := gtx.Constraints.Max.Y - margin
-	for i := len(ts.items) - 1; i >= 0; i-- {
-		it := ts.items[i]
-		a := it.fade.To(gtx, 1, t.Dur(DurNormal))
-		cgtx := gtx
-		cgtx.Constraints = layout.Exact(image.Pt(width, 0))
-		cgtx.Constraints.Max.Y = gtx.Constraints.Max.Y
-		rec := op.Record(gtx.Ops)
-		cd := t.toastCard(cgtx, ts, it)
-		call := rec.Stop()
-		y -= cd.Size.Y
-		o := paint.PushOpacity(gtx.Ops, a)
-		off := op.Offset(image.Pt(gtx.Constraints.Max.X-margin-width+int(float32(gtx.Dp(24))*(1-a)), y)).Push(gtx.Ops)
-		call.Add(gtx.Ops)
-		off.Pop()
-		o.Pop()
-		y -= gtx.Dp(8)
-	}
-	op.Defer(gtx.Ops, m.Stop())
-	return dims
-}
-
-func (t *Theme) toastCard(gtx C, ts *Toasts, it *toast) D {
-	fg, _, icon := t.statusColors(it.status)
-	return t.panel(gtx, func(gtx C) D {
-		gtx.Constraints.Min.X = gtx.Constraints.Max.X
-		m := op.Record(gtx.Ops)
-		dims := layout.Inset{Top: t.Space(10), Bottom: t.Space(10), Left: t.Space(12), Right: t.Space(8)}.Layout(gtx, func(gtx C) D {
-			return layout.Flex{Alignment: layout.Start}.Layout(gtx,
-				Rigid(func(gtx C) D {
-					return layout.Inset{Top: 1, Right: 10}.Layout(gtx, func(gtx C) D { return icon(gtx, 16, fg) })
-				}),
-				Flexed(1, func(gtx C) D {
-					return Col(gtx,
-						Rigid(func(gtx C) D { return t.Text(gtx, it.title, t.Type.Body, t.Fg, SemiBold) }),
-						Rigid(func(gtx C) D {
-							if it.body == "" {
-								return D{}
-							}
-							return layout.Inset{Top: 2}.Layout(gtx, func(gtx C) D { return t.Paragraph(gtx, it.body, t.Muted) })
-						}),
-					)
-				}),
-				Rigid(func(gtx C) D { return t.IconButton(gtx, ts.close.Get(it.id), Part(it.id, "close"), IconX, true) }),
-			)
-		})
-		call := m.Stop()
-		defer clip.Rect(image.Rectangle{Max: dims.Size}).Push(gtx.Ops).Pop()
-		Tag(gtx, it.id)
-		call.Add(gtx.Ops)
-		return dims
-	})
 }

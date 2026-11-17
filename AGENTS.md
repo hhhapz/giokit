@@ -9,8 +9,10 @@ Put detail in `docs/`, and add a pitfall here only as a one-line rule.
 
 ## Map
 
-- **`kit/`:** theme tokens, layout primitives, components, icons, app runner,
-  `Spawn`/`Notify`.
+- **`kit/`:** primitives only: theme tokens, layout, drawing, text, focus and
+  key dispatch, scrolling, layer hosts (Popover, Modal, Layer), app runner.
+- **`kit/ui/`:** every component, as a props struct built only from kit's
+  exported API. **`kit/x/`:** specialised widgets (LogView, Lyrics).
 - **`kittest/`:** headless harness (input, queries, strict stale check, audit,
   sheets, goldens). Its `kittest_test.go` recreates each historical bug and proves
   the harness catches it. Keep that list growing.
@@ -20,7 +22,9 @@ Put detail in `docs/`, and add a pitfall here only as a one-line rule.
 - **`third_party/gioui.org/`:** patched Gio v0.10.3 (`docs/gio-patches.md`).
   Re-apply the patch when bumping Gio.
 - **`skills/giokit/SKILL.md`:** portable skill for projects that use giokit.
-- **`internal/bench`:** rendering baselines (editor/terminal text).
+- **`internal/bench`:** rendering baselines (editor/terminal text, video).
+- **`media/`:** separate module (cgo, FFmpeg): video decoder for `paint.Stream`/
+  `ui.Video`, VA-API with zero-copy DMA-BUF import. `docs/design/video.md`.
 - **`docs/`:** `pitfalls.md` (full postmortems), `testing.md`, `components.md`,
   `philosophy.md` (GPUI mapping), `roadmap.md`, `gio-patches.md`.
 - **`docs/design/`:** accepted or proposed designs. `phase1.md` (ids, focus and
@@ -45,17 +49,21 @@ touching `kit/`. In short:
 - Notify after a mid-frame mutation.
 - The UI goroutine owns state.
 - Ids on everything interactive.
-- Use Box/Fixed for fixed sizes.
+- Use Box/Fixed for fixed sizes; spacing from the `kit.SpaceN` scale.
 - Use vector icons.
 - Use bundled fonts only.
 
 Contributing:
-- **Components are `*Theme` methods.** They take an `id` plus `*Clickable`/`*Hover`
-  state, and get their color only from palette tokens. They take hover state from
-  the callback's `State`.
+- **Components go in `kit/ui`** as props structs
+  (`ui.X{ID, ...}.Layout(gtx, th, &state)`, events from `state.Update(gtx)`),
+  built only from kit's exported API (`th.Press`, `th.Field`, `th.MenuRow`,
+  `kit.Layer`, ...). If a component needs something private, export a
+  primitive instead. Colours come only from palette tokens; hover from the
+  callback's `State`; text from `th.Strings`; sizes from `th.Metrics`.
 - **Every component change ships with a gallery test and a conformance row**
-  (`kit/conform_test.go`, suite in `kittest/conform`): role, label, hover,
-  click, Tab, Enter/Space, ring, disabled, every preset, scale and density.
+  (`kit/ui/conform_test.go`, suite in `kittest/conform`): role, label, hover,
+  click, Tab, Enter/Space, ring, disabled, every preset, scale and density;
+  layer-opening controls use `conform.Composite`.
 - **`internal/lint` ratchets:** geometry literals and English strings per file
   may only go down (`LINT_BASELINE=1` prints counts); colours and
   `clip.Stroke` are forbidden outside token files.

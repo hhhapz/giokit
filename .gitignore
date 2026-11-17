@@ -6,3 +6,9 @@
 *.prof
 /gallery
 /scrolltest
+
+# Personal planning notes: never committed.
+/audit/
+/docs/roadmap.md
+/docs/design/
+CLAUDE.md

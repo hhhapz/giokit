@@ -9,13 +9,14 @@ import (
 
 	"github.com/hhhapz/giokit/kit"
 	"github.com/hhhapz/giokit/kit/ui"
+	"github.com/hhhapz/giokit/kit/x/video"
 )
 
 // mediaState is the Video demo: a moving test pattern pushed through a
 // paint.Stream, the way a decoder would push frames.
 type mediaState struct {
 	vstream  *paint.Stream
-	video    ui.VideoState
+	video    video.VideoState
 	fit      int
 	fitTabs  ui.TabsState
 	play     kit.Clickable
@@ -103,7 +104,7 @@ func (g *gallery) demoVideo(gtx C) D {
 			gtx.Constraints.Max.Y = gtx.Dp(220)
 			gtx.Constraints.Min = gtx.Constraints.Max
 			return kit.Fill(gtx, th.Surface, func(gtx C) D {
-				return ui.Video{ID: "video-screen", Stream: g.vstream, Fit: ui.Fit(g.fit), Label: "Test pattern"}.Layout(gtx, th, &g.video)
+				return video.Video{ID: "video-screen", Stream: g.vstream, Fit: video.Fit(g.fit), Label: "Test pattern"}.Layout(gtx, th, &g.video)
 			})
 		}),
 	)

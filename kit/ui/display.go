@@ -9,7 +9,6 @@ import (
 	"gioui.org/io/event"
 	"gioui.org/io/key"
 	"gioui.org/io/pointer"
-	"gioui.org/io/semantic"
 	"gioui.org/layout"
 	"gioui.org/op"
 	"gioui.org/op/clip"
@@ -112,8 +111,7 @@ func (a Artwork) Layout(gtx C, th *kit.Theme, im *kit.Image) D {
 	gtx.Constraints = layout.Exact(image.Pt(px, px))
 	r := gtx.Dp(th.Radius)
 	defer clip.UniformRRect(image.Rectangle{Max: gtx.Constraints.Max}, r).Push(gtx.Ops).Pop()
-	kit.TagLabel(gtx, a.ID, a.Label)
-	semantic.Image.Add(gtx.Ops)
+	kit.TagImage(gtx, a.ID, a.Label)
 	if src, ok := im.Op(); ok {
 		return widget.Image{Src: src, Fit: widget.Cover, Position: layout.Center}.Layout(gtx)
 	}
@@ -268,6 +266,8 @@ func (sp Split) Layout(gtx C, th *kit.Theme, s *SplitState) D {
 	s.hover.Add(gtx.Ops)
 	event.Op(gtx.Ops, s)
 	kit.Tag(gtx, sp.ID) // the drag listens for presses, so this area keeps its semantics
+	kit.FocusID(gtx, s, sp.ID)
+	kit.SetRole(gtx, sp.ID, kit.RoleSeparator)
 	area.Pop()
 	return D{Size: gtx.Constraints.Max}
 }

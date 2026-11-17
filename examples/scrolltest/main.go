@@ -34,6 +34,7 @@ import (
 	"gioui.org/unit"
 
 	"github.com/hhhapz/giokit/kit"
+	_ "github.com/hhhapz/giokit/kit/forktrace" // Gio window events in GIOKIT_TRACE
 	"github.com/hhhapz/giokit/kit/ui"
 )
 

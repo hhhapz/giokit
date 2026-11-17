@@ -49,9 +49,10 @@ Docs: `$(go list -m -f '{{.Dir}}' github.com/hhhapz/giokit)/docs/`. Read only wh
 16. **Floating things are kit overlays** (`Popover`, `Menu`, `Select`,
     `ContextArea`, `Modal`, `ToastHost`), never a hand-rolled `op.Defer`:
     they place against window edges, trap focus, and close on Escape.
-17. **Consumers need the Gio patch:**
-    `replace gioui.org => <giokit>/third_party/gioui.org`. It also makes plain
-    `go build` work on Linux (OpenGL; Vulkan is opt-in via `-tags vulkan`).
+17. **giokit builds on stock Gio** (Linux: `-tags novulkan` or the Vulkan
+    headers). The fork (`replace gioui.org => <giokit>/third_party/gioui.org`)
+    is optional (Wayland cursor and wheel fixes; Vulkan opt-in) and required
+    only by `kit/x/video` and `kit/forktrace`.
 18. **Custom buttons must be Tab reachable:** give icon-only controls a human label with `TagLabel` or `ui.IconButton{Label: ...}`, then check `h.TabUnreachable()`.
 19. **Alternative text is not painted text:** tag artwork with `semantic.Image`; keep its label for accessibility without applying text contrast checks to pixels.
 20. **Spacing comes from the scale:** `kit.Space2` (8dp), `kit.Space3` (12dp)…
@@ -62,8 +63,16 @@ Docs: `$(go list -m -f '{{.Dir}}' github.com/hhhapz/giokit)/docs/`. Read only wh
     events with `v.x.Update(gtx)` in the handle pass. Props are the value
     (controlled); the state struct holds interaction state only.
 22. **Changing images (video, camera, remote screens) use `paint.Stream` +
-    `ui.Video`,** never `paint.NewImageOp` per frame (a new texture and
+    `video.Video`,** never `paint.NewImageOp` per frame (a new texture and
     mipmaps every frame). Submit from any goroutine; `OnFrame` → `app.Invalidate`.
+23. **Call every conditional component's `Update` every frame,** even while
+    it is hidden, after the input that decides whether it shows: otherwise,
+    on the frame it appears, its handler asked for no events and Gio hides
+    its semantics, so it shows up a frame late (strict mode: stale frame).
+24. **A state's `Update` runs outside `th.Disable`:** remember at layout
+    whether it was disabled (`!gtx.Enabled()`), register no handlers then,
+    and ignore input in `Update`, or a disabled control still reacts
+    (`kit.Clickable` does this; a custom state must too).
 
 ## Verify every UI change headlessly (no window needed)
 

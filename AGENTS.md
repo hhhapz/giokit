@@ -16,20 +16,20 @@ Put detail in `docs/`, and add a pitfall here only as a one-line rule.
 - **`kittest/`:** headless harness (input, queries, strict stale check, audit,
   sheets, goldens). Its `kittest_test.go` recreates each historical bug and proves
   the harness catches it. Keep that list growing.
+- **`examples/hello/`:** the README's minimal app and its test (keep them in sync).
 - **`examples/gallery/`:** every component, plus its tests. `nav.go` groups
   demos into pages and pages into sidebar categories; "All components" shows
   every demo on one page. New components land as a demo with a test.
-- **`third_party/gioui.org/`:** patched Gio v0.10.3 (`docs/gio-patches.md`).
-  Re-apply the patch when bumping Gio.
+- **`third_party/gioui.org/`:** patched Gio v0.10.3 (`docs/gio-patches.md`),
+  used by this repo's builds. kit, kit/ui, kit/x and kittest must also pass on
+  stock Gio (`scripts/stock-gio.sh`): never use a fork-only API outside
+  `kit/x/video` and `kit/forktrace`.
 - **`skills/giokit/SKILL.md`:** portable skill for projects that use giokit.
 - **`internal/bench`:** rendering baselines (editor/terminal text, video).
 - **`media/`:** separate module (cgo, FFmpeg): video decoder for `paint.Stream`/
-  `ui.Video`, VA-API with zero-copy DMA-BUF import. `docs/design/video.md`.
-- **`docs/`:** `pitfalls.md` (full postmortems), `testing.md`, `components.md`,
-  `philosophy.md` (GPUI mapping), `roadmap.md`, `gio-patches.md`.
-- **`docs/design/`:** accepted or proposed designs. `phase1.md` (ids, focus and
-  dispatch, primitives, props) governs new component work.
-- **`audit/`:** the 2026-11-16 architecture audit and its progress (`09-plan.md`).
+  `video.Video`, VA-API with zero-copy DMA-BUF import.
+- **`docs/`:** `pitfalls.md` (full postmortems), `testing.md`, `components.md`, `performance.md`,
+  `philosophy.md` (GPUI mapping), `gio-patches.md`.
 
 ## Commands
 
@@ -77,9 +77,3 @@ Contributing:
   output scaling. Say so and ask the user to check them.
 - **API style:** small and explicit. No reflection, no global state beyond the
   theme you pass around. Prefer adding a token over hard-coding a color.
-
-## Roadmap
-
-`docs/roadmap.md`: v0.2 and most M1/M3 work shipped; M2 actions/palette and
-M4 list/tree/table subsets are live. Next: router, typeahead, column resize,
-and deeper form helpers. Fork-dependent work is in its Backlog.

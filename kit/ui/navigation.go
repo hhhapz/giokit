@@ -98,6 +98,7 @@ func (tb Tabs) Layout(gtx C, th *kit.Theme, s *TabsState) D {
 		return s.group.Layout(gtx, tb.ID, func(gtx C) D {
 			// The group's own area takes no pointer gestures, so Gio would drop
 			// a tag on it: name it on a nested area.
+			kit.SetRole(gtx, tb.ID, kit.RoleTabList)
 			return kit.TagArea(gtx, tb.ID, func(gtx C) D { return tb.draw(gtx, th, s) })
 		})
 	})
@@ -122,6 +123,7 @@ func (tb Tabs) draw(gtx C, th *kit.Theme, s *TabsState) D {
 			semantic.Button.Add(gtx.Ops)
 			semantic.LabelOp(l).Add(gtx.Ops)
 			semantic.SelectedOp(i == tb.Selected).Add(gtx.Ops)
+			kit.SetRole(gtx, kit.Part(tb.ID, l), kit.RoleTab)
 			fg := kit.LerpColor(th.Muted, th.Fg, st.Hover)
 			if i == tb.Selected {
 				fg = th.Fg
@@ -194,6 +196,7 @@ func (dc Disclosure) Layout(gtx C, th *kit.Theme, c *kit.Clickable) D {
 			return th.Press(gtx, c, dc.ID, func(gtx C, st kit.State) D {
 				semantic.Button.Add(gtx.Ops)
 				semantic.LabelOp(dc.Title).Add(gtx.Ops)
+				kit.SetRole(gtx, dc.ID, kit.RoleButton)
 				semantic.SelectedOp(dc.Open).Add(gtx.Ops)
 				s := th.Styled(kit.Surface{Bg: kit.WithAlpha(th.Hover, uint8(255*st.Hover)), Radius: th.Radius})
 				if st.Focused {
@@ -277,6 +280,7 @@ func (a Accordion) Layout(gtx C, th *kit.Theme, s *AccordionState) D {
 			return Disclosure{ID: kit.Part(a.ID, sec.ID), Title: sec.Title, Trailing: sec.Summary, Open: a.Open == sec.ID, Body: sec.Body}.Layout(gtx, th, s.headers.Get(sec.ID))
 		}))
 	}
+	kit.SetRole(gtx, a.ID, kit.RoleGroup)
 	return kit.Group(gtx, a.ID, th.Strings.Accordion, func(gtx C) D {
 		return kit.Flex{Axis: layout.Vertical, Gap: kit.Space1}.Layout(gtx, th, children...)
 	})
@@ -329,6 +333,7 @@ func (b Breadcrumbs) Layout(gtx C, th *kit.Theme) D {
 			)
 		})
 	}
+	kit.SetRole(gtx, b.ID, kit.RoleGroup)
 	return kit.Group(gtx, b.ID, th.Strings.Breadcrumbs, func(gtx C) D {
 		return kit.Flow(gtx, th.Space(kit.Space1p5), th.Space(kit.Space1), items...)
 	})
@@ -354,6 +359,7 @@ func (n NavItem) Layout(gtx C, th *kit.Theme, c *kit.Clickable) D {
 	return th.Press(gtx, c, n.ID, func(gtx C, st kit.State) D {
 		semantic.Button.Add(gtx.Ops)
 		semantic.LabelOp(n.Label).Add(gtx.Ops)
+		kit.SetRole(gtx, n.ID, kit.RoleLink)
 		semantic.SelectedOp(n.Active).Add(gtx.Ops)
 		bg, fg := kit.WithAlpha(th.Hover, uint8(255*st.Hover)), th.Muted
 		if n.Active {

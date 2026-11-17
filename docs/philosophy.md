@@ -1,12 +1,12 @@
-# Philosophy and roadmap
+# Philosophy
 
 giokit is **immediate mode, with GPUI's ownership and testing discipline**. GPUI
 itself is a hybrid: retained entities with observers and subscriptions, plus
 elements rebuilt every frame from them. giokit has only the second half. State
 lives in the app's own structs, owned by the UI goroutine, and the whole window
 is laid out every frame. From GPUI it takes the mechanisms that pay off without
-retained state: scoped identity and a key dispatch tree (designed in
-`design/phase1.md`). It does not take entities or observers for now.
+retained state: scoped identity and a key dispatch tree. It does not take
+entities or observers for now.
 
 ## GPUI ideas, mapped to giokit
 
@@ -34,14 +34,9 @@ retained state: scoped identity and a key dispatch tree (designed in
   range). Keys are first-come in the frame, so focused widgets read theirs
   during layout and the window keymap runs last.
 - **Keyboard parity:** anything clickable is reachable and operable by keyboard
-  (on the roadmap).
+  (enforced by the conformance suite).
 - **Test structurally, not visually:** prefer semantic and frame-stability checks
   that every app inherits. Keep goldens rare.
 - **Small, explicit API:** functions over frameworks. Add a token rather than
   hard-coding.
 - **Token-conscious docs:** the rules stay in SKILL.md; the detail lives here.
-
-## Roadmap
-
-See `roadmap.md`: findings (cgo per platform, screen readers, shaders), pillars,
-milestones and open decisions.

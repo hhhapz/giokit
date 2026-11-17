@@ -2,7 +2,7 @@ name: ci
 
 on:
   push:
-    branches: [main]
+    branches: [main, master]
   pull_request:
 
 jobs:
@@ -37,6 +37,28 @@ jobs:
           path: ${{ runner.temp }}/shots
           if-no-files-found: ignore
 
+  # kit, kit/ui, kit/x and kittest must build and pass on stock Gio: apps
+  # can depend on giokit without the fork (only kit/x/video and
+  # kit/forktrace need it).
+  stock-gio:
+    runs-on: ubuntu-24.04
+    env:
+      LIBGL_ALWAYS_SOFTWARE: "1"
+      KITTEST_REQUIRE_GPU: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Gio build deps and Mesa
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            gcc pkg-config libwayland-dev libx11-dev libx11-xcb-dev \
+            libxkbcommon-x11-dev libgles2-mesa-dev libegl1-mesa-dev \
+            libffi-dev libxcursor-dev libegl-mesa0 mesa-utils
+      - run: ./scripts/stock-gio.sh
+
   cross:
     runs-on: ubuntu-24.04
     strategy:
@@ -54,4 +76,4 @@ jobs:
           TARGET: ${{ matrix.target }}
         run: |
           export GOOS=${TARGET%/*} GOARCH=${TARGET#*/}
-          go build ./kit/... ./kittest/... ./examples/...
+          go build ./kit/... ./kittest/... ./desktop/ ./examples/...

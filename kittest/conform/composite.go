@@ -44,12 +44,20 @@ func (c Composite) size() image.Point {
 }
 
 func (c Composite) harness(t *testing.T, th *kit.Theme, scale float32) (*kittest.Harness, *int) {
+	return c.harnessMin(t, th, scale, false)
+}
+
+// harnessMin is harness; with stretch the control gets the window's whole
+// size as its minimum, as an app's root does.
+func (c Composite) harnessMin(t *testing.T, th *kit.Theme, scale float32, stretch bool) (*kittest.Harness, *int) {
 	t.Helper()
 	frame, n := c.Build(th)
 	h := kittest.NewTAt(t, c.size().X, c.size().Y, scale, func(gtx layout.Context) {
 		paint.Fill(gtx.Ops, th.Bg)
 		layout.UniformInset(24).Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-			gtx.Constraints.Min = image.Point{}
+			if !stretch {
+				gtx.Constraints.Min = image.Point{}
+			}
 			frame(gtx)
 			return layout.Dimensions{Size: gtx.Constraints.Max}
 		})
@@ -73,6 +81,20 @@ func (c Composite) run(t *testing.T) {
 		t.Run("preset/"+p.Name, func(t *testing.T) { open(t, p, 1) })
 	}
 	t.Run("scale/2", func(t *testing.T) { open(t, th, 2) })
+	// A minimum size from the caller (a window's) must not stretch the
+	// trigger and leave the layer no room for its items.
+	t.Run("stretched", func(t *testing.T) {
+		h, n := c.harnessMin(t, th, 1, true)
+		h.ClickID(c.Trigger)
+		if _, ok := h.Find(c.Panel); !ok {
+			t.Fatalf("click did not open %q", c.Panel)
+		}
+		*n = 0
+		h.ClickID(c.Item) // fails if the item is laid out out of view
+		if *n != 1 {
+			t.Errorf("clicking %q under a minimum size picked %d times, want 1", c.Item, *n)
+		}
+	})
 	for _, s := range styles() {
 		t.Run("style/"+s.Name, func(t *testing.T) { open(t, s, 1) })
 	}

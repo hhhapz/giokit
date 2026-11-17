@@ -6,9 +6,11 @@ import (
 	"os"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"gioui.org/app"
+	"gioui.org/io/system"
 	"gioui.org/op"
 	"gioui.org/unit"
 )
@@ -19,11 +21,25 @@ type App struct {
 	ID, Title     string // ID: Wayland app_id / X11 class; match StartupWMClass in .desktop
 	Width, Height unit.Dp
 	win           *app.Window
+	// OnPanic, if set, receives a panic from a Post callback (Spawn's done
+	// included) instead of letting it crash the program; the other queued
+	// callbacks still run. Log it and keep going, or show an error.
+	OnPanic func(recovered any)
+	// OnClose, if set, runs once the window has closed (by the user or Quit),
+	// just before the process exits: save state, close databases. Deferred
+	// calls in main never run, since Gio's app.Main does not return on every
+	// platform. err is the window's error, if it failed.
+	OnClose func(err error)
 
-	mu      sync.Mutex
-	posts   []func()
-	running []func()
+	mu       sync.Mutex
+	posts    []func()
+	running  []func()
+	inflight atomic.Int64 // Spawn work not yet posted back
 }
+
+// Pending reports Spawn work still running (not yet posted back to the UI
+// goroutine). Harnesses wait for it to reach 0.
+func (a *App) Pending() int { return int(a.inflight.Load()) }
 
 func NewApp(id, title string, w, h unit.Dp) *App {
 	return &App{ID: id, Title: title, Width: w, Height: h, win: new(app.Window)}
@@ -40,6 +56,10 @@ func (a *App) Post(f func()) {
 	a.win.Invalidate()
 }
 
+// Quit closes the window; OnClose runs, then the process exits. Safe from
+// any goroutine.
+func (a *App) Quit() { a.win.Perform(system.ActionClose) }
+
 // Invalidate requests a frame. Safe from any goroutine: wire a
 // paint.Stream's OnFrame to it so new video frames get drawn.
 func (a *App) Invalidate() { a.win.Invalidate() }
@@ -50,22 +70,77 @@ func (a *App) Drain() {
 	a.posts, a.running = a.running[:0], a.posts
 	a.mu.Unlock()
 	for i, f := range a.running {
-		f()
+		a.call(f)
 		a.running[i] = nil
 	}
 }
 
-// Spawn runs work off the UI goroutine and delivers its result to done on the
-// UI goroutine (GPUI: cx.spawn). With a nil App (tests), work runs inline.
-func Spawn[T any](a *App, work func(context.Context) (T, error), done func(T, error)) {
-	if a == nil {
-		done(work(context.Background()))
+// call runs f, handing a panic to OnPanic when one is set.
+func (a *App) call(f func()) {
+	if a.OnPanic != nil {
+		defer func() {
+			if r := recover(); r != nil {
+				a.OnPanic(r)
+			}
+		}()
+	}
+	f()
+}
+
+// Task is a running Spawn. Cancel it when its result is no longer wanted:
+// a view closed, or a newer query replaced it (type-ahead):
+//
+//	v.search.Cancel()
+//	v.search = kit.Spawn(app, func(ctx context.Context) ([]Hit, error) { return find(ctx, q) },
+//		func(hits []Hit, err error) { v.hits = hits })
+//
+// The UI goroutine owns a Task, like all state.
+type Task struct {
+	cancel    context.CancelFunc
+	cancelled bool
+	finished  bool
+}
+
+// Cancel cancels the work's context and drops its result: done never runs
+// after Cancel. Safe on a nil or finished Task.
+func (t *Task) Cancel() {
+	if t == nil || t.finished {
 		return
 	}
+	t.cancelled = true
+	t.cancel()
+}
+
+// Running reports whether the work has neither finished nor been cancelled.
+func (t *Task) Running() bool { return t != nil && !t.finished && !t.cancelled }
+
+// Spawn runs work off the UI goroutine and delivers its result to done on the
+// UI goroutine (GPUI: cx.spawn), unless the returned Task was cancelled
+// first. With a nil App (tests), work runs inline and the Task is finished.
+func Spawn[T any](a *App, work func(context.Context) (T, error), done func(T, error)) *Task {
+	ctx, cancel := context.WithCancel(context.Background())
+	t := &Task{cancel: cancel}
+	if a == nil {
+		v, err := work(ctx)
+		t.finished = true
+		cancel()
+		done(v, err)
+		return t
+	}
+	a.inflight.Add(1)
 	go func() {
-		v, err := work(context.Background())
-		a.Post(func() { done(v, err) })
+		v, err := work(ctx)
+		defer a.inflight.Add(-1) // after the Post, so Pending 0 means "drained next"
+		a.Post(func() {
+			if t.cancelled {
+				return
+			}
+			t.finished = true
+			cancel()
+			done(v, err)
+		})
 	}()
+	return t
 }
 
 // Run opens the window and calls frame for every frame. It does not return.
@@ -79,7 +154,6 @@ func (a *App) Run(frame func(gtx C)) {
 	trace := traceEnabled
 	var tr tracer
 	if trace {
-		app.GiokitTrace = tracef
 		go func() { // lines between frames (input, idle) still reach the log
 			for range time.Tick(250 * time.Millisecond) {
 				traceFlush()
@@ -94,6 +168,9 @@ func (a *App) Run(frame func(gtx C)) {
 			switch e := a.win.Event().(type) {
 			case app.DestroyEvent:
 				traceFlush()
+				if a.OnClose != nil {
+					a.OnClose(e.Err)
+				}
 				if e.Err != nil {
 					fmt.Fprintln(os.Stderr, e.Err)
 					os.Exit(1)

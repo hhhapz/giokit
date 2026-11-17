@@ -1,11 +1,13 @@
-package ui
+// Package video draws streaming images (video, camera, remote screens) with
+// Video. It needs giokit's Gio fork (third_party/gioui.org) for paint.Stream
+// until that lands upstream; kit and kit/ui build on stock Gio without it.
+package video
 
 import (
 	"image"
 	"math"
 
 	"gioui.org/f32"
-	"gioui.org/io/semantic"
 	"gioui.org/op"
 	"gioui.org/op/clip"
 	"gioui.org/op/paint"
@@ -28,7 +30,7 @@ const (
 // input. Wrap it to add some, and use the state's mapping to convert
 // between window and frame coordinates.
 //
-//	ui.Video{ID: "screen", Stream: s, Label: "Tablet screen"}.Layout(gtx, th, &v.screen)
+//	video.Video{ID: "screen", Stream: s, Label: "Tablet screen"}.Layout(gtx, th, &v.screen)
 //
 // Before the first frame it draws nothing. To redraw on new frames, set
 // the stream's OnFrame to invalidate the window (kit.App.Invalidate).
@@ -55,8 +57,7 @@ func (v Video) Layout(gtx C, th *kit.Theme, st *VideoState) D {
 	if label == "" {
 		label = th.Strings.Video
 	}
-	kit.TagLabel(gtx, v.ID, label)
-	semantic.Image.Add(gtx.Ops)
+	kit.TagImage(gtx, v.ID, label)
 	if v.Stream == nil {
 		st.frame, st.dst = image.Point{}, rectF{}
 		return D{Size: size}
@@ -142,3 +143,8 @@ type rectF struct{ Min, Max f32.Point }
 func (r rectF) Dx() float32 { return r.Max.X - r.Min.X }
 func (r rectF) Dy() float32 { return r.Max.Y - r.Min.Y }
 func (r rectF) Empty() bool { return r.Dx() <= 0 || r.Dy() <= 0 }
+
+type (
+	C = kit.C
+	D = kit.D
+)

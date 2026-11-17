@@ -71,3 +71,42 @@ func TestControlSizeOrders(t *testing.T) {
 }
 
 func abs(v int) int { return max(v, -v) }
+
+// A per-instance Size lines controls up like the theme's Controls does: a
+// small button beside a small field, select and date field share a height.
+func TestInstanceSizesLineUp(t *testing.T) {
+	th := kit.Dark()
+	for _, size := range []kit.ControlSize{kit.ControlSmall, kit.ControlMedium, kit.ControlLarge} {
+		t.Run(fmt.Sprint(size), func(t *testing.T) {
+			var b kit.Clickable
+			var e widget.Editor
+			var s ui.SelectState
+			var d ui.DateFieldState
+			h := kittest.NewT(t, 800, 120, func(gtx kit.C) {
+				b.Clicked(gtx)
+				s.Update(gtx)
+				d.Update(gtx)
+				gtx.Constraints.Min = image.Point{}
+				kit.Row(gtx,
+					kit.Rigid(func(gtx kit.C) kit.D { return ui.Button{ID: "b", Text: "Save", Size: size}.Layout(gtx, th, &b) }),
+					kit.Rigid(kit.Fixed(160, func(gtx kit.C) kit.D {
+						return ui.TextField{ID: "f", Placeholder: "Name", Size: size}.Layout(gtx, th, &e)
+					})),
+					kit.Rigid(kit.Fixed(160, func(gtx kit.C) kit.D {
+						return ui.Select{ID: "s", Options: []string{"One"}, Size: size}.Layout(gtx, th, &s)
+					})),
+					kit.Rigid(kit.Fixed(200, func(gtx kit.C) kit.D {
+						return ui.DateField{ID: "d", Placeholder: "Date", Size: size}.Layout(gtx, th, &d)
+					})),
+				)
+			})
+			h.Theme = th
+			bh := h.ExpectID("b").Dy()
+			for _, id := range []string{"f", "s/field", "d/field"} {
+				if got := h.ExpectID(id).Dy(); abs(got-bh) > 1 {
+					t.Errorf("%s is %dpx tall, the button %dpx", id, got, bh)
+				}
+			}
+		})
+	}
+}

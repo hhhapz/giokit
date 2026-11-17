@@ -41,6 +41,18 @@ var workspaceFolders = []ui.TreeNode{
 
 var workColumns = []kit.Column{{Title: "Item"}, {Title: "Status", Width: unit.Dp(110)}}
 
+// workCell draws the Status column as a badge (a custom cell renderer; the
+// cell text still sorts the column and names the row).
+func (g *gallery) workCell(th *kit.Theme) func(gtx C, r ui.DataRow, col int) D {
+	return func(gtx C, r ui.DataRow, col int) D {
+		if col != 1 {
+			return th.Text(gtx, r.Cells[col], th.Type.Body, th.Fg, kit.Regular)
+		}
+		st := map[string]kit.Status{"Active": kit.StatusGood, "Review": kit.StatusWarn}[r.Cells[1]]
+		return ui.Badge{Status: st, Text: r.Cells[1]}.Layout(gtx, th)
+	}
+}
+
 func (g *gallery) workChoices() []ui.Choice {
 	out := make([]ui.Choice, len(g.records))
 	for i, r := range g.records {
@@ -147,7 +159,7 @@ func (g *gallery) workspace(gtx C) D {
 									kit.Rigid(func(gtx C) D { return th.Caption(gtx, "Sortable table") }),
 									kit.Rigid(kit.Gap(0, 6)),
 									kit.Flexed(1, func(gtx C) D {
-										return ui.DataTable{ID: "worktable", Columns: workColumns, Rows: g.workRows(), Selected: g.workSel}.Layout(gtx, th, &g.workTable)
+										return ui.DataTable{ID: "worktable", Columns: workColumns, Rows: g.workRows(), Selected: g.workSel, Cell: g.workCell(th)}.Layout(gtx, th, &g.workTable)
 									}),
 								)
 							})

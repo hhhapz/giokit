@@ -36,6 +36,20 @@ var broken = map[string]struct {
 			st.Hover, st.Hovered = 0, false
 			fill(gtx, th.Surface, st)
 		})}},
+	// A transparent control whose hover fill is Panel: visible on the window,
+	// gone on a card.
+	"hover-equals-card": {"hover changes nothing on a card", Case{ID: "x", Role: semantic.Button,
+		Build: custom(func(th *kit.Theme, gtx kit.C, c *kit.Clickable, st kit.State) {
+			semantic.Button.Add(gtx.Ops)
+			semantic.LabelOp("X").Add(gtx.Ops)
+			defer clip.Rect{Max: image.Pt(80, 32)}.Push(gtx.Ops).Pop()
+			if st.Hovered {
+				paint.Fill(gtx.Ops, th.Panel)
+			}
+			if st.Focused {
+				kit.Border(gtx, image.Rectangle{Max: image.Pt(80, 32)}, 0, 2, th.Focus)
+			}
+		})}},
 	"no-ring": {"no visible ring", Case{ID: "x", Role: semantic.Button,
 		Build: custom(func(th *kit.Theme, gtx kit.C, c *kit.Clickable, st kit.State) {
 			semantic.Button.Add(gtx.Ops)
@@ -227,6 +241,61 @@ func TestCatchesBrokenComposites(t *testing.T) {
 			out, err := cmd.CombinedOutput()
 			if err == nil {
 				t.Fatalf("the suite passed a broken composite:\n%s", out)
+			}
+			if !strings.Contains(string(out), b.want) {
+				t.Fatalf("the suite failed, but not with %q:\n%s", b.want, out)
+			}
+		})
+	}
+}
+
+// A "list" of separate buttons: every row its own Tab stop, no arrow keys.
+var brokenGroup = map[string]struct {
+	want string
+	c    Group
+}{
+	"buttons-not-a-group": {"Down reported 0 picks", Group{First: "l/a", Second: "l/b",
+		Build: func(th *kit.Theme, disabled bool) (func(kit.C), *int) {
+			var a, b kit.Clickable
+			n := new(int)
+			return func(gtx kit.C) {
+				if a.Clicked(gtx) {
+					*n++
+				}
+				if b.Clicked(gtx) {
+					*n++
+				}
+				th.Disable(gtx, disabled, func(gtx kit.C) kit.D {
+					return kit.Col(gtx,
+						kit.Rigid(func(gtx kit.C) kit.D { return ui.Button{ID: "l/a", Text: "Alpha"}.Layout(gtx, th, &a) }),
+						kit.Rigid(func(gtx kit.C) kit.D { return ui.Button{ID: "l/b", Text: "Beta"}.Layout(gtx, th, &b) }),
+					)
+				})
+			}, n
+		}}},
+}
+
+func TestBrokenGroup(t *testing.T) {
+	name := os.Getenv("CONFORM_BROKEN_GROUP")
+	if name == "" {
+		t.Skip("run by TestCatchesBrokenGroups")
+	}
+	b := brokenGroup[name].c
+	b.Name = name
+	RunGroup(t, b)
+}
+
+func TestCatchesBrokenGroups(t *testing.T) {
+	if os.Getenv("CONFORM_BROKEN_GROUP") != "" {
+		t.Skip()
+	}
+	for name, b := range brokenGroup {
+		t.Run(name, func(t *testing.T) {
+			cmd := exec.Command(os.Args[0], "-test.run=^TestBrokenGroup$", "-test.v")
+			cmd.Env = append(os.Environ(), "CONFORM_BROKEN_GROUP="+name)
+			out, err := cmd.CombinedOutput()
+			if err == nil {
+				t.Fatalf("the suite passed a broken group:\n%s", out)
 			}
 			if !strings.Contains(string(out), b.want) {
 				t.Fatalf("the suite failed, but not with %q:\n%s", b.want, out)

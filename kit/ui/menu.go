@@ -80,11 +80,18 @@ type Menu struct {
 
 func (mn Menu) Layout(gtx C, th *kit.Theme, m *MenuState) D {
 	m.last = mn.Items
+	kit.SetRole(gtx, mn.ID, kit.RoleMenu)
 	m.opening()
 	if d, byKey := m.DidDismiss(); d {
 		m.returnFocus(gtx, byKey)
 	}
-	return th.Popover(gtx, &m.Popup, mn.ID, mn.Trigger, func(gtx C) D { return m.panel(gtx, th, mn.ID, mn.Items) })
+	trigger := func(gtx C) D {
+		// The trigger keeps its natural size: a caller's minimum (a window's)
+		// would stretch it and leave the menu no room.
+		gtx.Constraints.Min = image.Point{}
+		return mn.Trigger(gtx)
+	}
+	return th.Popover(gtx, &m.Popup, mn.ID, trigger, func(gtx C) D { return m.panel(gtx, th, mn.ID, mn.Items) })
 }
 
 // ContextMenu lays out Content; a right-click inside it opens the menu at
@@ -98,6 +105,7 @@ type ContextMenu struct {
 
 func (cm ContextMenu) Layout(gtx C, th *kit.Theme, m *MenuState) D {
 	m.last = cm.Items
+	kit.SetRole(gtx, cm.ID, kit.RoleMenu)
 	m.opening()
 	m.DidDismiss()
 	// Right presses anywhere inside the content bubble up to this area
@@ -242,8 +250,12 @@ func (m *MenuState) rows(gtx C, th *kit.Theme, id string, items []MenuItem) D {
 // ID/list (scrolls past Theme.ListMaxHeight).
 type Select struct {
 	ID       string
-	Options  []string
+	Options  []string // shown in the field, spoken, and drawn unless Option is set
 	Selected int
+	// Option, if set, draws option i's row content (an avatar beside a name);
+	// Options still name each option for screen readers.
+	Option func(gtx C, i int) D
+	Size   kit.ControlSize // ControlDefault is the theme's
 }
 
 // SelectState is a Select's interaction state.
@@ -290,10 +302,12 @@ func (sl Select) Layout(gtx C, th *kit.Theme, s *SelectState) D {
 		label = sl.Options[sl.Selected]
 	}
 	return th.Popover(gtx, &s.Popup, sl.ID, func(gtx C) D {
+		kit.SetRole(gtx, sl.ID, kit.RoleListbox)
 		return th.Press(gtx, &s.Trigger, kit.Part(sl.ID, "field"), func(gtx C, st kit.State) D {
 			semantic.Button.Add(gtx.Ops)
+			kit.SetRole(gtx, kit.Part(sl.ID, "field"), kit.RoleCombobox)
 			st.Focused = st.Focused || s.Opened()
-			return th.Field(gtx, st, func(gtx C) D {
+			return th.SizedField(gtx, sl.Size, st, func(gtx C) D {
 				return kit.Row(gtx,
 					kit.Flexed(1, func(gtx C) D { return th.Text(gtx, label, th.Type.Body, th.Fg, kit.Regular) }),
 					kit.Rigid(func(gtx C) D { return kit.IconChevronDown(gtx, th.IconSize, th.Muted) }),
@@ -318,11 +332,20 @@ func (sl Select) Layout(gtx C, th *kit.Theme, s *SelectState) D {
 	})
 }
 
+// row is option i's menu row, with the custom renderer if there is one.
+func (sl Select) row(i int, label string) kit.MenuRow {
+	r := kit.MenuRow{Label: label, Checked: i == sl.Selected, Role: kit.RoleOption}
+	if sl.Option != nil {
+		r.Content = func(gtx C) D { return sl.Option(gtx, i) }
+	}
+	return r
+}
+
 func (sl Select) options(gtx C, th *kit.Theme, s *SelectState) D {
 	pad := gtx.Dp(th.Space(kit.Space1))
 	w := 0
 	for i, o := range sl.Options {
-		w = max(w, th.MenuRowWidth(gtx, kit.MenuRow{Label: o, Checked: i == sl.Selected}))
+		w = max(w, th.MenuRowWidth(gtx, sl.row(i, o)))
 	}
 	w += 2*pad + gtx.Dp(th.HitSize) // the panel's inset, room for the scrollbar
 	gtx.Constraints.Max.X = min(gtx.Constraints.Max.X, max(gtx.Constraints.Min.X, w))
@@ -331,7 +354,7 @@ func (sl Select) options(gtx C, th *kit.Theme, s *SelectState) D {
 		gtx.Constraints.Max.Y = min(gtx.Constraints.Max.Y, gtx.Dp(th.ListMaxHeight))
 		return th.List(gtx, &s.list, kit.Part(sl.ID, "list"), len(sl.Options), func(gtx C, i int) D {
 			id := strconv.Itoa(i)
-			return th.MenuRow(gtx, s.items.Get(id), kit.Part(sl.ID, id), kit.MenuRow{Label: sl.Options[i], Checked: i == sl.Selected})
+			return th.MenuRow(gtx, s.items.Get(id), kit.Part(sl.ID, id), sl.row(i, sl.Options[i]))
 		})
 	})
 }
@@ -391,7 +414,7 @@ func (cp CommandPalette) Layout(gtx C, th *kit.Theme, p *CommandPaletteState) D 
 				for i, act := range p.matches {
 					rows = append(rows, kit.Rigid(func(gtx C) D {
 						gtx.Constraints.Min.X = gtx.Constraints.Max.X
-						return th.MenuRow(gtx, p.items.Get(act.ID), kit.Part(cp.ID, act.ID), kit.MenuRow{Label: act.Title, Highlighted: i == p.selected})
+						return th.MenuRow(gtx, p.items.Get(act.ID), kit.Part(cp.ID, act.ID), kit.MenuRow{Label: act.Title, Hint: act.Category, Highlighted: i == p.selected, Role: kit.RoleOption})
 					}))
 				}
 				if len(rows) == 0 {

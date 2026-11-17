@@ -22,6 +22,7 @@ type Combobox struct {
 	ID          string
 	Placeholder string
 	Options     []string
+	Size        kit.ControlSize // ControlDefault is the theme's
 }
 
 // ComboboxState is a Combobox's interaction state: its editor and list.
@@ -63,7 +64,10 @@ func (c Combobox) Layout(gtx C, th *kit.Theme, s *ComboboxState) D {
 		s.Hide() // tabbed away
 	}
 	return th.Popover(gtx, &s.Popup, kit.Part(c.ID, "list"), func(gtx C) D {
-		return th.EditorField(gtx, &s.Editor, c.ID, kit.EditorField{Placeholder: c.Placeholder})
+		d := th.EditorField(gtx, &s.Editor, c.ID, kit.EditorField{Placeholder: c.Placeholder, Size: c.Size})
+		kit.SetRole(gtx, c.ID, kit.RoleCombobox)
+		kit.SetRole(gtx, kit.Part(c.ID, "list"), kit.RoleListbox)
+		return d
 	}, func(gtx C) D {
 		w := 0 // the field's width, or the widest match if wider
 		for _, m := range s.matches {
@@ -76,7 +80,7 @@ func (c Combobox) Layout(gtx C, th *kit.Theme, s *ComboboxState) D {
 		for i, m := range s.matches {
 			rows = append(rows, kit.Rigid(func(gtx C) D {
 				id := strconv.Itoa(i)
-				return th.MenuRow(gtx, s.items.Get(id), kit.Part(c.ID, "opt", id), kit.MenuRow{Label: m, Highlighted: i == s.hi})
+				return th.MenuRow(gtx, s.items.Get(id), kit.Part(c.ID, "opt", id), kit.MenuRow{Label: m, Highlighted: i == s.hi, Role: kit.RoleOption})
 			}))
 		}
 		return kit.Flex{Axis: layout.Vertical, Pad: kit.Space1}.Layout(gtx, th, rows...)

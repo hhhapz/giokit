@@ -1,4 +1,4 @@
-package ui_test
+package video_test
 
 import (
 	"image"
@@ -9,7 +9,7 @@ import (
 	"gioui.org/op/paint"
 
 	"github.com/hhhapz/giokit/kit"
-	"github.com/hhhapz/giokit/kit/ui"
+	"github.com/hhhapz/giokit/kit/x/video"
 	"github.com/hhhapz/giokit/kittest"
 )
 
@@ -29,8 +29,8 @@ var (
 type videoView struct {
 	th     *kit.Theme
 	s      *paint.Stream
-	st     ui.VideoState
-	fit    ui.Fit
+	st     video.VideoState
+	fit    video.Fit
 	hidden bool
 }
 
@@ -40,7 +40,7 @@ func (v *videoView) Frame(gtx kit.C) {
 		if v.hidden {
 			return kit.D{Size: gtx.Constraints.Max}
 		}
-		return ui.Video{ID: "screen", Stream: v.s, Fit: v.fit, Label: "Test pattern"}.Layout(gtx, v.th, &v.st)
+		return video.Video{ID: "screen", Stream: v.s, Fit: v.fit, Label: "Test pattern"}.Layout(gtx, v.th, &v.st)
 	})
 }
 
@@ -115,18 +115,18 @@ func TestVideoMapping(t *testing.T) {
 	v.s.Submit(paint.StreamFrame{Image: solid(400, 200, red)})
 	W, H := float32(h.Size.X), float32(h.Size.Y)
 	for _, c := range []struct {
-		fit     ui.Fit
+		fit     video.Fit
 		content image.Rectangle // in units of the window size / 4
 	}{
-		{ui.FitContain, image.Rect(0, 1, 4, 3)}, // full width, half height, centered
-		{ui.FitCover, image.Rect(-2, 0, 6, 4)},  // full height, double width, centered
-		{ui.FitFill, image.Rect(0, 0, 4, 4)},    // the whole area
-		{ui.FitNone, image.Rect(-2, 0, 6, 4)},   // 400x200 at 1:1 in a 200x200 window, at scale 1
+		{video.FitContain, image.Rect(0, 1, 4, 3)}, // full width, half height, centered
+		{video.FitCover, image.Rect(-2, 0, 6, 4)},  // full height, double width, centered
+		{video.FitFill, image.Rect(0, 0, 4, 4)},    // the whole area
+		{video.FitNone, image.Rect(-2, 0, 6, 4)},   // 400x200 at 1:1 in a 200x200 window, at scale 1
 	} {
 		v.fit = c.fit
 		h.Settle()
 		got := v.st.Content()
-		if c.fit == ui.FitNone && h.Size.X != 200 {
+		if c.fit == video.FitNone && h.Size.X != 200 {
 			continue // 1:1 depends on the pixel scale
 		}
 		want := image.Rect(c.content.Min.X*h.Size.X/4, c.content.Min.Y*h.Size.Y/4, c.content.Max.X*h.Size.X/4, c.content.Max.Y*h.Size.Y/4)
@@ -142,7 +142,7 @@ func TestVideoMapping(t *testing.T) {
 			t.Errorf("fit %d: FromFrame = %v", c.fit, p)
 		}
 	}
-	v.fit = ui.FitContain
+	v.fit = video.FitContain
 	h.Settle()
 	if _, ok := v.st.ToFrame(f32.Pt(W/2, 2)); ok {
 		t.Error("a point in the letterbox bar maps into the frame")

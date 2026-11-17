@@ -1,6 +1,7 @@
 package kit
 
 import (
+	"context"
 	"errors"
 	"image"
 	"image/color"
@@ -20,6 +21,7 @@ func TestTokensRoundTrip(t *testing.T) {
 	styled := Dark().Derive(func(t *Theme) {
 		t.Name, t.Radius, t.Stroke, t.Ring, t.Elevation = "Styled", 999, 1.5, 3, 0
 		t.HeadingWeight, t.Controls, t.Fonts = SemiBold, ControlLarge, "Inter"
+		t.IconSize, t.ToastWidth = 16, 400
 	})
 	for _, th := range append(Presets(), styled) {
 		back, err := ThemeFromTokens(th.Tokens(), Dark())
@@ -29,7 +31,8 @@ func TestTokensRoundTrip(t *testing.T) {
 		if back.Palette != th.Palette || back.Name != th.Name || back.Dark != th.Dark ||
 			back.Type != th.Type || back.Radius != th.Radius || back.Density != th.Density ||
 			back.Stroke != th.Stroke || back.Ring != th.Ring || back.Elevation != th.Elevation ||
-			back.HeadingWeight != th.HeadingWeight || back.Controls != th.Controls || back.Fonts != th.Fonts {
+			back.HeadingWeight != th.HeadingWeight || back.Controls != th.Controls || back.Fonts != th.Fonts ||
+			back.Metrics != th.Metrics {
 			t.Errorf("%s: round trip changed the theme", th.Name)
 		}
 	}
@@ -339,6 +342,100 @@ func TestPartEscapes(t *testing.T) {
 	} {
 		if tc.got != tc.want {
 			t.Errorf("got %q, want %q", tc.got, tc.want)
+		}
+	}
+}
+
+// A cancelled task's work sees its context cancelled and its result never
+// reaches done; an uncancelled one delivers on the UI goroutine (Drain).
+func TestSpawnCancel(t *testing.T) {
+	a := NewApp("test", "test", 100, 100)
+	started, release := make(chan struct{}), make(chan struct{})
+	sawCancel := make(chan bool, 1)
+	delivered := false
+	task := Spawn(a, func(ctx context.Context) (int, error) {
+		close(started)
+		<-release
+		sawCancel <- ctx.Err() != nil
+		return 1, nil
+	}, func(int, error) { delivered = true })
+	<-started
+	if !task.Running() {
+		t.Fatal("task should be running")
+	}
+	task.Cancel()
+	close(release)
+	if !<-sawCancel {
+		t.Error("work did not see its context cancelled")
+	}
+	for range 50 {
+		a.Drain()
+		time.Sleep(time.Millisecond)
+	}
+	if delivered || task.Running() {
+		t.Errorf("cancelled task: delivered %v, running %v", delivered, task.Running())
+	}
+
+	got := 0
+	ok := Spawn(a, func(context.Context) (int, error) { return 7, nil }, func(v int, _ error) { got = v })
+	for i := 0; i < 500 && got == 0; i++ {
+		a.Drain()
+		time.Sleep(time.Millisecond)
+	}
+	if got != 7 || ok.Running() {
+		t.Errorf("task: got %d, running %v", got, ok.Running())
+	}
+	ok.Cancel() // after finishing: a no-op
+	var nilTask *Task
+	nilTask.Cancel()
+}
+
+// With OnPanic set, a panicking Post callback is reported and the queue
+// goes on.
+func TestOnPanicKeepsDraining(t *testing.T) {
+	a := NewApp("test", "test", 100, 100)
+	var got any
+	ran := false
+	a.OnPanic = func(r any) { got = r }
+	a.Post(func() { panic("boom") })
+	a.Post(func() { ran = true })
+	a.Drain()
+	if got != "boom" || !ran {
+		t.Fatalf("recovered %v, later callback ran %v", got, ran)
+	}
+}
+
+// The palette's ranking: title prefix, then a word start, then anywhere,
+// then category or id, then letters in order.
+func TestActionSearchRanks(t *testing.T) {
+	var a Actions
+	for _, act := range []Action{
+		{ID: "a", Title: "Open recent"},
+		{ID: "b", Title: "Reopen closed tab"},
+		{ID: "c", Title: "Go to page", Category: "Navigate"},
+		{ID: "d", Title: "Open file"},
+		{ID: "e", Title: "Toggle sidebar", Category: "View"},
+	} {
+		act.Run = func() {}
+		a.MustRegister(act)
+	}
+	ids := func(q string) string {
+		var s string
+		for _, r := range a.Search(q) {
+			s += r.ID
+		}
+		return s
+	}
+	for q, want := range map[string]string{
+		"open": "adb", // prefix (registration order), then contained
+		"page": "c",   // word start
+		"view": "e",   // category
+		"gtp":  "c",   // letters in order
+		"":     "abcde",
+		"zz":   "",
+	} {
+		if got := ids(q); got != want {
+			t.Errorf("Search(%q) = %q, want %q", q, got, want)
 		}
 	}
 }

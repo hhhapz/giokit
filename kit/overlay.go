@@ -17,10 +17,12 @@ import (
 // the dialog host; ToastHost the notification stack.
 //
 // A floating panel is drawn with op.Defer, so it lands above everything,
-// positioned against its anchor's window-space bounds from the last frame
-// (the patched Source.Bounds; anchors are a frame behind only while they
-// move). It opens below its anchor and flips above it, or shifts sideways,
-// to stay inside the window (kit.Root marks the window).
+// positioned against its anchor's window position. kit learns that from
+// pointer events: the window area (kit.Window) and the anchor see the same
+// hover event in their own coordinates, and the difference is the anchor's
+// offset (stock Gio has no way to ask). It opens below its anchor and flips
+// above it, or shifts sideways, to stay inside the window; an anchor the
+// pointer has never crossed (opened from the keyboard first) opens below.
 //
 // While a panel is open, a backdrop covers the window: a press outside the
 // panel closes it and goes nowhere else (as native menus do). The backdrop's
@@ -43,9 +45,11 @@ type Popup struct {
 	atPoint   bool
 	entering  bool // just opened: replay the fade-in
 	backdrop  gesture.Click
-	anchor    int    // tag: its address identifies the anchor area
-	focus     Focus  // the panel's focus
-	focusTo   *Focus // focused on open instead of the panel (a menu's group)
+	anchor    int         // tag: its address identifies the anchor area
+	origin    image.Point // the anchor's window position, from pointer events
+	located   bool        // origin is known
+	focus     Focus       // the panel's focus
+	focusTo   *Focus      // focused on open instead of the panel (a menu's group)
 	fade      Tween
 }
 
@@ -146,6 +150,9 @@ func (t *Theme) Popover(gtx C, p *Popup, id string, anchor W, content W) D {
 		if p.open {
 			OnAction(gtx, ActCancel, func() { p.close(gtx, true) })
 		}
+		if off, ok := anchorOffset(gtx, &p.anchor); ok {
+			p.origin, p.located = off, true
+		}
 		m := op.Record(gtx.Ops)
 		dims := anchor(gtx)
 		call := m.Stop()
@@ -193,12 +200,16 @@ func (t *Theme) shadow(gtx C, sz image.Point, r int) {
 // float lays out a panel in a deferred layer above the page, placed against
 // the anchor (size anchorSz at the current origin), with the backdrop.
 func (t *Theme) float(gtx C, p *Popup, id string, anchorSz image.Point, panel W) {
+	// The anchor in window space: this frame's size at the position its
+	// pointer events last showed. Not yet located (opened by keyboard before
+	// the pointer ever crossed it): no edges, so the panel opens below it.
 	win := windowBounds(gtx)
-	ab, ok := gtx.Source.Bounds(&p.anchor)
-	if !ok { // first frame: assume the anchor sits where it is drawn
-		ab = image.Rectangle{Max: anchorSz}
+	ab := image.Rectangle{Max: anchorSz}
+	if p.located {
+		ab = ab.Add(p.origin)
+	} else {
+		win = noEdges
 	}
-	ab.Max = ab.Min.Add(anchorSz) // this frame's size, last frame's position
 	if p.atPoint {
 		ab = image.Rectangle{Min: ab.Min.Add(p.point), Max: ab.Min.Add(p.point)}
 	}
@@ -257,6 +268,7 @@ func (t *Theme) float(gtx C, p *Popup, id string, anchorSz image.Point, panel W)
 	// an area whose handler asks for no pointer gestures.
 	pt := clip.Rect(image.Rectangle{Max: sz}).Push(gtx.Ops)
 	Tag(gtx, id)
+	FocusID(gtx, &p.focus, id)
 	pcall.Add(gtx.Ops)
 	pt.Pop()
 	pa.Pop()
@@ -365,6 +377,8 @@ func (t *Theme) Modal(gtx C, d *Dialog, id string, page W, dialog W) D {
 	event.Op(gtx.Ops, &d.focus)
 	pt := clip.Rect(image.Rectangle{Max: cd.Size}).Push(gtx.Ops) // id on a handler-free area
 	Tag(gtx, id)
+	FocusID(gtx, &d.focus, id)
+	SetRole(gtx, id, RoleDialog)
 	call.Add(gtx.Ops)
 	pt.Pop()
 	pa.Pop()

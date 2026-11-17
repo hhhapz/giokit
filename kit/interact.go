@@ -34,11 +34,17 @@ type Clickable struct {
 	requests     int
 	pressedKey   key.Name
 	hover        Tween
-	anim         Tween       // free for the component drawing it (switch thumb, radio dot)
-	quiet        bool        // focused by a click: hide the ring
-	disabled     bool        // laid out disabled last frame (Theme.Disable)
-	group        *FocusGroup // member of a group: no Tab stop, no Enter/Space
+	anim         Tween         // free for the component drawing it (switch thumb, radio dot)
+	quiet        bool          // focused by a click: hide the ring
+	disabled     bool          // laid out disabled last frame (Theme.Disable)
+	group        *FocusGroup   // member of a group: no Tab stop, no Enter/Space
+	mods         key.Modifiers // of the click Clicked last reported
 }
+
+// Modifiers are the keys held during the click Clicked last reported
+// (Shift-click to extend a selection, Ctrl-click to toggle); none for a
+// keyboard or programmatic click.
+func (c *Clickable) Modifiers() key.Modifiers { return c.mods }
 
 // FocusTag is the tag Gio routes this clickable's focus and key events to.
 func (c *Clickable) FocusTag() event.Tag { return c }
@@ -53,6 +59,7 @@ func (c *Clickable) Hovered() bool { return c.click.Hovered() }
 func (c *Clickable) Pressed() bool { return c.click.Pressed() }
 
 func (c *Clickable) update(gtx C) bool {
+	c.mods = 0
 	if c.requests > 0 {
 		c.requests = 0
 		return true
@@ -63,6 +70,7 @@ func (c *Clickable) update(gtx C) bool {
 			break
 		}
 		if e.Kind == gesture.KindClick {
+			c.mods = e.Modifiers
 			return true
 		}
 	}
@@ -166,6 +174,7 @@ func (c *Clickable) press(gtx C, id string, d time.Duration, w func(gtx C, st St
 	}
 	return c.Layout(gtx, func(gtx C) D {
 		Tag(gtx, id)
+		FocusID(gtx, c, id)
 		var focused bool
 		if g := c.group; g != nil {
 			g.member(gtx, id, c)

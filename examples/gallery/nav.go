@@ -46,6 +46,7 @@ var categories = []category{
 		{id: "selection", title: "Selection", demos: []demo{
 			{"Switches and checkboxes", (*gallery).demoToggles},
 			{"Slider", (*gallery).demoSlider},
+			{"Multiple selection", (*gallery).demoMultiSelect},
 		}},
 		{id: "text", title: "Text fields", demos: []demo{
 			{"Text fields", (*gallery).demoTextFields},

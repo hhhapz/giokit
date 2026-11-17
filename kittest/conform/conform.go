@@ -22,6 +22,7 @@ import (
 	"bytes"
 	"fmt"
 	"image"
+	"image/color"
 	"testing"
 
 	"gioui.org/io/key"
@@ -70,10 +71,16 @@ func (c Case) size() image.Point {
 }
 
 func (c Case) harness(t *testing.T, th *kit.Theme, disabled bool, w int, scale float32) (*kittest.Harness, *int) {
+	return c.harnessOn(t, th, th.Bg, disabled, w, scale)
+}
+
+// harnessOn is harness on a background colour: th.Bg (a window) or th.Panel
+// (a card), where hover feedback must show too.
+func (c Case) harnessOn(t *testing.T, th *kit.Theme, bg color.NRGBA, disabled bool, w int, scale float32) (*kittest.Harness, *int) {
 	t.Helper()
 	frame, n := c.Build(th, disabled)
 	h := kittest.NewTAt(t, w, c.size().Y, scale, func(gtx layout.Context) {
-		paint.Fill(gtx.Ops, th.Bg) // as an app's window does
+		paint.Fill(gtx.Ops, bg) // as an app's window (or a card) does
 		layout.UniformInset(24).Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 			gtx.Constraints.Min = image.Point{}
 			frame(gtx)
@@ -88,6 +95,22 @@ func (c Case) run(t *testing.T) {
 	th := kit.Dark()
 	t.Run("behaviour", func(t *testing.T) { c.behaviour(t, th) })
 	t.Run("ring", func(t *testing.T) { c.ring(t, th) })
+	if !c.NoHover {
+		// On a card (Panel), hover must still change the control: a hover fill
+		// equal to Panel vanishes there.
+		t.Run("hover-on-card", func(t *testing.T) {
+			h, _ := c.harnessOn(t, th, th.Panel, false, c.size().X, 1)
+			r, ok := h.Find(c.ID)
+			if !ok {
+				t.Fatalf("no widget %q", c.ID)
+			}
+			rest := crop(h, r)
+			h.Hover(c.ID)
+			if bytes.Equal(rest, crop(h, r)) {
+				t.Error("hover changes nothing on a card (Panel background)")
+			}
+		})
+	}
 	t.Run("disabled", func(t *testing.T) { c.disabled(t, th) })
 	for _, p := range kit.Presets() {
 		t.Run("preset/"+p.Name, func(t *testing.T) {
@@ -154,6 +177,9 @@ func (c Case) behaviour(t *testing.T, th *kit.Theme) {
 		t.Errorf("spoken label %q: needs a human label, never the id", node.Label)
 	case c.Label != "" && node.Label != c.Label:
 		t.Errorf("spoken label %q, want %q", node.Label, c.Label)
+	}
+	if h.Role(c.ID) == "" {
+		t.Errorf("no role: set one with kit.SetRole (button, tab, option…)")
 	}
 	h.ExpectClean()
 

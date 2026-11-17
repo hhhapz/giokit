@@ -26,8 +26,9 @@ type DateField struct {
 	ID          string
 	Value       time.Time
 	Placeholder string
-	Format      string // field text layout; default "Mon, Jan 2, 2006"
-	SundayFirst bool   // weeks start on Sunday instead of Monday
+	Format      string          // field text layout; default "Mon, Jan 2, 2006"
+	SundayFirst bool            // weeks start on Sunday instead of Monday
+	Size        kit.ControlSize // ControlDefault is the theme's
 }
 
 // DateFieldState is a DateField's interaction state.
@@ -42,7 +43,9 @@ type DateFieldState struct {
 	years      kit.Pool[kit.Clickable]
 	head       kit.Clickable
 	prev, next kit.Clickable
-	focus      *kit.Clickable // focused after this layout (cells exist by then)
+	grid       kit.FocusGroup // the cells: one Tab stop, arrows move the cursor
+	cursor     time.Time      // the active cell's date (day, month or year)
+	refocus    bool           // focus the grid after this layout (a view changed)
 }
 
 type calView int
@@ -68,7 +71,7 @@ func (s *DateFieldState) Update(gtx C) (time.Time, bool) {
 	}
 	if s.head.Clicked(gtx) && s.view < viewYears {
 		s.view++
-		s.focus = s.cell(s.shown)
+		s.refocus = true
 	}
 	years, months := 0, 1 // prev/next step: a month, a year or a decade
 	switch s.view {
@@ -79,9 +82,11 @@ func (s *DateFieldState) Update(gtx C) (time.Time, bool) {
 	}
 	if s.prev.Clicked(gtx) {
 		s.shown = s.shown.AddDate(-years, -months, 0)
+		s.cursor = s.cursor.AddDate(-years, -months, 0)
 	}
 	if s.next.Clicked(gtx) {
 		s.shown = s.shown.AddDate(years, months, 0)
+		s.cursor = s.cursor.AddDate(years, months, 0)
 	}
 	s.years.Each(func(k string, c *kit.Clickable) {
 		if !c.Clicked(gtx) {
@@ -89,8 +94,9 @@ func (s *DateFieldState) Update(gtx C) (time.Time, bool) {
 		}
 		if y, err := strconv.Atoi(k); err == nil {
 			s.shown = time.Date(y, s.shown.Month(), 1, 0, 0, 0, 0, time.Local)
+			s.cursor = s.shown
 			s.view = viewMonths
-			s.focus = s.cell(s.shown)
+			s.refocus = true
 		}
 	})
 	s.months.Each(func(k string, c *kit.Clickable) {
@@ -98,9 +104,9 @@ func (s *DateFieldState) Update(gtx C) (time.Time, bool) {
 			return
 		}
 		if m, err := time.ParseInLocation(monthKey, k, time.Local); err == nil {
-			s.shown = m
+			s.shown, s.cursor = m, m
 			s.view = viewDays
-			s.focus = s.days.Get(m.Format(dayKey))
+			s.refocus = true
 		}
 	})
 	var picked time.Time
@@ -119,12 +125,46 @@ func (s *DateFieldState) Update(gtx C) (time.Time, bool) {
 	return picked, ok
 }
 
-// cell is the month or year cell for t in the current view.
-func (s *DateFieldState) cell(t time.Time) *kit.Clickable {
-	if s.view == viewYears {
-		return s.years.Get(strconv.Itoa(t.Year()))
+// cellKey is the current view's key for t: a day, a month or a year.
+func (s *DateFieldState) cellKey(t time.Time) string {
+	switch s.view {
+	case viewMonths:
+		return t.Format(monthKey)
+	case viewYears:
+		return strconv.Itoa(t.Year())
 	}
-	return s.months.Get(t.Format(monthKey))
+	return t.Format(dayKey)
+}
+
+// cell is the current view's cell for t.
+func (s *DateFieldState) cell(t time.Time) *kit.Clickable {
+	switch s.view {
+	case viewMonths:
+		return s.months.Get(s.cellKey(t))
+	case viewYears:
+		return s.years.Get(s.cellKey(t))
+	}
+	return s.days.Get(s.cellKey(t))
+}
+
+// move moves the cursor by n steps of the view's unit (a day, a month or
+// a year) and pages the view to show it.
+func (s *DateFieldState) move(n int) {
+	switch s.view {
+	case viewDays:
+		s.cursor = s.cursor.AddDate(0, 0, n)
+		if !sameMonth(s.cursor, s.shown) {
+			s.shown = time.Date(s.cursor.Year(), s.cursor.Month(), 1, 0, 0, 0, 0, time.Local)
+		}
+	case viewMonths:
+		s.cursor = s.cursor.AddDate(0, n, 0)
+		s.shown = time.Date(s.cursor.Year(), s.shown.Month(), 1, 0, 0, 0, 0, time.Local)
+	case viewYears:
+		s.cursor = s.cursor.AddDate(n, 0, 0)
+		if decade(s.cursor.Year()) != decade(s.shown.Year()) {
+			s.shown = time.Date(s.cursor.Year(), s.shown.Month(), 1, 0, 0, 0, 0, time.Local)
+		}
+	}
 }
 
 // Layout lays out the field and, while open, the calendar.
@@ -136,14 +176,13 @@ func (f DateField) Layout(gtx C, th *kit.Theme, s *DateFieldState) D {
 			base = day(gtx.Now)
 		}
 		s.shown = time.Date(base.Year(), base.Month(), 1, 0, 0, 0, 0, time.Local)
+		s.cursor = base
 		s.view = viewDays
-		if s.Opening() {
-			s.focus = s.days.Get(base.Format(dayKey))
-		}
 	}
-	if s.focus != nil {
-		defer func(c *kit.Clickable) { c.FocusQuiet(gtx) }(s.focus)
-		s.focus = nil
+	s.FocusOnOpen(s.grid.FocusHandle()) // an open calendar focuses its grid
+	if s.refocus {
+		s.refocus = false
+		defer s.grid.FocusQuiet(gtx)
 	}
 	if dm, byKey := s.DidDismiss(); dm {
 		if byKey {
@@ -161,10 +200,12 @@ func (f DateField) Layout(gtx C, th *kit.Theme, s *DateFieldState) D {
 		label, lc = sel.Format(layoutStr), th.Fg
 	}
 	return th.Popover(gtx, &s.Popup, f.ID, func(gtx C) D {
+		kit.SetRole(gtx, f.ID, kit.RoleDialog)
 		return th.Press(gtx, &s.Trigger, kit.Part(f.ID, "field"), func(gtx C, st kit.State) D {
 			semantic.Button.Add(gtx.Ops)
+			kit.SetRole(gtx, kit.Part(f.ID, "field"), kit.RoleCombobox)
 			st.Focused = st.Focused || s.Opened()
-			return th.Field(gtx, st, func(gtx C) D {
+			return th.SizedField(gtx, f.Size, st, func(gtx C) D {
 				return kit.Row(gtx,
 					kit.Flexed(1, func(gtx C) D { return th.Text(gtx, label, th.Type.Body, lc, kit.Regular) }),
 					kit.Rigid(func(gtx C) D { return kit.IconChevronDown(gtx, th.IconSize, th.Muted) }),
@@ -188,26 +229,63 @@ func decade(y int) int { return y - ((y%10)+10)%10 }
 // calendar handles the current view's keys (before drawing, so a page
 // lands this frame), then lays out the header and the view's grid.
 func (f DateField) calendar(gtx C, th *kit.Theme, s *DateFieldState, sel time.Time) D {
+	// The cursor's cell is the grid's active member: the one Tab stop.
+	s.grid.Active = s.cellKey(s.cursor)
+	page, row := 0, 7 // PageUp/Down step (a month in the day view) and arrow row
+	switch s.view {
+	case viewMonths:
+		page, row = 12, gridCols
+	case viewYears:
+		page, row = 10, gridCols
+	}
+	// Every cell of the view joins the grid: members, not Tab stops.
 	switch s.view {
 	case viewDays:
-		f.dayKeys(gtx, s)
+		for _, c := range f.cells(s) {
+			k := c.Format(dayKey)
+			s.grid.Join(s.days.Get(k), k == s.grid.Active)
+		}
 	case viewMonths:
-		gridKeys(gtx, 12, func(i int) *kit.Clickable {
-			return s.months.Get(time.Date(s.shown.Year(), time.Month(i+1), 1, 0, 0, 0, 0, time.Local).Format(monthKey))
-		}, func(i, to int) {
-			t := time.Date(s.shown.Year(), time.Month(to+1), 1, 0, 0, 0, 0, time.Local)
-			s.shown = t
-			s.months.Get(t.Format(monthKey)).Focus(gtx)
-		})
+		for m := range 12 {
+			k := time.Date(s.shown.Year(), time.Month(m+1), 1, 0, 0, 0, 0, time.Local).Format(monthKey)
+			s.grid.Join(s.months.Get(k), k == s.grid.Active)
+		}
 	case viewYears:
 		first := decade(s.shown.Year()) - 1
-		gridKeys(gtx, 12, func(i int) *kit.Clickable {
-			return s.years.Get(strconv.Itoa(first + i))
-		}, func(i, to int) {
-			y := first + to
-			s.shown = time.Date(y, s.shown.Month(), 1, 0, 0, 0, 0, time.Local)
-			s.years.Get(strconv.Itoa(y)).Focus(gtx)
-		})
+		for i := range 12 {
+			k := strconv.Itoa(first + i)
+			s.grid.Join(s.years.Get(k), k == s.grid.Active)
+		}
+	}
+	for {
+		e, ok := gtx.Event(key.Filter{Focus: s.grid.FocusHandle(), Name: key.NamePageUp}, key.Filter{Focus: s.grid.FocusHandle(), Name: key.NamePageDown})
+		if !ok {
+			break
+		}
+		if ke, ok := e.(key.Event); ok && ke.State == key.Press {
+			d := 1
+			if ke.Name == key.NamePageUp {
+				d = -1
+			}
+			if s.view == viewDays {
+				s.cursor = s.cursor.AddDate(0, d, 0)
+				s.shown = time.Date(s.cursor.Year(), s.cursor.Month(), 1, 0, 0, 0, 0, time.Local)
+			} else {
+				s.move(d * page)
+			}
+			s.grid.Active = s.cellKey(s.cursor)
+			kit.Notify(gtx)
+		}
+	}
+	keys := func(gtx C) {
+		step := func(n int) func() {
+			return func() { s.move(n); s.grid.Active = s.cellKey(s.cursor) }
+		}
+		kit.OnAction(gtx, kit.ActCollapse, step(-1))
+		kit.OnAction(gtx, kit.ActExpand, step(1))
+		kit.OnAction(gtx, kit.ActMoveUp, step(-row))
+		kit.OnAction(gtx, kit.ActMoveDown, step(row))
+		kit.OnAction(gtx, kit.ActConfirm, func() { s.cell(s.cursor).Click() }) // reported by Update
 	}
 
 	cell := image.Pt(gtx.Dp(34), gtx.Dp(30))
@@ -258,7 +336,17 @@ func (f DateField) calendar(gtx C, th *kit.Theme, s *DateFieldState, sel time.Ti
 		}
 		return f.dayGrid(gtx, th, s, sel, cell, weekdays)
 	}
-	return kit.Flex{Axis: layout.Vertical, Pad: kit.Space2, Gap: kit.Space1p5}.Layout(gtx, th, kit.Rigid(header), kit.Rigid(body))
+	grid := func(gtx C) D {
+		return kit.KeyContext(gtx, "calendar", func(gtx C) D {
+			keys(gtx)
+			kit.SetRole(gtx, kit.Part(f.ID, "grid"), kit.RoleGrid)
+			return s.grid.Layout(gtx, kit.Part(f.ID, "grid"), func(gtx C) D {
+				// The group's own area takes no pointer gestures: name it on a nested one.
+				return kit.TagArea(gtx, kit.Part(f.ID, "grid"), body)
+			})
+		})
+	}
+	return kit.Flex{Axis: layout.Vertical, Pad: kit.Space2, Gap: kit.Space1p5}.Layout(gtx, th, kit.Rigid(header), kit.Rigid(grid))
 }
 
 func sameMonth(a, b time.Time) bool {
@@ -270,6 +358,7 @@ func (f DateField) viewButton(gtx C, th *kit.Theme, s *DateFieldState, title str
 	return th.Press(gtx, &s.head, kit.Part(f.ID, "view"), func(gtx C, st kit.State) D {
 		semantic.Button.Add(gtx.Ops)
 		semantic.LabelOp(title).Add(gtx.Ops)
+		kit.SetRole(gtx, kit.Part(f.ID, "view"), kit.RoleButton)
 		sf := th.Styled(kit.Surface{Bg: th.Highlight(st.Hover), Radius: th.RadiusSm()})
 		if st.Focused {
 			sf.Focus = th.Focus
@@ -286,79 +375,6 @@ func (f DateField) viewButton(gtx C, th *kit.Theme, s *DateFieldState, title str
 			)
 		})
 	})
-}
-
-// dayKeys moves focus between days, paging months as needed.
-func (f DateField) dayKeys(gtx C, s *DateFieldState) {
-	for _, c := range f.cells(s) {
-		cl := s.days.Get(c.Format(dayKey))
-		for {
-			e, ok := gtx.Event(
-				key.Filter{Focus: cl, Name: key.NameLeftArrow}, key.Filter{Focus: cl, Name: key.NameRightArrow},
-				key.Filter{Focus: cl, Name: key.NameUpArrow}, key.Filter{Focus: cl, Name: key.NameDownArrow},
-				key.Filter{Focus: cl, Name: key.NamePageUp}, key.Filter{Focus: cl, Name: key.NamePageDown},
-			)
-			if !ok {
-				break
-			}
-			ke, ok := e.(key.Event)
-			if !ok || ke.State != key.Press {
-				continue
-			}
-			to := c
-			switch ke.Name {
-			case key.NameLeftArrow:
-				to = c.AddDate(0, 0, -1)
-			case key.NameRightArrow:
-				to = c.AddDate(0, 0, 1)
-			case key.NameUpArrow:
-				to = c.AddDate(0, 0, -7)
-			case key.NameDownArrow:
-				to = c.AddDate(0, 0, 7)
-			case key.NamePageUp:
-				to = c.AddDate(0, -1, 0)
-			case key.NamePageDown:
-				to = c.AddDate(0, 1, 0)
-			}
-			if !sameMonth(to, s.shown) {
-				s.shown = time.Date(to.Year(), to.Month(), 1, 0, 0, 0, 0, time.Local)
-			}
-			s.days.Get(to.Format(dayKey)).Focus(gtx)
-			kit.Notify(gtx)
-			return // the grid changed under the loop: finish next frame
-		}
-	}
-}
-
-// gridKeys moves focus in a 3-column grid of n cells: arrows by one or by
-// a row, PageUp/PageDown by a whole grid. to may fall outside 0..n-1; move
-// pages the view so it exists.
-func gridKeys(gtx C, n int, cell func(i int) *kit.Clickable, move func(i, to int)) {
-	for i := range n {
-		cl := cell(i)
-		for {
-			e, ok := gtx.Event(
-				key.Filter{Focus: cl, Name: key.NameLeftArrow}, key.Filter{Focus: cl, Name: key.NameRightArrow},
-				key.Filter{Focus: cl, Name: key.NameUpArrow}, key.Filter{Focus: cl, Name: key.NameDownArrow},
-				key.Filter{Focus: cl, Name: key.NamePageUp}, key.Filter{Focus: cl, Name: key.NamePageDown},
-			)
-			if !ok {
-				break
-			}
-			ke, ok := e.(key.Event)
-			if !ok || ke.State != key.Press {
-				continue
-			}
-			d := map[key.Name]int{
-				key.NameLeftArrow: -1, key.NameRightArrow: 1,
-				key.NameUpArrow: -gridCols, key.NameDownArrow: gridCols,
-				key.NamePageUp: -n, key.NamePageDown: n,
-			}[ke.Name]
-			move(i, i+d)
-			kit.Notify(gtx)
-			return
-		}
-	}
 }
 
 // cells are the 42 days the month grid shows, from the week start.
@@ -446,6 +462,7 @@ func (f DateField) gridCell(gtx C, th *kit.Theme, c *kit.Clickable, id, label st
 	return th.Press(gtx, c, id, func(gtx C, st kit.State) D {
 		semantic.Button.Add(gtx.Ops)
 		semantic.SelectedOp(selected).Add(gtx.Ops)
+		kit.SetRole(gtx, id, kit.RoleGridCell)
 		fg := th.Fg
 		if outside {
 			fg = th.Dim

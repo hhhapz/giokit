@@ -182,6 +182,7 @@ func toastCard(gtx C, th *kit.Theme, ts *Toasts, it *toast) D {
 	fg, _, icon := th.StatusColors(it.status)
 	return th.FloatingPanel(gtx, func(gtx C) D {
 		gtx.Constraints.Min.X = gtx.Constraints.Max.X
+		kit.SetRole(gtx, it.id, kit.RoleStatus)
 		return kit.Group(gtx, it.id, it.title, func(gtx C) D { return toastBody(gtx, th, ts, it, fg, icon) })
 	})
 }

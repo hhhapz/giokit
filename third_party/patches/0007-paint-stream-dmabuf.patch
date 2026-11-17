@@ -1,0 +1,680 @@
+--- a/gpu/gpu.go
++++ b/gpu/gpu.go
+@@ -24,6 +24,7 @@
+ 	"gioui.org/internal/f32color"
+ 	"gioui.org/internal/ops"
+ 	"gioui.org/internal/scene"
++	"gioui.org/internal/stream"
+ 	"gioui.org/internal/stroke"
+ 	"gioui.org/layout"
+ 	"gioui.org/op"
+@@ -66,6 +67,7 @@
+ 	intersections packer
+ 	layers        packer
+ 	layerFBOs     fboSet
++	blank         driver.Texture // 1x1 transparent, for streams with nothing drawable (giokit patch)
+ }
+ 
+ type drawOps struct {
+@@ -256,6 +258,17 @@
+ type texture struct {
+ 	src *image.RGBA
+ 	tex driver.Texture
++
++	// paint.Stream textures (giokit patch): the uploaded frame's size and
++	// sequence number, imported DMA-BUFs by buffer ID, the texture last
++	// bound, and the DMA-BUF frame held while bound.
++	stream  *stream.Stream
++	size    image.Point
++	seq     uint64
++	imports map[uint64]*streamImport
++	bound   driver.Texture
++	held    bool
++	heldSeq uint64
+ }
+ 
+ type blitter struct {
+@@ -453,6 +466,9 @@
+ 		handle: data.handle,
+ 	}
+ 
++	if st, ok := data.handle.(*stream.Stream); ok {
++		return r.streamTex(cache, key, st)
++	}
+ 	var tex *texture
+ 	t, exists := cache.get(key)
+ 	if !exists {
+@@ -487,10 +503,150 @@
+ 	return tex.tex
+ }
+ 
++// streamTex returns the texture of a paint.Stream (giokit patch). CPU frames
++// are uploaded into one reused texture, without mipmaps, when the stream's
++// sequence number moved. DMA-BUF frames are imported where the device can
++// (one import per buffer ID, reused when the producer cycles its buffers)
++// and held until a newer frame is bound, since they are sampled in place.
++func (r *renderer) streamTex(cache *textureCache, key textureCacheKey, st *stream.Stream) driver.Texture {
++	t, exists := cache.get(key)
++	if !exists {
++		t = &texture{stream: st}
++		cache.put(key, t)
++	}
++	tex := t.(*texture)
++	filter := driver.FilterLinear
++	if key.filter == filterNearest {
++		filter = driver.FilterNearest
++	}
++	var out driver.Texture
++	st.Use(func(u *stream.Use) {
++		switch f := u.Frame; {
++		case f.DMA != nil:
++			out = r.streamImport(tex, st, u, filter)
++		case f.Img != nil:
++			if sz := f.Img.Rect.Size(); tex.tex == nil || tex.size != sz {
++				if tex.tex != nil {
++					tex.tex.Release()
++				}
++				h, err := r.ctx.NewTexture(driver.TextureFormatSRGBA, sz.X, sz.Y, filter, filter, driver.BufferBindingTexture)
++				if err != nil {
++					panic(err)
++				}
++				tex.tex, tex.size, tex.seq = h, sz, 0
++			}
++			if tex.seq != u.Seq {
++				driver.UploadImage(tex.tex, image.Pt(0, 0), f.Img)
++				tex.seq = u.Seq
++			}
++			tex.unhold(u)
++			tex.bound = tex.tex
++			out = tex.tex
++		}
++	})
++	if out == nil {
++		// Nothing drawable yet (an import that failed before any frame):
++		// draw transparent rather than handing the draw code a nil texture.
++		out = r.blankTexture()
++	}
++	return out
++}
++
++// streamImport binds the current DMA-BUF frame of st.
++func (r *renderer) streamImport(tex *texture, st *stream.Stream, u *stream.Use, filter driver.TextureFilter) driver.Texture {
++	if tex.held && tex.heldSeq == u.Seq {
++		return tex.bound
++	}
++	d := u.Frame.DMA
++	imp, ok := r.ctx.(driver.DMABufImporter)
++	if !ok {
++		st.SetImportState(stream.ImportUnsupported)
++		return tex.bound
++	}
++	e := tex.imports[d.ID]
++	if e == nil {
++		it, err := imp.ImportDMABuf(driver.DMABuf{
++			FD: d.FD, Offset: d.Offset, Pitch: d.Pitch, Fourcc: d.Fourcc, Modifier: d.Modifier,
++			Width: d.Width, Height: d.Height,
++		}, filter)
++		if err != nil {
++			st.SetImportState(stream.ImportUnsupported)
++			return tex.bound
++		}
++		if tex.imports == nil {
++			tex.imports = make(map[uint64]*streamImport)
++		}
++		e = &streamImport{tex: it}
++		tex.imports[d.ID] = e
++		tex.evictImports()
++	}
++	st.SetImportState(stream.ImportSupported)
++	e.used = u.Seq
++	tex.unhold(u)
++	u.Hold()
++	tex.held, tex.heldSeq, tex.bound = true, u.Seq, e.tex
++	return e.tex
++}
++
++// streamImport is one imported DMA-BUF of a stream.
++type streamImport struct {
++	tex  driver.Texture
++	used uint64 // sequence number of the last frame that bound it
++}
++
++// maxStreamImports bounds the imports kept per stream: a producer cycles a
++// handful of buffers; IDs beyond that are stale.
++const maxStreamImports = 12
++
++func (t *texture) evictImports() {
++	for len(t.imports) > maxStreamImports {
++		var oldest uint64
++		var e *streamImport
++		for id, v := range t.imports {
++			if v.tex != t.bound && (e == nil || v.used < e.used) {
++				oldest, e = id, v
++			}
++		}
++		if e == nil {
++			return
++		}
++		e.tex.Release()
++		delete(t.imports, oldest)
++	}
++}
++
++// unhold lets go of the DMA-BUF frame bound before, if any.
++func (t *texture) unhold(u *stream.Use) {
++	if t.held {
++		u.Unhold(t.heldSeq)
++		t.held = false
++	}
++}
++
++func (r *renderer) blankTexture() driver.Texture {
++	if r.blank == nil {
++		h, err := r.ctx.NewTexture(driver.TextureFormatSRGBA, 1, 1, driver.FilterNearest, driver.FilterNearest, driver.BufferBindingTexture)
++		if err != nil {
++			panic(err)
++		}
++		h.Upload(image.Point{}, image.Pt(1, 1), make([]byte, 4), 4)
++		r.blank = h
++	}
++	return r.blank
++}
++
+ func (t *texture) release() {
+ 	if t.tex != nil {
+ 		t.tex.Release()
+ 	}
++	for _, e := range t.imports {
++		e.tex.Release()
++	}
++	t.imports = nil
++	if t.held {
++		t.stream.Unhold(t.heldSeq)
++		t.held = false
++	}
+ }
+ 
+ func newRenderer(ctx driver.Device) *renderer {
+@@ -515,6 +671,9 @@
+ }
+ 
+ func (r *renderer) release() {
++	if r.blank != nil {
++		r.blank.Release()
++	}
+ 	r.pather.release()
+ 	r.blitter.release()
+ 	r.layerFBOs.delete(r.ctx, 0)
+--- a/gpu/internal/driver/driver.go
++++ b/gpu/internal/driver/driver.go
+@@ -251,3 +251,19 @@
+ 	pixels = img.Pix[start:end]
+ 	t.Upload(offset, size, pixels, img.Stride)
+ }
++
++// DMABuf describes a single-plane image in GPU memory (Linux). giokit patch.
++type DMABuf struct {
++	FD            int
++	Offset, Pitch uint32
++	Fourcc        uint32 // DRM fourcc
++	Modifier      uint64 // DRM format modifier
++	Width, Height int
++}
++
++// DMABufImporter is implemented by devices that can sample a DMA-BUF
++// directly. The texture samples as sRGB, like TextureFormatSRGBA. The
++// buffer must stay valid until the texture is released. giokit patch.
++type DMABufImporter interface {
++	ImportDMABuf(b DMABuf, filter TextureFilter) (Texture, error)
++}
+--- a/gpu/internal/opengl/opengl.go
++++ b/gpu/internal/opengl/opengl.go
+@@ -22,6 +22,8 @@
+ type Backend struct {
+ 	funcs *gl.Functions
+ 
++	dmabuf dmabufState // giokit patch
++
+ 	clear      bool
+ 	glstate    glState
+ 	state      state
+@@ -110,8 +112,23 @@
+ 	mipmap   bool
+ 	bindings driver.BufferBinding
+ 	foreign  bool
++
++	// An imported DMA-BUF (giokit patch): the EGLImage and, when sampling
++	// goes through an sRGB view, the texture holding its storage.
++	dmabufImage unsafe.Pointer
++	dmabufBase  gl.Texture
++}
++
++// dmabufState records whether DMA-BUF import works (giokit patch): resolved
++// on the first import, on the render goroutine.
++type dmabufState struct {
++	loaded bool
++	level  int // 0 impossible, 1 import without views, 2 with views
+ }
+ 
++// releaseDMABufImage destroys an EGLImage; set where import is supported.
++var releaseDMABufImage func(unsafe.Pointer)
++
+ type pipeline struct {
+ 	prog     *program
+ 	inputs   []shader.InputLocation
+@@ -1244,6 +1261,13 @@
+ 		t.backend.glstate.deleteFramebuffer(t.backend.funcs, t.fbo)
+ 	}
+ 	t.backend.glstate.deleteTexture(t.backend.funcs, t.obj)
++	if t.dmabufImage != nil {
++		if t.dmabufBase.V != 0 {
++			t.backend.glstate.deleteTexture(t.backend.funcs, t.dmabufBase)
++		}
++		releaseDMABufImage(t.dmabufImage)
++		t.dmabufImage = nil
++	}
+ }
+ 
+ func (t *texture) Upload(offset, size image.Point, pixels []byte, stride int) {
+--- a/gpu/internal/opengl/dmabuf_linux.go
++++ b/gpu/internal/opengl/dmabuf_linux.go
+@@ -0,0 +1,150 @@
++// SPDX-License-Identifier: Unlicense OR MIT
++
++//go:build linux && !android
++
++package opengl
++
++// DMA-BUF import (giokit patch): a DMA-BUF becomes an EGLImage, the
++// EGLImage the immutable storage of a texture (GL_EXT_EGL_image_storage),
++// and an sRGB view of that texture (texture views) what Gio samples, so the
++// image decodes from sRGB like every other Gio texture. Nothing is copied.
++
++/*
++#cgo pkg-config: egl
++#include <stdint.h>
++#include <string.h>
++#include <EGL/egl.h>
++#include <EGL/eglext.h>
++
++typedef void (*gk_storage_fn)(unsigned int target, void *image, const int *attribs);
++typedef void (*gk_view_fn)(unsigned int tex, unsigned int target, unsigned int orig,
++                           unsigned int fmt, unsigned int minlevel, unsigned int numlevels,
++                           unsigned int minlayer, unsigned int numlayers);
++
++static PFNEGLCREATEIMAGEKHRPROC gk_create_image;
++static PFNEGLDESTROYIMAGEKHRPROC gk_destroy_image;
++static gk_storage_fn gk_storage;
++static gk_view_fn gk_view;
++
++// gk_dmabuf_load resolves the entry points; it needs a current context.
++// Returns 0 when import is impossible, 1 when possible (2 with views).
++static int gk_dmabuf_load(void) {
++	EGLDisplay dpy = eglGetCurrentDisplay();
++	if (dpy == EGL_NO_DISPLAY) {
++		return 0;
++	}
++	const char *exts = eglQueryString(dpy, EGL_EXTENSIONS);
++	if (!exts || !strstr(exts, "EGL_EXT_image_dma_buf_import")) {
++		return 0;
++	}
++	gk_create_image = (PFNEGLCREATEIMAGEKHRPROC)eglGetProcAddress("eglCreateImageKHR");
++	gk_destroy_image = (PFNEGLDESTROYIMAGEKHRPROC)eglGetProcAddress("eglDestroyImageKHR");
++	gk_storage = (gk_storage_fn)eglGetProcAddress("glEGLImageTargetTexStorageEXT");
++	gk_view = (gk_view_fn)eglGetProcAddress("glTextureViewOES");
++	if (!gk_view) {
++		gk_view = (gk_view_fn)eglGetProcAddress("glTextureViewEXT");
++	}
++	if (!gk_view) {
++		gk_view = (gk_view_fn)eglGetProcAddress("glTextureView");
++	}
++	if (!gk_create_image || !gk_destroy_image || !gk_storage) {
++		return 0;
++	}
++	return gk_view ? 2 : 1;
++}
++
++static void *gk_dmabuf_image(int w, int h, uint32_t fourcc, int fd, uint32_t off, uint32_t pitch, uint64_t mod) {
++	EGLint a[32];
++	int i = 0;
++	a[i++] = EGL_WIDTH; a[i++] = w;
++	a[i++] = EGL_HEIGHT; a[i++] = h;
++	a[i++] = EGL_LINUX_DRM_FOURCC_EXT; a[i++] = (EGLint)fourcc;
++	a[i++] = EGL_DMA_BUF_PLANE0_FD_EXT; a[i++] = fd;
++	a[i++] = EGL_DMA_BUF_PLANE0_OFFSET_EXT; a[i++] = (EGLint)off;
++	a[i++] = EGL_DMA_BUF_PLANE0_PITCH_EXT; a[i++] = (EGLint)pitch;
++	if (mod != 0x00ffffffffffffffULL) { // DRM_FORMAT_MOD_INVALID: no modifier
++		a[i++] = EGL_DMA_BUF_PLANE0_MODIFIER_LO_EXT; a[i++] = (EGLint)(mod & 0xffffffff);
++		a[i++] = EGL_DMA_BUF_PLANE0_MODIFIER_HI_EXT; a[i++] = (EGLint)(mod >> 32);
++	}
++	a[i++] = EGL_NONE;
++	EGLImageKHR img = gk_create_image(eglGetCurrentDisplay(), EGL_NO_CONTEXT, EGL_LINUX_DMA_BUF_EXT, NULL, a);
++	return img == EGL_NO_IMAGE_KHR ? NULL : img;
++}
++
++static void gk_dmabuf_storage(void *img) { gk_storage(0x0DE1, img, NULL); } // GL_TEXTURE_2D
++
++static void gk_dmabuf_view(unsigned int view, unsigned int orig, unsigned int fmt) {
++	gk_view(view, 0x0DE1, orig, fmt, 0, 1, 0, 1);
++}
++
++static void gk_dmabuf_destroy(void *img) { gk_destroy_image(eglGetCurrentDisplay(), img); }
++*/
++import "C"
++
++import (
++	"errors"
++	"fmt"
++	"unsafe"
++
++	"gioui.org/gpu/internal/driver"
++	"gioui.org/internal/gl"
++)
++
++func init() {
++	releaseDMABufImage = func(img unsafe.Pointer) { C.gk_dmabuf_destroy(img) }
++}
++
++// ImportDMABuf implements driver.DMABufImporter.
++func (b *Backend) ImportDMABuf(d driver.DMABuf, filter driver.TextureFilter) (driver.Texture, error) {
++	if b.gles && b.glver[0] < 3 {
++		return nil, errors.New("opengl: DMA-BUF import needs OpenGL ES 3")
++	}
++	if !b.dmabuf.loaded {
++		b.dmabuf.loaded = true
++		b.dmabuf.level = int(C.gk_dmabuf_load())
++	}
++	srgb := b.srgbaTriple.internalFormat == gl.SRGB8_ALPHA8
++	if b.dmabuf.level == 0 || (srgb && b.dmabuf.level < 2) {
++		return nil, errors.New("opengl: DMA-BUF import unsupported (EGL_EXT_image_dma_buf_import, GL_EXT_EGL_image_storage and texture views needed)")
++	}
++	glErr(b.funcs)
++	img := C.gk_dmabuf_image(C.int(d.Width), C.int(d.Height), C.uint32_t(d.Fourcc), C.int(d.FD),
++		C.uint32_t(d.Offset), C.uint32_t(d.Pitch), C.uint64_t(d.Modifier))
++	if img == nil {
++		return nil, fmt.Errorf("opengl: eglCreateImageKHR failed for DMA-BUF %dx%d fourcc %#x modifier %#x", d.Width, d.Height, d.Fourcc, d.Modifier)
++	}
++	base := b.funcs.CreateTexture()
++	b.glstate.bindTexture(b.funcs, 0, base)
++	C.gk_dmabuf_storage(img)
++	if err := glErr(b.funcs); err != nil {
++		b.glstate.deleteTexture(b.funcs, base)
++		C.gk_dmabuf_destroy(img)
++		return nil, fmt.Errorf("opengl: glEGLImageTargetTexStorageEXT: %w", err)
++	}
++	t := &texture{backend: b, obj: base, width: d.Width, height: d.Height,
++		triple: textureTriple{gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE}, bindings: driver.BufferBindingTexture,
++		dmabufImage: img}
++	if srgb {
++		// Sample through an sRGB view of the same storage.
++		view := b.funcs.CreateTexture()
++		C.gk_dmabuf_view(C.uint(view.V), C.uint(base.V), C.uint(gl.SRGB8_ALPHA8))
++		if err := glErr(b.funcs); err != nil {
++			b.glstate.deleteTexture(b.funcs, view)
++			t.Release()
++			return nil, fmt.Errorf("opengl: texture view: %w", err)
++		}
++		t.dmabufBase, t.obj = base, view
++		t.triple = b.srgbaTriple
++	}
++	b.glstate.bindTexture(b.funcs, 0, t.obj)
++	f, _ := toTexFilter(filter)
++	b.funcs.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, f)
++	b.funcs.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, f)
++	b.funcs.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
++	b.funcs.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
++	if err := glErr(b.funcs); err != nil {
++		t.Release()
++		return nil, err
++	}
++	return t, nil
++}
+--- a/internal/stream/stream.go
++++ b/internal/stream/stream.go
+@@ -0,0 +1,140 @@
++// SPDX-License-Identifier: Unlicense OR MIT
++
++// Package stream is the state shared by paint.Stream (producer and layout)
++// and the GPU renderer (consumer). giokit patch.
++package stream
++
++import (
++	"image"
++	"sync"
++	"sync/atomic"
++)
++
++// DMABuf describes a single-plane image in GPU memory (Linux DMA-BUF).
++type DMABuf struct {
++	// ID identifies the buffer across frames: a producer cycling through a
++	// fixed set of buffers reuses IDs, and the renderer reuses its import.
++	// It must change whenever the buffer behind it does.
++	ID            uint64
++	FD            int
++	Offset, Pitch uint32
++	Fourcc        uint32
++	Modifier      uint64
++	Width, Height int
++}
++
++// Frame is one image submitted to a stream: CPU pixels or a DMA-BUF.
++type Frame struct {
++	Img     *image.RGBA
++	DMA     *DMABuf
++	Release func() // called once the stream no longer needs the frame; may be nil
++}
++
++func (f Frame) size() image.Point {
++	if f.DMA != nil {
++		return image.Pt(f.DMA.Width, f.DMA.Height)
++	}
++	if f.Img != nil {
++		return f.Img.Rect.Size()
++	}
++	return image.Point{}
++}
++
++// Import states, reported by the renderer.
++const (
++	ImportUnknown     = iota // no DMA-BUF frame drawn yet
++	ImportSupported          // DMA-BUF frames are drawn without a copy
++	ImportUnsupported        // this renderer cannot import: send CPU frames
++)
++
++// Stream holds the newest frame. The renderer uploads (or imports) it into
++// a texture it keeps per stream, and only when Seq has moved on.
++//
++// Imported frames are sampled for as long as they are on screen, so the
++// renderer holds the frame it has bound: such a frame is released when the
++// renderer lets go of it, not when a newer frame replaces it.
++type Stream struct {
++	mu   sync.Mutex
++	cur  Frame
++	seq  uint64
++	size image.Point
++	held map[uint64]Frame // frames bound by a renderer, by sequence number
++
++	importState atomic.Int32
++}
++
++// Submit makes f the current frame and releases the previous one unless a
++// renderer holds it. It waits for an upload in progress, so a released
++// frame is never mid-copy.
++func (s *Stream) Submit(f Frame) {
++	s.mu.Lock()
++	old, oldSeq := s.cur, s.seq
++	s.cur = f
++	s.seq++
++	s.size = f.size()
++	_, held := s.held[oldSeq]
++	s.mu.Unlock()
++	if !held && old.Release != nil {
++		old.Release()
++	}
++}
++
++// Size is the current frame's size.
++func (s *Stream) Size() image.Point {
++	s.mu.Lock()
++	defer s.mu.Unlock()
++	return s.size
++}
++
++// ImportState reports whether the renderer imports DMA-BUF frames.
++func (s *Stream) ImportState() int { return int(s.importState.Load()) }
++
++// SetImportState records the renderer's capability.
++func (s *Stream) SetImportState(v int) { s.importState.Store(int32(v)) }
++
++// Use calls fn with the current frame and its sequence number, holding the
++// stream so the frame cannot be released during fn. Inside fn, the
++// renderer may Hold the current frame and Unhold one it held before.
++func (s *Stream) Use(fn func(u *Use)) {
++	s.mu.Lock()
++	u := Use{s: s, Frame: s.cur, Seq: s.seq}
++	fn(&u)
++	s.mu.Unlock()
++	for _, r := range u.release {
++		r()
++	}
++}
++
++// Use is the renderer's view of the stream during Stream.Use.
++type Use struct {
++	Frame   Frame
++	Seq     uint64
++	s       *Stream
++	release []func()
++}
++
++// Hold keeps the current frame from being released until Unhold.
++func (u *Use) Hold() {
++	if u.s.held == nil {
++		u.s.held = make(map[uint64]Frame)
++	}
++	u.s.held[u.Seq] = u.Frame
++}
++
++// Unhold lets go of a frame held earlier; it is released (after Use returns)
++// unless it is still the current frame.
++func (u *Use) Unhold(seq uint64) {
++	f, ok := u.s.held[seq]
++	if !ok {
++		return
++	}
++	delete(u.s.held, seq)
++	if seq != u.s.seq && f.Release != nil {
++		u.release = append(u.release, f.Release)
++	}
++}
++
++// Unhold is Use.Unhold outside a Use: for a renderer dropping its texture.
++func (s *Stream) Unhold(seq uint64) {
++	s.Use(func(u *Use) { u.Unhold(seq) })
++}
+--- a/op/paint/stream.go
++++ b/op/paint/stream.go
+@@ -0,0 +1,103 @@
++// SPDX-License-Identifier: Unlicense OR MIT
++
++package paint
++
++import (
++	"image"
++
++	"gioui.org/internal/ops"
++	"gioui.org/internal/stream"
++	"gioui.org/op"
++)
++
++// Stream is an image whose contents change over time: video, a camera, a
++// remote screen. A producer on any goroutine submits frames; the renderer
++// keeps one texture per stream and uploads only frames it has not seen.
++// Unlike creating an ImageOp per frame, nothing is reallocated and no
++// mipmaps are built. giokit patch.
++//
++// Frames are latest-wins: a frame submitted before the previous one was
++// drawn replaces it, so a slow UI drops frames instead of adding latency.
++type Stream struct {
++	// Filter is the scaling filter, as for ImageOp.
++	Filter ImageFilter
++	// OnFrame, if set, is called on the submitting goroutine after each
++	// Submit. Use it to invalidate the window. Set it before the first Submit.
++	OnFrame func()
++
++	s     stream.Stream
++	shape *image.RGBA // size-only placeholder carried by the op
++}
++
++// StreamFrame is one frame: RGBA pixels (alpha is respected) or a DMA-BUF,
++// and a release function called once the stream has finished with it, for
++// pooling. A DMA-BUF frame is sampled in place for as long as it is on
++// screen, so it is released when the renderer moves to a newer frame.
++type StreamFrame struct {
++	Image   *image.RGBA
++	DMABuf  *DMABuf
++	Release func()
++}
++
++// DMABuf describes a single-plane RGBA image in GPU memory (Linux), such as
++// a hardware video decoder's output. Renderers that can import it draw it
++// with no copy; check Stream.ImportState and send Image frames instead when
++// it reports ImportUnsupported. giokit patch.
++type DMABuf struct {
++	// ID names the buffer across frames. Reuse it when a producer cycles
++	// through a fixed set of buffers (the renderer keeps its import), and
++	// never reuse it for a different buffer.
++	ID            uint64
++	FD            int
++	Offset, Pitch uint32
++	Fourcc        uint32 // DRM fourcc, e.g. ABGR8888 for R,G,B,A bytes
++	Modifier      uint64 // DRM format modifier; 0x00ffffffffffffff for none
++	Width, Height int
++}
++
++// ImportState says whether the renderer draws DMA-BUF frames.
++type ImportState int
++
++const (
++	ImportUnknown     ImportState = iota // no DMA-BUF frame drawn yet
++	ImportSupported                      // drawn in place, no copy
++	ImportUnsupported                    // send Image frames instead
++)
++
++// NewStream returns an empty stream. It draws nothing until the first Submit.
++func NewStream() *Stream { return new(Stream) }
++
++// Submit replaces the current frame. It is safe to call from any goroutine.
++func (s *Stream) Submit(f StreamFrame) {
++	var d *stream.DMABuf
++	if b := f.DMABuf; b != nil {
++		d = &stream.DMABuf{ID: b.ID, FD: b.FD, Offset: b.Offset, Pitch: b.Pitch, Fourcc: b.Fourcc,
++			Modifier: b.Modifier, Width: b.Width, Height: b.Height}
++	}
++	s.s.Submit(stream.Frame{Img: f.Image, DMA: d, Release: f.Release})
++	if s.OnFrame != nil {
++		s.OnFrame()
++	}
++}
++
++// ImportState reports whether the renderer drawing this stream imports
++// DMA-BUF frames. It stays ImportUnknown until a DMA-BUF frame is drawn.
++func (s *Stream) ImportState() ImportState { return ImportState(s.s.ImportState()) }
++
++// Size is the current frame's size, zero before the first frame.
++func (s *Stream) Size() image.Point { return s.s.Size() }
++
++// Add sets the brush to the stream's current frame, like ImageOp.Add. Follow
++// it with a PaintOp. The image covers (0,0)-Size().
++func (s *Stream) Add(o *op.Ops) {
++	sz := s.s.Size()
++	if sz.X <= 0 || sz.Y <= 0 {
++		return
++	}
++	if s.shape == nil || s.shape.Rect.Size() != sz {
++		s.shape = &image.RGBA{Rect: image.Rectangle{Max: sz}}
++	}
++	data := ops.Write2(&o.Internal, ops.TypeImageLen, s.shape, &s.s)
++	data[0] = byte(ops.TypeImage)
++	data[1] = byte(s.Filter)
++}

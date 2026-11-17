@@ -85,6 +85,7 @@ func (b Button) Layout(gtx C, th *kit.Theme, c *kit.Clickable) D {
 	return th.Press(gtx, c, b.ID, func(gtx C, st kit.State) D {
 		semantic.Button.Add(gtx.Ops)
 		semantic.LabelOp(label).Add(gtx.Ops)
+		kit.SetRole(gtx, b.ID, kit.RoleButton)
 		s, fg := style(th, st)
 		return s.Layout(gtx, func(gtx C) D {
 			v, h := th.ControlPad(b.Size, 7), th.Space(kit.Space3p5) // 7: one height with fields
@@ -117,6 +118,7 @@ func (b IconButton) Layout(gtx C, th *kit.Theme, c *kit.Clickable) D {
 	return th.Press(gtx, c, b.ID, func(gtx C, st kit.State) D {
 		semantic.Button.Add(gtx.Ops)
 		semantic.LabelOp(b.Label).Add(gtx.Ops)
+		kit.SetRole(gtx, b.ID, kit.RoleButton)
 		s, fg := th.Styled(kit.Surface{Radius: th.RadiusSm()}), th.Dim
 		if b.Active {
 			s.Bg, fg = kit.LerpColor(th.Surface, th.Hover, st.Hover), th.Muted
@@ -142,6 +144,7 @@ func (l Link) Layout(gtx C, th *kit.Theme, c *kit.Clickable) D {
 	return th.Press(gtx, c, l.ID, func(gtx C, st kit.State) D {
 		semantic.Button.Add(gtx.Ops)
 		semantic.LabelOp(l.Text).Add(gtx.Ops)
+		kit.SetRole(gtx, l.ID, kit.RoleLink)
 		fg := th.Accent
 		if st.Hovered || st.Focused {
 			fg = th.Fg
@@ -195,6 +198,7 @@ func (tb Toolbar) Layout(gtx C, th *kit.Theme) D {
 			})
 		})
 	}
+	kit.SetRole(gtx, tb.ID, kit.RoleToolbar)
 	return kit.Group(gtx, tb.ID, th.Strings.Toolbar, func(gtx C) D {
 		return kit.Flow(gtx, th.Space(kit.Space1p5), th.Space(kit.Space1p5), items...)
 	})

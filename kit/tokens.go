@@ -136,6 +136,19 @@ func ThemeFromTokens(data []byte, base *Theme) (*Theme, error) {
 			*tk.v = unit.Sp(f)
 		}
 	}
+	for _, tk := range t.Metrics.tokens() {
+		v, ok, err := get("size." + tk.name)
+		if err != nil {
+			return nil, err
+		}
+		if ok {
+			f, err := parseDimension(v)
+			if err != nil {
+				return nil, fmt.Errorf("kit: tokens: size.%s: %w", tk.name, err)
+			}
+			*tk.v = unit.Dp(f)
+		}
+	}
 	num := func(path string, set func(float64)) error {
 		v, ok, err := get(path)
 		if err != nil || !ok {
@@ -281,9 +294,13 @@ func (t *Theme) Tokens() []byte {
 	for _, tk := range ts.tokens() {
 		sizes[tk.name] = tok("dimension", dim(float32(*tk.v)))
 	}
+	metrics := map[string]any{}
+	for _, tk := range t.Metrics.tokens() {
+		metrics[tk.name] = tok("dimension", dim(float32(*tk.v)))
+	}
 	out := map[string]any{
 		"$name": t.Name, "name": tok("string", t.Name), "dark": tok("boolean", t.Dark),
-		"color": colors, "font-size": sizes,
+		"color": colors, "font-size": sizes, "size": metrics,
 		"radius":         tok("dimension", dim(float32(t.Radius))),
 		"stroke":         tok("dimension", dim(float32(t.Stroke))),
 		"ring":           tok("dimension", dim(float32(t.Ring))),

@@ -22,8 +22,21 @@ that call `kittest.New` should call `kittest.NoGPU(t, err)` on error.
 Every input call settles, then (in strict mode) runs a stale check.
 
 - **Pointer:**
-  - `Move(pt)`, `Click(pt)`, `Scroll(pt, dy)`
-  - `Hover(id)`, `ClickID(id)`, `ScrollID(id, dy)`
+  - `Move(pt)`, `Click(pt)`, `ClickMods(pt, mods)`, `DoubleClick(pt)`, `RightClick(pt)`, `Scroll(pt, dy)`, `Drag(from, to)`
+  - `ByRole(kit.RoleButton, "Save")` returns the id of the one control with
+    that role and spoken label (fails on none or several); `ClickRole` clicks
+    it. Roles are WAI-ARIA (`RoleTab`, `RoleOption`, `RoleMenuItem`,
+    `RoleTreeItem`, `RoleRow`…), recorded by kit components; `h.Role(id)`
+    reads one. Tests written this way read like the UI and check labels and
+    roles for free.
+  - `Hover(id)`, `ClickID(id)`, `ClickIDMods(id, mods)`, `DoubleClickID(id)`, `RightClickID(id)`, `ScrollID(id, dy)`, `DragID(id, dx, dy)`: aim at the visible part of the widget (its
+    bounds clipped by ancestors such as a list's viewport); a widget clipped
+    out of view fails the test instead of clicking whatever covers the point.
+    Scroll it into view first.
+- **Async:** pass `h.App()` to `kit.Spawn`/`Post` in the code under test:
+  work runs off the UI goroutine as in a real window, so the test sees the
+  in-flight state (a spinner, "loading"); `h.RunTasks()` waits for the work
+  and settles, so the results are drawn. (A nil app still runs work inline.)
 - **Keyboard:**
   - `Key(name, mods)`: unhandled Tab/Shift+Tab move focus, like a real window.
   - `Tab(back)`
@@ -174,6 +187,12 @@ it, Down focuses the first item, Enter picks once and returns focus to the
 trigger, Escape dismisses onto the trigger, and the open layer is clean under
 every preset, at scale 2 and in the extreme styles.
 `TestCatchesBrokenComposites` proves each step on a broken menu.
+Focus-group collections (lists, trees, tables) run `conform.Group`
+(`TestConformanceGroup`): one Tab stop on the selected row, Down selects the
+next row with one pick, a click selects, disabled blocks Tab, keys and
+clicks, clean under presets, scale and styles. `TestComponentCoverage`
+(internal/lint) fails when a kit/ui component has no gallery demo or no row
+(exemptions carry a reason).
 
 ## Lint (`internal/lint`)
 

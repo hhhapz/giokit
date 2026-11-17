@@ -9,9 +9,11 @@ import (
 
 // Action is one named command shared by shortcuts, menus, and palettes.
 type Action struct {
-	ID, Title string
-	Run       func()
-	Enabled   func() bool // nil means enabled
+	ID, Title   string
+	Category    string // groups actions in menus and palettes ("File", "View"); searched too
+	Description string // a longer explanation for palettes and help
+	Run         func()
+	Enabled     func() bool // nil means enabled
 }
 
 type Actions struct {
@@ -55,18 +57,66 @@ func (a *Actions) Run(id string) bool {
 	act.Run()
 	return true
 }
+
+// Search returns the enabled actions matching query, best first: the title
+// starting with it, then a word of the title starting with it, then the
+// title, category or id containing it, then its letters in order ("gtp"
+// finds "Go to page"). An empty query lists every enabled action in
+// registration order.
 func (a *Actions) Search(query string) []Action {
 	query = strings.ToLower(strings.TrimSpace(query))
-	var out []Action
+	type hit struct {
+		act   Action
+		score int
+	}
+	var hits []hit
 	for _, act := range a.items {
 		if act.Enabled != nil && !act.Enabled() {
 			continue
 		}
-		if query == "" || strings.Contains(strings.ToLower(act.Title), query) || strings.Contains(strings.ToLower(act.ID), query) {
-			out = append(out, act)
+		if sc := matchScore(query, act); sc > 0 {
+			hits = append(hits, hit{act, sc})
 		}
 	}
+	slices.SortStableFunc(hits, func(x, y hit) int { return y.score - x.score })
+	out := make([]Action, len(hits))
+	for i, h := range hits {
+		out[i] = h.act
+	}
 	return out
+}
+
+// matchScore ranks how well query (lower case) matches act; 0 is no match.
+func matchScore(query string, act Action) int {
+	if query == "" {
+		return 1
+	}
+	title := strings.ToLower(act.Title)
+	switch {
+	case strings.HasPrefix(title, query):
+		return 5
+	case strings.Contains(" "+title, " "+query):
+		return 4
+	case strings.Contains(title, query):
+		return 3
+	case strings.Contains(strings.ToLower(act.Category), query) || strings.Contains(strings.ToLower(act.ID), query):
+		return 2
+	case subsequence(query, title):
+		return 1
+	}
+	return 0
+}
+
+// subsequence reports whether q's runes appear in s in order.
+func subsequence(q, s string) bool {
+	r := []rune(q)
+	i := 0
+	for _, c := range s {
+		if i < len(r) && c == r[i] {
+			i++
+		}
+	}
+	return i == len(r)
 }
 
 // UnknownActionsError lists override ids that name no registered action,

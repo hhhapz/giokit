@@ -20,8 +20,8 @@ import (
 // tokenFiles may define colours: they are the palette and token tables.
 var tokenFiles = []string{"color.go", "theme.go", "tokens.go"}
 
-// dpBaseline is the number of geometry literals per file today (audit 04
-// F1). They move into Theme metrics during the component sweep.
+// dpBaseline is the number of geometry literals per file today. They move
+// into Theme metrics.
 var dpBaseline = map[string]int{
 	"draw.go": 2, "feedback.go": 1, "menu.go": 1, "overlay.go": 6, "scroll.go": 8,
 	"ui/collections.go": 2, "ui/datefield.go": 3, "ui/display.go": 6, "ui/navigation.go": 1, "ui/overlays.go": 3,
@@ -29,7 +29,7 @@ var dpBaseline = map[string]int{
 }
 
 // englishBaseline is the number of English string literals shown or
-// announced per file today (audit 04 F5). They move into Theme strings.
+// announced per file today. They move into Theme strings.
 var englishBaseline = map[string]int{}
 
 type finding struct {
@@ -180,7 +180,7 @@ func parseKit(t *testing.T) (*token.FileSet, map[string]*ast.File) {
 	t.Helper()
 	fset := token.NewFileSet()
 	files := map[string]*ast.File{}
-	for _, dir := range []string{"", "ui/", "x/"} {
+	for _, dir := range []string{"", "ui/", "x/", "x/video/"} {
 		paths, err := filepath.Glob("../../kit/" + dir + "*.go")
 		if err != nil || len(paths) == 0 {
 			t.Fatalf("no kit/%s sources: %v", dir, err)
@@ -316,5 +316,72 @@ func bad(gtx C, t *Theme, id string) {
 		if got := len(c.r(fset, f)); got != c.want {
 			t.Errorf("%s rule found %d, want %d: %v", name, got, c.want, c.r(fset, f))
 		}
+	}
+}
+
+// coverageExempt are kit/ui components without a conformance row, and why.
+var coverageExempt = map[string]string{
+	// display only: no input of their own
+	"Artwork": "display", "Badge": "display", "Banner": "display", "DialogContent": "display",
+	"EmptyState": "display", "FieldError": "display", "Form": "layout of other controls",
+	"Kbd": "display", "Stat": "display", "ToastHost": "host; its close buttons are IconButtons",
+	"Tooltip": "display; hover-only",
+	// interactive, covered by gallery tests until their contract exists
+	"Combobox":       "its trigger is an editor: typing opens the list",
+	"ContextMenu":    "opens on a right click",
+	"CommandPalette": "a modal",
+	"Split":          "a drag control",
+	"ReorderList":    "its buttons are IconButtons; the drag handle needs a drag contract",
+}
+
+// Every kit/ui component (an exported type with a Layout method) has a
+// gallery demo, and a conformance row unless coverageExempt says why.
+func TestComponentCoverage(t *testing.T) {
+	fset := token.NewFileSet()
+	paths, _ := filepath.Glob("../../kit/ui/*.go")
+	var comps []string
+	for _, p := range paths {
+		if strings.HasSuffix(p, "_test.go") {
+			continue
+		}
+		f, err := parser.ParseFile(fset, p, nil, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, d := range f.Decls {
+			fn, ok := d.(*ast.FuncDecl)
+			if !ok || fn.Name.Name != "Layout" || fn.Recv == nil {
+				continue
+			}
+			if id, ok := fn.Recv.List[0].Type.(*ast.Ident); ok && id.IsExported() {
+				comps = append(comps, id.Name)
+			}
+		}
+	}
+	read := func(glob string) string {
+		var b strings.Builder
+		ps, _ := filepath.Glob(glob)
+		for _, p := range ps {
+			src, _ := os.ReadFile(p)
+			b.Write(src)
+		}
+		return b.String()
+	}
+	gallery := read("../../examples/gallery/*.go")
+	conform := read("../../kit/ui/conform_test.go")
+	for _, c := range comps {
+		if !strings.Contains(gallery, "ui."+c+"{") {
+			t.Errorf("ui.%s has no gallery demo (examples/gallery)", c)
+		}
+		_, exempt := coverageExempt[c]
+		if !exempt && !strings.Contains(conform, "ui."+c+"{") {
+			t.Errorf("ui.%s has no conformance row (kit/ui/conform_test.go) and no coverageExempt reason", c)
+		}
+		if exempt && strings.Contains(conform, "ui."+c+"{") {
+			t.Errorf("ui.%s has a conformance row now: drop it from coverageExempt", c)
+		}
+	}
+	if len(comps) < 30 {
+		t.Fatalf("found only %d components: the scan is broken", len(comps))
 	}
 }

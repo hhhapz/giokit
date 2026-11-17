@@ -37,6 +37,24 @@ var DefaultMetrics = Metrics{
 	ToastWidth: 340, ReadingWidth: 360, LabelWidth: 132, NarrowWidth: 440,
 }
 
+type metricToken struct {
+	name string
+	v    *unit.Dp
+}
+
+// tokens names each metric for DTCG files (group "size").
+func (m *Metrics) tokens() []metricToken {
+	return []metricToken{
+		{"icon", &m.IconSize}, {"icon-lg", &m.IconSizeLg}, {"check", &m.CheckSize},
+		{"icon-button", &m.IconButtonSize}, {"switch-width", &m.SwitchWidth},
+		{"switch-height", &m.SwitchHeight}, {"hit", &m.HitSize}, {"pane-min", &m.PaneMinSize},
+		{"menu-min-width", &m.MenuMinWidth}, {"list-max-height", &m.ListMaxHeight},
+		{"popover-max-width", &m.PopoverMaxWidth}, {"dialog-max-width", &m.DialogMaxWidth},
+		{"toast-width", &m.ToastWidth}, {"reading-width", &m.ReadingWidth},
+		{"label-width", &m.LabelWidth}, {"narrow-width", &m.NarrowWidth},
+	}
+}
+
 // Strings is the text kit itself shows or speaks. Fields with %s or %g are
 // fmt formats (%[1]s reorders for languages that need it). Replace the
 // theme's Strings to translate.

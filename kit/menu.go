@@ -19,6 +19,8 @@ type MenuRow struct {
 	Danger      bool   // destructive: drawn in the bad colour
 	Checked     bool   // a check mark: the selected option
 	Highlighted bool   // lit without focus: a combobox's keyboard choice
+	Content     W      // optional: drawn instead of the label text (Label is still spoken)
+	Role        Role   // RoleMenuItem by default; RoleOption in selects and pickers
 }
 
 // MenuRow lays out r as a pressable row (lit on hover, focus or
@@ -28,6 +30,11 @@ func (t *Theme) MenuRow(gtx C, c *Clickable, id string, r MenuRow) D {
 	return t.Press(gtx, c, id, func(gtx C, st State) D {
 		semantic.Button.Add(gtx.Ops)
 		semantic.LabelOp(label).Add(gtx.Ops)
+		role := r.Role
+		if role == "" {
+			role = RoleMenuItem
+		}
+		SetRole(gtx, id, role)
 		fg := t.Fg
 		if danger {
 			fg = t.Bad
@@ -47,7 +54,12 @@ func (t *Theme) MenuRow(gtx C, c *Clickable, id string, r MenuRow) D {
 						}
 						return layout.Inset{Right: t.Space(Space2)}.Layout(gtx, func(gtx C) D { return icon(gtx, t.IconSize, fg) })
 					}),
-					Flexed(1, func(gtx C) D { return t.Text(gtx, label, t.Type.Body, fg, Regular) }),
+					Flexed(1, func(gtx C) D {
+						if r.Content != nil {
+							return r.Content(gtx)
+						}
+						return t.Text(gtx, label, t.Type.Body, fg, Regular)
+					}),
 					Rigid(func(gtx C) D {
 						if hint == "" {
 							return D{}
@@ -80,7 +92,15 @@ func (t *Theme) MenuRowWidth(gtx C, r MenuRow) int {
 		m.Stop()
 		return d.Size.X
 	}
-	w := gtx.Dp(t.Space(Space2))*2 + text(label, t.Type.Body)
+	contentW := text(label, t.Type.Body)
+	if r.Content != nil {
+		m := op.Record(gtx.Ops) // measured, then dropped
+		g := gtx
+		g.Constraints = layout.Constraints{Max: image.Pt(1<<20, 1<<20)}
+		contentW = r.Content(g).Size.X
+		m.Stop()
+	}
+	w := gtx.Dp(t.Space(Space2))*2 + contentW
 	if icon {
 		w += gtx.Dp(14 + 8)
 	}
@@ -97,14 +117,21 @@ func (t *Theme) MenuRowWidth(gtx C, r MenuRow) int {
 // the theme's control size, surface and border, a hover tint from
 // st.Hover, and the focus ring while st.Focused. Field-like triggers
 // (select, date) are built on it; TextField draws the same chrome.
-func (t *Theme) Field(gtx C, st State, w W) D {
+func (t *Theme) Field(gtx C, st State, w W) D { return t.SizedField(gtx, ControlDefault, st, w) }
+
+// SizedField is Field at a control size (ControlDefault: the theme's), for
+// components with a per-instance Size.
+func (t *Theme) SizedField(gtx C, size ControlSize, st State, w W) D {
 	s := t.Styled(Surface{Bg: t.StateColor(t.Surface, State{Hover: st.Hover}), Border: t.Border, Radius: t.Radius})
 	if st.Focused {
 		s.Focus = t.Focus
 	}
-	gtx.Constraints.Min.X = gtx.Constraints.Max.X
+	// Full width, natural height: a caller's minimum height (a window's)
+	// would stretch the field and leave its popup no room.
+	gtx.Constraints.Min = image.Pt(gtx.Constraints.Max.X, 0)
 	return s.Layout(gtx, func(gtx C) D {
-		return layout.Inset{Top: t.control(7), Bottom: t.control(7), Left: t.Space(Space2p5), Right: t.Space(Space2)}.Layout(gtx, w)
+		v := t.ControlPad(size, 7)
+		return layout.Inset{Top: v, Bottom: v, Left: t.Space(Space2p5), Right: t.Space(Space2)}.Layout(gtx, w)
 	})
 }
 

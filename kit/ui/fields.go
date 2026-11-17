@@ -21,9 +21,10 @@ import (
 type TextField struct {
 	ID          string
 	Placeholder string
-	Label       string   // spoken name; default Placeholder
-	Icon        kit.Icon // optional leading icon (IconSearch for a search box)
-	Password    bool     // mask the text (the value is unchanged)
+	Label       string          // spoken name; default Placeholder
+	Icon        kit.Icon        // optional leading icon (IconSearch for a search box)
+	Password    bool            // mask the text (the value is unchanged)
+	Size        kit.ControlSize // ControlDefault is the theme's
 }
 
 func (f TextField) Layout(gtx C, th *kit.Theme, e *widget.Editor) D {
@@ -31,7 +32,7 @@ func (f TextField) Layout(gtx C, th *kit.Theme, e *widget.Editor) D {
 	if f.Password {
 		e.Mask = '•'
 	}
-	return th.EditorField(gtx, e, f.ID, kit.EditorField{Placeholder: f.Placeholder, Label: f.Label, Icon: f.Icon})
+	return th.EditorField(gtx, e, f.ID, kit.EditorField{Placeholder: f.Placeholder, Label: f.Label, Icon: f.Icon, Size: f.Size})
 }
 
 // TextArea is a multi-line input (Enter inserts a newline) at least Lines
@@ -56,6 +57,7 @@ type NumberField struct {
 	Placeholder string
 	Min, Max    float64
 	Step        float64
+	Size        kit.ControlSize // ControlDefault is the theme's
 }
 
 // NumberFieldState holds the editor and the parsed value. Value and Error
@@ -155,7 +157,7 @@ func (f NumberField) Layout(gtx C, th *kit.Theme, s *NumberFieldState) D {
 	s.Editor.SingleLine = true
 	return kit.Flex{Align: layout.Middle, Gap: kit.Space1}.Layout(gtx, th,
 		kit.Flexed(1, func(gtx C) D {
-			return th.EditorField(gtx, &s.Editor, f.ID, kit.EditorField{Placeholder: f.Placeholder})
+			return th.EditorField(gtx, &s.Editor, f.ID, kit.EditorField{Placeholder: f.Placeholder, Size: f.Size})
 		}),
 		kit.Rigid(func(gtx C) D {
 			return kit.Row(gtx,

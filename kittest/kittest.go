@@ -25,6 +25,7 @@ import (
 	"gioui.org/io/input"
 	"gioui.org/io/key"
 	"gioui.org/io/pointer"
+	"gioui.org/io/semantic"
 	"gioui.org/layout"
 	"gioui.org/op"
 	"gioui.org/unit"
@@ -33,6 +34,7 @@ import (
 )
 
 type Harness struct {
+	app    *kit.App    // h.App(), drained before each frame
 	Size   image.Point // pixels
 	Metric unit.Metric
 	Frames int // total frames drawn
@@ -142,6 +144,9 @@ func NewTAt(t TB, wdp, hdp int, scale float32, draw func(gtx layout.Context)) *H
 func (h *Harness) Release() { h.win.Release() }
 
 func (h *Harness) frame() {
+	if h.app != nil {
+		h.app.Drain() // posted callbacks run before the frame, as in kit.App.Run
+	}
 	h.ops.Reset()
 	gtx := layout.Context{
 		Ops:         &h.ops,
@@ -189,6 +194,34 @@ func (h *Harness) Settle() int {
 	}
 }
 
+// App is an App for the code under test: pass it to kit.Spawn and Post so
+// work runs off the UI goroutine as in a real window, and its callbacks run
+// before the harness's next frame. RunTasks waits for the work to finish.
+func (h *Harness) App() *kit.App {
+	if h.app == nil {
+		h.app = kit.NewApp("kittest", "kittest", 0, 0)
+	}
+	return h.app
+}
+
+// RunTasks waits (up to 10s) for every kit.Spawn started on h.App() to
+// finish, then settles, so their done callbacks have run and drawn. Before
+// it, a test sees the UI as the user does while work is in flight.
+func (h *Harness) RunTasks() {
+	if h.app == nil {
+		return
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for h.app.Pending() > 0 {
+		if time.Now().After(deadline) {
+			h.fatal(fmt.Sprintf("RunTasks: %d task(s) still running after 10s", h.app.Pending()))
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	h.after("run tasks")
+}
+
 // Wait advances the virtual clock by d and settles: use it for hover delays
 // (tooltips) or to step a continuous animation.
 func (h *Harness) Wait(d time.Duration) {
@@ -225,6 +258,31 @@ func (h *Harness) Click(p image.Point) {
 	h.after(fmt.Sprintf("click at %v", p))
 }
 
+// ClickMods clicks at p holding modifiers (Shift-click to extend, Ctrl-click
+// to toggle).
+func (h *Harness) ClickMods(p image.Point, mods key.Modifiers) {
+	h.Move(p)
+	h.router.Queue(
+		pointer.Event{Kind: pointer.Press, Source: pointer.Mouse, Buttons: pointer.ButtonPrimary, Position: h.cursor, Modifiers: mods, Time: since()},
+		pointer.Event{Kind: pointer.Release, Source: pointer.Mouse, Position: h.cursor, Modifiers: mods, Time: since()},
+	)
+	h.after(fmt.Sprintf("%v-click at %v", mods, p))
+}
+
+// DoubleClick clicks twice at p in quick succession (gesture.Click reports
+// NumClicks 2 for the second).
+func (h *Harness) DoubleClick(p image.Point) {
+	h.Move(p)
+	press := pointer.Event{Kind: pointer.Press, Source: pointer.Mouse, Buttons: pointer.ButtonPrimary, Position: h.cursor}
+	release := pointer.Event{Kind: pointer.Release, Source: pointer.Mouse, Position: h.cursor}
+	t := since()
+	for i := range 2 {
+		press.Time, release.Time = t+time.Duration(2*i)*time.Millisecond, t+time.Duration(2*i+1)*time.Millisecond
+		h.router.Queue(press, release)
+	}
+	h.after(fmt.Sprintf("double click at %v", p))
+}
+
 // RightClick moves to p, then presses and releases the secondary button.
 func (h *Harness) RightClick(p image.Point) {
 	h.Move(p)
@@ -258,20 +316,34 @@ func (h *Harness) Drag(from, to image.Point) {
 	h.after(fmt.Sprintf("drag %v→%v", from, to))
 }
 
-// DragID drags the widget tagged id by (dx, dy) pixels from its center.
+// DragID drags the widget tagged id by (dx, dy) pixels from the center of
+// its visible part.
 func (h *Harness) DragID(id string, dx, dy int) {
-	c := Center(h.must(id))
+	c := Center(h.mustVisible(id))
 	h.Drag(c, c.Add(image.Pt(dx, dy)))
 }
 
 // ScrollID scrolls the region tagged id by dy pixels.
-func (h *Harness) ScrollID(id string, dy float32) { h.Scroll(Center(h.must(id)), dy) }
+func (h *Harness) ScrollID(id string, dy float32) { h.Scroll(Center(h.mustVisible(id)), dy) }
 
-// Hover moves to the center of the widget tagged id.
-func (h *Harness) Hover(id string) { h.Move(Center(h.must(id))) }
+// Hover moves to the center of the visible part of the widget tagged id.
+func (h *Harness) Hover(id string) { h.Move(Center(h.mustVisible(id))) }
 
-// ClickID clicks the center of the widget tagged id.
-func (h *Harness) ClickID(id string) { h.Click(Center(h.must(id))) }
+// ClickID clicks the center of the visible part of the widget tagged id.
+// A widget clipped out of view (laid out past the end of a scrolled list)
+// fails the test rather than clicking whatever covers that point.
+func (h *Harness) ClickID(id string) { h.Click(Center(h.mustVisible(id))) }
+
+// ClickIDMods clicks the widget tagged id holding modifiers.
+func (h *Harness) ClickIDMods(id string, mods key.Modifiers) {
+	h.ClickMods(Center(h.mustVisible(id)), mods)
+}
+
+// DoubleClickID double-clicks the widget tagged id.
+func (h *Harness) DoubleClickID(id string) { h.DoubleClick(Center(h.mustVisible(id))) }
+
+// RightClickID right-clicks the widget tagged id (context menus).
+func (h *Harness) RightClickID(id string) { h.RightClick(Center(h.mustVisible(id))) }
 
 // ---- keyboard input ----
 
@@ -365,41 +437,10 @@ func (h *Harness) Disabled(id string) bool {
 	return false
 }
 
-// focusedTagID returns the semantic id of the widget with keyboard focus, or ""
-// when nothing (or nothing with an id) has it: the widget whose bounds
-// match the focused handler's area, or else the smallest one containing it.
+// focusedTagID is the id of the control holding keyboard focus, as kit
+// recorded it (kit.FocusID), or "" when nothing with an id has focus.
 func (h *Harness) focusedTagID() string {
-	src := h.router.Source()
-	tag := src.FocusedTag()
-	if tag == nil {
-		return ""
-	}
-	b, ok := src.Bounds(tag)
-	if !ok {
-		return ""
-	}
-	// Nodes come parents first, so the last exact match is the innermost:
-	// a group exactly the size of its only control names the control.
-	exact, best, area := "", "", -1
-	for _, n := range h.nodes() {
-		d := n.Desc
-		if d.Description == "" {
-			continue
-		}
-		if d.Bounds == b {
-			exact = d.Description
-			continue
-		}
-		if b.In(d.Bounds) {
-			if a := d.Bounds.Dx() * d.Bounds.Dy(); area < 0 || a < area {
-				best, area = d.Description, a
-			}
-		}
-	}
-	if exact != "" {
-		return exact
-	}
-	return best
+	return h.kwin.FocusedID(h.router.Source())
 }
 
 // FocusedID is the id of the focused widget. When focus is on a focus group
@@ -412,6 +453,50 @@ func (h *Harness) FocusedID() string {
 	}
 	return id
 }
+
+// Role is the role of the widget tagged id: as kit recorded it
+// (kit.SetRole; every kit component does), else derived from its Gio
+// semantic class, else "".
+func (h *Harness) Role(id string) kit.Role {
+	if r, ok := h.kwin.Roles()[id]; ok {
+		return r
+	}
+	n, ok := h.node(func(d input.SemanticDesc) bool { return d.Description == id })
+	if !ok {
+		return ""
+	}
+	return classRole[n.Desc.Class]
+}
+
+var classRole = map[semantic.ClassOp]kit.Role{
+	semantic.Button: kit.RoleButton, semantic.CheckBox: kit.RoleCheckbox,
+	semantic.Editor: kit.RoleTextbox, semantic.RadioButton: kit.RoleRadio, semantic.Switch: kit.RoleSwitch,
+}
+
+// ByRole returns the id of the one control with role and spoken label (as a
+// screen reader announces it: "the Save button", "the Editor tab"), and
+// fails when there is none or several. Querying this way checks the
+// accessibility on the way: an unlabelled control cannot be found.
+func (h *Harness) ByRole(role kit.Role, label string) string {
+	var ids []string
+	for _, n := range h.nodes() {
+		if id := n.Desc.Description; id != "" && n.Desc.Label == label && h.Role(id) == role {
+			ids = append(ids, id)
+		}
+	}
+	switch len(ids) {
+	case 1:
+		return ids[0]
+	case 0:
+		h.fatal(fmt.Sprintf("no %s labelled %q on screen", role, label))
+	default:
+		h.fatal(fmt.Sprintf("%d controls are %s labelled %q: %v (disambiguate by id)", len(ids), role, label, ids))
+	}
+	return ""
+}
+
+// ClickRole clicks the control with role and spoken label (ByRole).
+func (h *Harness) ClickRole(role kit.Role, label string) { h.ClickID(h.ByRole(role, label)) }
 
 // FindText returns the bounds of the first text label exactly equal to s.
 func (h *Harness) FindText(s string) (image.Rectangle, bool) {
@@ -452,6 +537,29 @@ func (h *Harness) IDs() []string {
 		}
 	}
 	return out
+}
+
+// mustVisible is the part of the widget tagged id that is on screen: its
+// bounds clipped by its ancestors' (a scrolled list's viewport) and the
+// window. Pointer helpers aim there; none visible fails the test.
+func (h *Harness) mustVisible(id string) image.Rectangle {
+	h.must(id)
+	nodes := h.nodes()
+	byID := make(map[input.SemanticID]input.SemanticNode, len(nodes))
+	for _, n := range nodes {
+		byID[n.ID] = n
+	}
+	screen := image.Rectangle{Max: h.Size}
+	for _, n := range nodes {
+		if n.Desc.Description != id {
+			continue
+		}
+		if v := visible(byID, n, screen); !v.Empty() {
+			return v
+		}
+		h.fatal(fmt.Sprintf("widget %q is not visible: bounds %v are clipped out of view (scroll it into view first)", id, n.Desc.Bounds))
+	}
+	return h.must(id)
 }
 
 func (h *Harness) must(id string) image.Rectangle {

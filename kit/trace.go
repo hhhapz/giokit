@@ -13,9 +13,9 @@ import (
 //
 //	giokit <ms since start> f<frame> <kind> key=value ...
 //
-// so one stderr log interleaves Gio's window events (wl_*, scroll_flush,
-// gpu_frame, present: patched in, see docs/gio-patches.md), frame pacing and
-// per-frame list state, in order. Lines go through one buffered writer that
+// so one stderr log interleaves frame pacing, per-frame list state and, with
+// kit/forktrace imported on giokit's Gio fork, Gio's window events (wl_*,
+// scroll_flush, gpu_frame, present), in order. Lines go through one buffered writer that
 // is flushed each frame, so tracing doesn't itself cause stutter.
 //
 // Set GIOKIT_TRACE_FILE=path to write there instead of stderr.
@@ -42,6 +42,14 @@ func init() {
 	}
 	trc.w = bufio.NewWriterSize(out, 1<<16)
 }
+
+// TraceEnabled reports GIOKIT_TRACE.
+func TraceEnabled() bool { return traceEnabled }
+
+// Tracef writes one GIOKIT_TRACE line (kv alternates keys and values); a
+// no-op without GIOKIT_TRACE. kit/forktrace routes the fork's window events
+// here.
+func Tracef(kind string, kv ...any) { tracef(kind, kv...) }
 
 // tracef writes one trace line; kv alternates keys and values.
 func tracef(kind string, kv ...any) {

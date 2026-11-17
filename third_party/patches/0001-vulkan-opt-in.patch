@@ -1,0 +1,55 @@
+--- a/app/vulkan.go
++++ b/app/vulkan.go
+@@ -1,6 +1,7 @@
+ // SPDX-License-Identifier: Unlicense OR MIT
+ 
+-//go:build (linux || freebsd) && !novulkan
++// giokit patch: Vulkan is opt-in on desktop Linux/FreeBSD (-tags vulkan); see docs/gio-patches.md.
++//go:build (linux || freebsd) && (vulkan || (android && !novulkan))
+ 
+ package app
+ 
+--- a/app/vulkan_wayland.go
++++ b/app/vulkan_wayland.go
+@@ -1,6 +1,7 @@
+ // SPDX-License-Identifier: Unlicense OR MIT
+ 
+-//go:build ((linux && !android) || freebsd) && !nowayland && !novulkan
++// giokit patch: Vulkan is opt-in on desktop Linux/FreeBSD (-tags vulkan); see docs/gio-patches.md.
++//go:build ((linux && !android) || freebsd) && !nowayland && vulkan
+ 
+ package app
+ 
+--- a/app/vulkan_x11.go
++++ b/app/vulkan_x11.go
+@@ -1,6 +1,7 @@
+ // SPDX-License-Identifier: Unlicense OR MIT
+ 
+-//go:build ((linux && !android) || freebsd) && !nox11 && !novulkan
++// giokit patch: Vulkan is opt-in on desktop Linux/FreeBSD (-tags vulkan); see docs/gio-patches.md.
++//go:build ((linux && !android) || freebsd) && !nox11 && vulkan
+ 
+ package app
+ 
+--- a/gpu/headless/headless_vulkan.go
++++ b/gpu/headless/headless_vulkan.go
+@@ -1,6 +1,7 @@
+ // SPDX-License-Identifier: Unlicense OR MIT
+ 
+-//go:build (linux || freebsd) && !novulkan
++// giokit patch: Vulkan is opt-in on desktop Linux/FreeBSD (-tags vulkan); see docs/gio-patches.md.
++//go:build (linux || freebsd) && (vulkan || (android && !novulkan))
+ 
+ package headless
+ 
+--- a/gpu/internal/vulkan/vulkan.go
++++ b/gpu/internal/vulkan/vulkan.go
+@@ -1,6 +1,7 @@
+ // SPDX-License-Identifier: Unlicense OR MIT
+ 
+-//go:build (linux || freebsd) && !novulkan
++// giokit patch: Vulkan is opt-in on desktop Linux/FreeBSD (-tags vulkan); see docs/gio-patches.md.
++//go:build (linux || freebsd) && (vulkan || (android && !novulkan))
+ 
+ package vulkan
+ 

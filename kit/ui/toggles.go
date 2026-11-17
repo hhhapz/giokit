@@ -27,6 +27,7 @@ type Checkbox struct {
 func (x Checkbox) Layout(gtx C, th *kit.Theme, c *kit.Clickable) D {
 	return th.Press(gtx, c, x.ID, func(gtx C, st kit.State) D {
 		semantic.CheckBox.Add(gtx.Ops)
+		kit.SetRole(gtx, x.ID, kit.RoleCheckbox)
 		semantic.LabelOp(x.Label).Add(gtx.Ops)
 		semantic.SelectedOp(x.Checked).Add(gtx.Ops)
 		s := th.Styled(kit.Surface{Bg: kit.WithAlpha(th.Surface, uint8(255*st.Hover)), Border: kit.LerpColor(th.Dim, th.Muted, st.Hover), Radius: min(th.RadiusSm(), 5)})
@@ -58,6 +59,7 @@ type Switch struct {
 func (x Switch) Layout(gtx C, th *kit.Theme, c *kit.Clickable) D {
 	return th.Press(gtx, c, x.ID, func(gtx C, st kit.State) D {
 		semantic.Switch.Add(gtx.Ops)
+		kit.SetRole(gtx, x.ID, kit.RoleSwitch)
 		semantic.LabelOp(x.Label).Add(gtx.Ops)
 		semantic.SelectedOp(x.On).Add(gtx.Ops)
 		target := float32(0)
@@ -99,6 +101,7 @@ type Radio struct {
 func (x Radio) Layout(gtx C, th *kit.Theme, c *kit.Clickable) D {
 	return th.Press(gtx, c, x.ID, func(gtx C, st kit.State) D {
 		semantic.RadioButton.Add(gtx.Ops)
+		kit.SetRole(gtx, x.ID, kit.RoleRadio)
 		semantic.LabelOp(x.Label).Add(gtx.Ops)
 		semantic.SelectedOp(x.Selected).Add(gtx.Ops)
 		target := float32(0)
@@ -154,6 +157,7 @@ type SliderState struct {
 
 	value     float32 // last laid out
 	width, kr int     // last frame's width and knob radius
+	disabled  bool    // laid out disabled: Update ignores input
 }
 
 // Dragging reports whether the slider is being dragged.
@@ -169,6 +173,9 @@ const (
 // Update returns the value input set since the last call (drag, click,
 // wheel, keys). Call it in the handle pass.
 func (s *SliderState) Update(gtx C) (float32, bool) {
+	if s.disabled {
+		return s.value, false // a disabled slider registers no handlers; nothing to read
+	}
 	v, changed := s.value, false
 	set := func(nv float32) {
 		nv = max(0, min(1, nv))
@@ -236,6 +243,7 @@ func (x Slider) Layout(gtx C, th *kit.Theme, s *SliderState) D {
 	w := gtx.Constraints.Max.X
 	kr := gtx.Dp(kit.Space2)
 	s.value, s.width, s.kr = max(0, min(1, x.Value)), w, kr
+	s.disabled = !gtx.Enabled()
 	sz := image.Pt(w, h)
 
 	track := gtx.Dp(kit.Space1)
@@ -257,11 +265,13 @@ func (x Slider) Layout(gtx C, th *kit.Theme, s *SliderState) D {
 		kit.Border(gtx, ring, ring.Dx()/2, max(1, gtx.Dp(th.Ring)), th.Focus)
 	}
 	defer clip.Rect(image.Rectangle{Max: sz}).Push(gtx.Ops).Pop()
-	s.drag.Add(gtx.Ops)
-	if gtx.Focused(s) {
-		s.wheel.Add(gtx.Ops) // only claim the wheel while we use it
+	if !s.disabled { // disabled: no handlers, so no drag, wheel, keys or Tab stop
+		s.drag.Add(gtx.Ops)
+		if gtx.Focused(s) {
+			s.wheel.Add(gtx.Ops) // only claim the wheel while we use it
+		}
+		event.Op(gtx.Ops, s)
 	}
-	event.Op(gtx.Ops, s)
 	if x.Label != "" {
 		semantic.LabelOp(x.Label).Add(gtx.Ops)
 	}
@@ -270,10 +280,13 @@ func (x Slider) Layout(gtx C, th *kit.Theme, s *SliderState) D {
 		// gets no events, as a disabled one doesn't.
 		defer clip.Rect(image.Rectangle{Max: sz}).Push(gtx.Ops).Pop()
 		kit.Tag(gtx, x.ID)
+		kit.SetRole(gtx, x.ID, kit.RoleSlider)
 		semantic.EnabledOp(false).Add(gtx.Ops)
 		return D{Size: sz}
 	}
 	pointer.CursorPointer.Add(gtx.Ops)
 	kit.Tag(gtx, x.ID)
+	kit.SetRole(gtx, x.ID, kit.RoleSlider)
+	kit.FocusID(gtx, s, x.ID)
 	return D{Size: sz}
 }

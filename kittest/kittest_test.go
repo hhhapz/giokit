@@ -1,6 +1,7 @@
 package kittest
 
 import (
+	"context"
 	"fmt"
 	"image"
 	"slices"
@@ -699,5 +700,147 @@ func TestFocusedIDPrefersInnermost(t *testing.T) {
 	h.Tab(false)
 	if got := h.FocusedID(); got != "group/save" {
 		t.Fatalf("FocusedID %q, want the button inside the same-sized group", got)
+	}
+}
+
+// Bug (found in an app's settings page): ClickID on a control laid out past
+// the end of a scrolled list clicked whatever covered that point instead,
+// and nothing failed until a later value assertion. Pointer helpers must
+// refuse a widget with no visible area, naming the problem.
+func TestPointerRefusesClippedWidget(t *testing.T) {
+	var l kit.List
+	var cs [4]kit.Clickable
+	clicked := -1
+	h := harness(t, func(gtx C) {
+		for i := range cs {
+			if cs[i].Clicked(gtx) {
+				clicked = i
+			}
+		}
+		th.List(gtx, &l, "list", len(cs), func(gtx C, i int) D {
+			// a tall row whose button sits at its bottom: row 1 starts inside
+			// the 200px window, but its button lies below it
+			return layout.Inset{Top: 150}.Layout(gtx, func(gtx C) D {
+				return ui.Button{ID: fmt.Sprint("row:", i), Text: "Toggle"}.Layout(gtx, th, &cs[i])
+			})
+		})
+	})
+	if _, ok := h.Find("row:1"); !ok {
+		t.Fatal("setup: row 1 should be laid out (it starts inside the window)")
+	}
+	msg := func() (msg string) {
+		defer func() {
+			if r := recover(); r != nil {
+				msg = fmt.Sprint(r)
+			}
+		}()
+		h.ClickID("row:1")
+		return ""
+	}()
+	if !strings.Contains(msg, "not visible") {
+		t.Fatalf("ClickID on a clipped widget did not fail (clicked %d): %q", clicked, msg)
+	}
+	h.ClickID("row:0") // the visible one still works
+	if clicked != 0 {
+		t.Fatalf("visible row: clicked %d", clicked)
+	}
+}
+
+// The pointer helpers deliver what Gio's gestures see: a double click is
+// one click then a NumClicks-2 click, a modifier click carries its keys, a
+// right click its button.
+func TestPointerVariants(t *testing.T) {
+	var g gesture.Click
+	var clicks []gesture.ClickEvent
+	h := harness(t, func(gtx C) {
+		for {
+			e, ok := g.Update(gtx.Source)
+			if !ok {
+				break
+			}
+			if e.Kind == gesture.KindClick {
+				clicks = append(clicks, e)
+			}
+		}
+		defer clip.Rect{Max: image.Pt(100, 40)}.Push(gtx.Ops).Pop()
+		g.Add(gtx.Ops)
+		kit.TagLabel(gtx, "target", "Target")
+	})
+	h.DoubleClickID("target")
+	if len(clicks) != 2 || clicks[1].NumClicks != 2 {
+		t.Fatalf("double click: %+v", clicks)
+	}
+	clicks = nil
+	h.ClickIDMods("target", key.ModShift)
+	if len(clicks) != 1 || clicks[0].Modifiers != key.ModShift {
+		t.Fatalf("shift click: %+v", clicks)
+	}
+	clicks = nil
+	h.RightClickID("target") // gesture.Click takes the primary button only
+	if len(clicks) != 0 {
+		t.Fatalf("right click reached a primary-only gesture: %+v", clicks)
+	}
+}
+
+// Tests can address controls as a user perceives them: role and label.
+func TestByRole(t *testing.T) {
+	var save, cancel kit.Clickable
+	saved := false
+	h := harness(t, func(gtx C) {
+		if save.Clicked(gtx) {
+			saved = true
+		}
+		cancel.Clicked(gtx)
+		kit.Row(gtx,
+			kit.Rigid(func(gtx C) D { return ui.Button{ID: "dlg/ok", Text: "Save"}.Layout(gtx, th, &save) }),
+			kit.Rigid(func(gtx C) D { return ui.Button{ID: "dlg/cancel", Text: "Cancel"}.Layout(gtx, th, &cancel) }),
+		)
+	})
+	if id := h.ByRole(kit.RoleButton, "Cancel"); id != "dlg/cancel" {
+		t.Fatalf("ByRole: %q", id)
+	}
+	h.ClickRole(kit.RoleButton, "Save")
+	if !saved {
+		t.Fatal("ClickRole did not click Save")
+	}
+	msg := func() (msg string) {
+		defer func() { msg = fmt.Sprint(recover()) }()
+		h.ByRole(kit.RoleButton, "Delete")
+		return ""
+	}()
+	if !strings.Contains(msg, `no button labelled "Delete"`) {
+		t.Fatalf("missing control: %q", msg)
+	}
+}
+
+// With h.App(), Spawn runs off the UI goroutine: the test sees the loading
+// state, then RunTasks delivers the result.
+func TestRunTasks(t *testing.T) {
+	var load kit.Clickable
+	status := "idle"
+	release := make(chan struct{})
+	var h *Harness
+	h = harness(t, func(gtx C) {
+		if load.Clicked(gtx) {
+			status = "loading"
+			kit.Spawn(h.App(), func(context.Context) (string, error) { <-release; return "done", nil },
+				func(v string, _ error) { status = v })
+		}
+		kit.Col(gtx,
+			kit.Rigid(func(gtx C) D { return ui.Button{ID: "load", Text: "Load"}.Layout(gtx, th, &load) }),
+			kit.Rigid(func(gtx C) D { return th.Text(gtx, status, th.Type.Body, th.Fg, kit.Regular) }),
+		)
+	})
+	h.ClickID("load")
+	if status != "loading" {
+		t.Fatalf("before the task finishes: %q", status)
+	}
+	close(release)
+	h.RunTasks()
+	if status != "done" {
+		t.Fatalf("after RunTasks: %q", status)
+	}
+	if _, ok := h.FindText("done"); !ok {
+		t.Fatal("the result was not drawn")
 	}
 }

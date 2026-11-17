@@ -2,9 +2,12 @@ package kit
 
 import (
 	"image"
+	"time"
 
 	"gioui.org/io/event"
+	"gioui.org/io/input"
 	"gioui.org/io/key"
+	"gioui.org/io/pointer"
 	"gioui.org/op"
 	"gioui.org/op/clip"
 )
@@ -32,6 +35,20 @@ type frame struct {
 	members map[string][]string // focus group id → member ids, for kittest
 	active  map[string]string   // focus group id → active member id
 	scope   string              // current Scope path, escaped
+
+	size     image.Point          // the window, in pixels (Begin's constraints)
+	pointers []pointerSeen        // this frame's pointer events at the root, window coordinates
+	root     clip.Stack           // the window area, pushed for the whole frame (Begin to End)
+	ids      map[event.Tag]string // focusable tag → id path, for FocusedID
+	images   map[string]bool      // ids of image areas (TagImage)
+	roles    map[string]Role      // id path → role (SetRole)
+}
+
+// pointerSeen is a pointer event as the root saw it: popups compare it with
+// the same event seen by their anchor to learn where the anchor is.
+type pointerSeen struct {
+	at  time.Duration
+	pos image.Point
 }
 
 type ctxNode struct {
@@ -56,8 +73,23 @@ const frameKey = "giokit.frame"
 // Begin starts a frame: it registers the window bounds (Root) and installs
 // the dispatch tree in gtx, which KeyContext, OnAction and Focus use.
 func (w *Window) Begin(gtx C) C {
-	Root(gtx)
 	f := &w.fr
+	f.size = gtx.Constraints.Max
+	f.pointers = f.pointers[:0]
+	for {
+		e, ok := gtx.Event(pointer.Filter{Target: rootTag, Kinds: pointerKinds})
+		if !ok {
+			break
+		}
+		if pe, ok := e.(pointer.Event); ok {
+			f.pointers = append(f.pointers, pointerSeen{pe.Time, pe.Position.Round()})
+		}
+	}
+	// The window area stays pushed until End, so it encloses every area of
+	// the frame and sees every pointer event (Root alone would be a sibling
+	// underneath the page).
+	f.root = clip.Rect(image.Rectangle{Max: gtx.Constraints.Max}).Push(gtx.Ops)
+	event.Op(gtx.Ops, rootTag)
 	f.nodes = append(f.nodes[:0], ctxNode{parent: -1})
 	f.cur = 0
 	f.focus = f.focus[:0]
@@ -65,6 +97,9 @@ func (w *Window) Begin(gtx C) C {
 	f.scope = ""
 	clear(f.members)
 	clear(f.active)
+	clear(f.ids)
+	clear(f.images)
+	clear(f.roles)
 	if gtx.Values == nil {
 		if w.values == nil {
 			w.values = map[string]any{}
@@ -86,14 +121,17 @@ type ActionID string
 
 // Built-in actions, bound by the default keymap.
 const (
-	ActMoveUp   ActionID = "ui.move_up"
-	ActMoveDown ActionID = "ui.move_down"
-	ActFirst    ActionID = "ui.first"
-	ActLast     ActionID = "ui.last"
-	ActExpand   ActionID = "ui.expand"   // Right: open a tree node, or go to its first child
-	ActCollapse ActionID = "ui.collapse" // Left: close a tree node, or go to its parent
-	ActConfirm  ActionID = "ui.confirm"  // Enter: pick the active item
-	ActCancel   ActionID = "ui.cancel"   // Escape: close the innermost popup or dialog
+	ActMoveUp     ActionID = "ui.move_up"
+	ActMoveDown   ActionID = "ui.move_down"
+	ActFirst      ActionID = "ui.first"
+	ActLast       ActionID = "ui.last"
+	ActExpand     ActionID = "ui.expand"      // Right: open a tree node, or go to its first child
+	ActCollapse   ActionID = "ui.collapse"    // Left: close a tree node, or go to its parent
+	ActConfirm    ActionID = "ui.confirm"     // Enter: pick the active item
+	ActCancel     ActionID = "ui.cancel"      // Escape: close the innermost popup or dialog
+	ActExtendUp   ActionID = "ui.extend_up"   // Shift+Up: grow a multiple selection upward
+	ActExtendDown ActionID = "ui.extend_down" // Shift+Down: grow it downward
+	ActSelectAll  ActionID = "ui.select_all"  // Ctrl/Cmd+A: select every item
 )
 
 type defaultBinding struct {
@@ -115,6 +153,9 @@ var defaultKeys = []defaultBinding{
 	{key.NameReturn, 0, ActConfirm},
 	{key.NameEnter, 0, ActConfirm},
 	{key.NameEscape, 0, ActCancel},
+	{key.NameUpArrow, key.ModShift, ActExtendUp},
+	{key.NameDownArrow, key.ModShift, ActExtendDown},
+	{"A", key.ModShortcut, ActSelectAll},
 }
 
 // KeyContext lays out w inside a named dispatch node. Actions and keymaps
@@ -154,6 +195,96 @@ func markModal(gtx C) {
 // trackFocus records that tag can hold focus in the current KeyContext, so
 // actions resolve from here while it is focused. Focus, Clickable and the
 // text fields call it; custom focusable widgets should too.
+// FocusID records that the focusable tag is the control id this frame, so
+// the window can name what holds focus (kittest's FocusedID, an inspector).
+// kit's components do it; a custom focusable (a key.FocusFilter on its own
+// tag) calls it beside its Tag.
+func FocusID(gtx C, tag event.Tag, id string) {
+	if f := frameOf(gtx); f != nil {
+		if f.ids == nil {
+			f.ids = map[event.Tag]string{}
+		}
+		f.ids[tag] = Path(gtx, id)
+	}
+}
+
+// TagImage names an image area: id for tests, label as its alternative
+// text. Audits treat the label as a description, not painted text (stock
+// Gio has no image role).
+func TagImage(gtx C, id, label string) {
+	TagLabel(gtx, id, label)
+	SetRole(gtx, id, RoleImage)
+	if f := frameOf(gtx); f != nil {
+		if f.images == nil {
+			f.images = map[string]bool{}
+		}
+		f.images[Path(gtx, id)] = true
+	}
+}
+
+// Role is what a control is, in the WAI-ARIA vocabulary: richer than Gio's
+// five semantic classes, so a tree node, a table row and a menu item are
+// told apart. kit's components set their roles; kittest reads them
+// (h.Role, h.ByRole) and a future screen-reader bridge will export them.
+type Role string
+
+const (
+	RoleButton    Role = "button"
+	RoleLink      Role = "link"
+	RoleCheckbox  Role = "checkbox"
+	RoleSwitch    Role = "switch"
+	RoleRadio     Role = "radio"
+	RoleTextbox   Role = "textbox"
+	RoleSlider    Role = "slider"
+	RoleCombobox  Role = "combobox"
+	RoleListbox   Role = "listbox"
+	RoleOption    Role = "option"
+	RoleList      Role = "list"
+	RoleListItem  Role = "listitem"
+	RoleTree      Role = "tree"
+	RoleTreeItem  Role = "treeitem"
+	RoleGrid      Role = "grid"
+	RoleRow       Role = "row"
+	RoleGridCell  Role = "gridcell"
+	RoleTabList   Role = "tablist"
+	RoleTab       Role = "tab"
+	RoleMenu      Role = "menu"
+	RoleMenuItem  Role = "menuitem"
+	RoleDialog    Role = "dialog"
+	RoleImage     Role = "img"
+	RoleToolbar   Role = "toolbar"
+	RoleStatus    Role = "status" // a toast, a live message
+	RoleGroup     Role = "group"
+	RoleSeparator Role = "separator"
+)
+
+// SetRole records id's role this frame (see Role).
+func SetRole(gtx C, id string, r Role) {
+	if f := frameOf(gtx); f != nil {
+		if f.roles == nil {
+			f.roles = map[string]Role{}
+		}
+		f.roles[Path(gtx, id)] = r
+	}
+}
+
+// Roles are the roles recorded in the last frame, by id path.
+func (w *Window) Roles() map[string]Role { return w.fr.roles }
+
+// FocusedID is the id of the control holding keyboard focus in the last
+// frame (as recorded by FocusID), or "". src is the window's input source.
+func (w *Window) FocusedID(src input.Source) string {
+	for tag, id := range w.fr.ids {
+		if src.Focused(tag) {
+			return id
+		}
+	}
+	return ""
+}
+
+// Images are the ids of image areas in the last frame (TagImage).
+func (w *Window) Images() map[string]bool { return w.fr.images }
+
 func trackFocus(gtx C, tag event.Tag) {
 	if f := frameOf(gtx); f != nil {
 		f.focus = append(f.focus, focusRec{tag: tag, node: f.cur})
@@ -166,6 +297,7 @@ func trackFocus(gtx C, tag event.Tag) {
 // themselves during layout (editors) asked first, so they keep theirs.
 func (w *Window) End(gtx C) {
 	f := &w.fr
+	f.root.Pop()
 	var filters []event.Filter
 	for _, b := range defaultKeys {
 		filters = append(filters, key.Filter{Name: b.name, Required: b.mods})
@@ -334,6 +466,7 @@ func (g *FocusGroup) Join(c *Clickable, active bool) {
 // group wraps its content in TagArea(gtx, id, ...).
 func (g *FocusGroup) Layout(gtx C, id string, w W) D {
 	g.id = Path(gtx, id)
+	FocusID(gtx, &g.focus, id)
 	defer func() { g.active = nil }() // Join sets it again next frame
 	return g.focus.Layout(gtx, w)
 }

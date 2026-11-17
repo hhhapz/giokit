@@ -11,26 +11,29 @@ import (
 )
 
 type controlsState struct {
-	kinds    [5]kit.Clickable
-	iconBtn  kit.Clickable
-	iconTip  ui.TooltipState
-	saveTip  ui.TooltipState
-	wifi     kit.Clickable
-	notify   kit.Clickable
-	agree    kit.Clickable
-	sizes    kit.Pool[kit.Clickable]
-	name     widget.Editor
-	search   widget.Editor
-	notes    widget.Editor
-	volume   slider
-	tabs     ui.TabsState
-	segs     ui.TabsState
-	wifiOn   bool
-	notifyOn bool
-	agreed   bool
-	size     string
-	tab      int
-	seg      int
+	multi       ui.SelectableListState
+	multiFocus  string
+	multiChosen map[string]bool
+	kinds       [5]kit.Clickable
+	iconBtn     kit.Clickable
+	iconTip     ui.TooltipState
+	saveTip     ui.TooltipState
+	wifi        kit.Clickable
+	notify      kit.Clickable
+	agree       kit.Clickable
+	sizes       kit.Pool[kit.Clickable]
+	name        widget.Editor
+	search      widget.Editor
+	notes       widget.Editor
+	volume      slider
+	tabs        ui.TabsState
+	segs        ui.TabsState
+	wifiOn      bool
+	notifyOn    bool
+	agreed      bool
+	size        string
+	tab         int
+	seg         int
 
 	// Disabled section: a form that the switch above it locks.
 	lock      kit.Clickable
@@ -348,4 +351,25 @@ func (s *slider) layout(gtx C, th *kit.Theme, id, label string) D {
 		s.Value = v
 	}
 	return ui.Slider{ID: id, Label: label, Value: s.Value}.Layout(gtx, th, &s.state)
+}
+
+var fruit = []ui.Choice{{ID: "apple", Label: "Apple"}, {ID: "banana", Label: "Banana"}, {ID: "cherry", Label: "Cherry"},
+	{ID: "date", Label: "Date"}, {ID: "elder", Label: "Elderberry"}, {ID: "fig", Label: "Fig"}}
+
+// demoMultiSelect: Ctrl-click, Shift-click, Shift+arrows, Ctrl+A, type-ahead.
+func (g *gallery) demoMultiSelect(gtx C) D {
+	th := g.th
+	if e, ok := g.multi.UpdateMulti(gtx); ok {
+		g.multiFocus, g.multiChosen = e.Focus, e.Chosen
+	}
+	return kit.Flex{Axis: layout.Vertical, Gap: kit.Space2}.Layout(gtx, th,
+		kit.Rigid(func(gtx C) D {
+			return th.Paragraph(gtx, fmt.Sprintf("%d chosen. Ctrl-click toggles, Shift-click or Shift+arrows select a range, Ctrl+A selects all; type to jump.", len(g.multiChosen)), th.Muted)
+		}),
+		kit.Rigid(func(gtx C) D {
+			gtx.Constraints.Max.X = min(gtx.Constraints.Max.X, gtx.Dp(320))
+			gtx.Constraints.Max.Y = gtx.Dp(200)
+			return ui.SelectableList{ID: "multi", Items: fruit, Selected: g.multiFocus, Multiple: true, Chosen: g.multiChosen}.Layout(gtx, th, &g.multi)
+		}),
+	)
 }

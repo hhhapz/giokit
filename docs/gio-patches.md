@@ -1,8 +1,36 @@
 # Gio patches (third_party/gioui.org, base v0.10.3)
 
-Wired in through `replace gioui.org => ./third_party/gioui.org`. **Replace
-directives are not inherited**, so every app using giokit must add its own
-replace pointing here. Grep for `giokit patch` to find the changes.
+Wired in through `replace gioui.org => ./third_party/gioui.org` for this
+repository's own builds. **Replace directives are not inherited**, and since
+2026-11-17 apps do not need one: `kit`, `kit/ui`, `kit/x` and `kittest` build
+and pass on stock Gio (`scripts/stock-gio.sh`, a CI job). The fork is an
+optional upgrade for its Wayland fixes, and required by `kit/x/video`
+(`paint.Stream`, DMA-BUF import) and `kit/forktrace` (window event trace).
+kit no longer uses `Source.Bounds`/`FocusedTag`, the label clip or
+`semantic.Image`; those patches remain for other Gio users of the fork and
+may be dropped. Grep for `giokit patch` to find the changes.
+
+## The patch series (`third_party/patches`)
+
+The fork is upstream `gioui.org@v0.10.3` plus seven patches, one concern
+each, generated and applied by `scripts/gio-fork.sh`:
+
+| Patch | Concern |
+|---|---|
+| `0001-vulkan-opt-in` | Vulkan behind `-tags vulkan`, so plain builds need no Vulkan headers |
+| `0002-wayland-cursor-wheel-trace` | Cursor reload on scale change, even wheel scaling, trace hooks |
+| `0003-label-clips-to-text` | Label areas hug their text |
+| `0004-source-bounds-focus` | `Source.Bounds`, `Source.FocusedTag` |
+| `0005-semantic-image` | `semantic.Image` class |
+| `0006-editor-keys` | Single-line Up/Down, collapse selection, word delete |
+| `0007-paint-stream-dmabuf` | `paint.Stream` and DMA-BUF import (video). One patch on purpose: both share `streamTex`, `internal/stream`, `op/paint/stream.go` and the GL texture struct. Upstreaming: propose `paint.Stream` (upload path) first; DMA-BUF import as a follow-up. |
+
+- **After editing the fork:** `scripts/gio-fork.sh diff` regenerates the
+  patches; `scripts/gio-fork.sh check` proves they rebuild the fork exactly.
+- **Bumping Gio:** `scripts/gio-fork.sh apply vX.Y.Z` rebuilds the fork from
+  the new upstream plus the patches; fix any patch that no longer applies,
+  then `diff` again. Patches whose concern upstream fixed are deleted from
+  the series.
 
 ## Cursor theme reload on scale change (`app/os_wayland.go`)
 

@@ -38,7 +38,8 @@ func (t *Theme) FocusRing(gtx C, sz image.Point, r int) {
 // line; set Editor.SingleLine yourself).
 type EditorField struct {
 	Placeholder string
-	Label       string // spoken name; default Placeholder
+	Label       string      // spoken name; default Placeholder
+	Size        ControlSize // height class; ControlDefault is the theme's
 	Icon        Icon
 	Lines       int
 }
@@ -72,7 +73,8 @@ func (t *Theme) EditorField(gtx C, e *widget.Editor, id string, f EditorField) D
 		gtx.Constraints.Min.X = gtx.Constraints.Max.X
 		// The id goes on the whole field so tests can click anywhere in it.
 		m := op.Record(gtx.Ops)
-		dims := layout.Inset{Top: t.control(7), Bottom: t.control(7), Left: t.Space(Space2p5), Right: t.Space(Space2p5)}.Layout(gtx, func(gtx C) D {
+		v := t.ControlPad(f.Size, 7)
+		dims := layout.Inset{Top: v, Bottom: v, Left: t.Space(Space2p5), Right: t.Space(Space2p5)}.Layout(gtx, func(gtx C) D {
 			return Row(gtx,
 				Rigid(func(gtx C) D {
 					if icon == nil {
@@ -109,6 +111,8 @@ func (t *Theme) EditorField(gtx C, e *widget.Editor, id string, f EditorField) D
 			semantic.LabelOp(label).Add(gtx.Ops)
 		}
 		Tag(gtx, id)
+		FocusID(gtx, e, id)
+		SetRole(gtx, id, RoleTextbox)
 		call.Add(gtx.Ops)
 		return dims
 	}(gtx)

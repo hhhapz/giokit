@@ -8,7 +8,6 @@ import (
 
 	"gioui.org/f32"
 	"gioui.org/io/input"
-	"gioui.org/io/semantic"
 
 	"github.com/hhhapz/giokit/kit"
 )
@@ -33,13 +32,14 @@ func (h *Harness) Contrasts() []TextContrast {
 	for _, n := range nodes {
 		byID[n.ID] = n
 	}
+	images := h.kwin.Images()
 	var out []TextContrast
 	for _, n := range nodes {
 		d := n.Desc
 		if d.Label == "" || disabled(byID, n) {
 			continue
 		}
-		if d.Class == semantic.Image {
+		if images[d.Description] {
 			continue // an image label is alternative text, not painted glyphs
 		}
 		r := visible(byID, n, img.Rect)

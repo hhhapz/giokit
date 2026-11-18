@@ -1,2 +1,3 @@
 gallery.wasm
 wasm_exec.js
+*.br

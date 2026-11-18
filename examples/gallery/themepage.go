@@ -107,10 +107,11 @@ func newThemeKnobs() themeKnobs {
 		return knobOption{label: label, apply: func(t *kit.Theme) { t.Controls = c }}
 	}
 	var fontOptions []knobOption
-	for _, set := range fonts.All() {
-		fontOptions = append(fontOptions, knobOption{label: set.Name, apply: func(t *kit.Theme) {
-			if t.Fonts != set.Name {
-				t.UseFonts(set) // a new shaper only when the font set changes
+	for _, name := range fonts.Names() {
+		fontOptions = append(fontOptions, knobOption{label: name, apply: func(t *kit.Theme) {
+			if t.Fonts != name { // parse a set and build a shaper only when it is chosen
+				set, _ := fonts.ByName(name)
+				t.UseFonts(set)
 			}
 		}})
 	}

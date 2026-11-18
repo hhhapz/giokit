@@ -18,7 +18,8 @@ import (
 // Buttons, text fields and selects sit side by side in toolbars and forms:
 // at every control size and with every font set they must be one height.
 func TestControlsLineUp(t *testing.T) {
-	for _, set := range fonts.All() {
+	for _, name := range fonts.Names() {
+		set, _ := fonts.ByName(name)
 		for _, size := range []kit.ControlSize{kit.ControlSmall, kit.ControlMedium, kit.ControlLarge} {
 			t.Run(fmt.Sprintf("%s/%d", set.Name, size), func(t *testing.T) {
 				th := kit.Dark().Derive(func(t *kit.Theme) { t.Controls = size })

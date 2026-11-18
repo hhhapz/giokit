@@ -4,10 +4,11 @@
 //	th.UseFonts(fonts.Inter())
 //
 // The font files are embedded in the binary. A program that calls only
-// specific set constructors links only those sets' files; All and ByName
-// refer to every set, so calling either links them all. Each family is
-// parsed once, on first use, and the parsed faces are shared by every set
-// that includes it.
+// specific set constructors links only those sets' files; ByName refers to
+// every set, so calling it links them all. Each family is parsed once, on
+// first use (a parsed family costs a few MB of heap, several times its
+// file size), and the parsed faces are shared by every set that includes
+// it. A picker lists Names and loads only the set the user chooses.
 //
 // All fonts are under the SIL Open Font License 1.1 (OFL.txt beside each).
 package fonts
@@ -67,8 +68,9 @@ func Atkinson() kit.Fonts {
 	return kit.Fonts{Name: "Atkinson", UI: "Atkinson Hyperlegible", Mono: "JetBrains Mono", Faces: faces(&atkinsonFamily, &jetbrainsFamily)}
 }
 
-// All lists every set, Go first, for a picker. It loads every family.
-func All() []kit.Fonts { return []kit.Fonts{Go(), Inter(), Plex(), Atkinson()} }
+// Names lists every set's name, Go first, for a picker. It loads nothing;
+// pass the chosen name to ByName.
+func Names() []string { return []string{"Go", "Inter", "Plex", "Atkinson"} }
 
 // ByName returns the set called name, as stored in Theme.Fonts and tokens.
 // It loads only the families of that set.

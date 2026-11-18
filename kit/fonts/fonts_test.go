@@ -10,7 +10,8 @@ import (
 // those names, in the weights components use, or text silently falls back
 // to Go.
 func TestSetsResolve(t *testing.T) {
-	for _, set := range All()[1:] {
+	for _, name := range Names()[1:] {
+		set, _ := ByName(name)
 		have := map[font.Typeface]map[font.Weight]bool{}
 		for _, f := range set.Faces {
 			if have[f.Font.Typeface] == nil {
@@ -33,12 +34,11 @@ func TestSetsResolve(t *testing.T) {
 	}
 }
 
-// ByName must find every set All lists, under the same name and faces.
+// ByName must find every set Names lists, under that name.
 func TestByName(t *testing.T) {
-	for _, set := range All() {
-		got, ok := ByName(set.Name)
-		if !ok || got.Name != set.Name || got.UI != set.UI || got.Mono != set.Mono || len(got.Faces) != len(set.Faces) {
-			t.Errorf("ByName(%q) = set %q, %v", set.Name, got.Name, ok)
+	for _, name := range Names() {
+		if got, ok := ByName(name); !ok || got.Name != name {
+			t.Errorf("ByName(%q) = set %q, %v", name, got.Name, ok)
 		}
 	}
 	if _, ok := ByName("Comic Sans"); ok {

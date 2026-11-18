@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"gioui.org/io/key"
+	"gioui.org/layout"
 
 	"github.com/hhhapz/giokit/kit"
 	"github.com/hhhapz/giokit/kit/ui"
@@ -19,27 +20,27 @@ func TestRenderers(t *testing.T) {
 	var sel ui.SelectState
 	var list ui.SelectableListState
 	var table ui.DataTableState
-	opts := []string{"Small", "Large"}
-	h := kittest.NewT(t, 640, 420, func(gtx kit.C) {
+	opts := []ui.Choice{{ID: "small", Label: "Small"}, {ID: "large", Label: "Large"}}
+	h := kittest.NewT(t, 640, 420, func(gtx layout.Context) {
 		sel.Update(gtx)
 		list.Update(gtx)
 		table.Update(gtx)
 		kit.Flex{Gap: kit.Space4}.Layout(gtx, th,
-			kit.Rigid(kit.Fixed(160, func(gtx kit.C) kit.D {
-				return ui.Select{ID: "size", Options: opts, Selected: 0, Option: func(gtx kit.C, i int) kit.D {
-					return th.Text(gtx, opts[i]+" (custom)", th.Type.Body, th.Fg, kit.Regular)
+			kit.Rigid(kit.Fixed(160, func(gtx layout.Context) layout.Dimensions {
+				return ui.Select{ID: "size", Options: opts, Selected: "small", Option: func(gtx layout.Context, c ui.Choice) layout.Dimensions {
+					return th.Text(gtx, c.Label+" (custom)", th.Type.Body, th.Fg, kit.Regular)
 				}}.Layout(gtx, th, &sel)
 			})),
-			kit.Rigid(kit.Fixed(160, func(gtx kit.C) kit.D {
+			kit.Rigid(kit.Fixed(160, func(gtx layout.Context) layout.Dimensions {
 				gtx.Constraints.Max.Y = gtx.Dp(120)
-				return ui.SelectableList{ID: "files", Items: []ui.Choice{{ID: "a", Label: "Alpha"}}, Item: func(gtx kit.C, i int) kit.D {
+				return ui.SelectableList{ID: "files", Items: []ui.Choice{{ID: "a", Label: "Alpha"}}, Item: func(gtx layout.Context, i int) layout.Dimensions {
 					return th.Text(gtx, "Alpha (custom)", th.Type.Body, th.Fg, kit.Regular)
 				}}.Layout(gtx, th, &list)
 			})),
-			kit.Flexed(1, func(gtx kit.C) kit.D {
-				return ui.DataTable{ID: "t", Columns: []kit.Column{{Title: "Name"}, {Title: "State"}},
+			kit.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+				return ui.DataTable{ID: "t", Columns: []ui.DataColumn{{ID: "name", Title: "Name"}, {ID: "state", Title: "State"}},
 					Rows: []ui.DataRow{{ID: "r", Cells: []string{"Build", "ok"}}},
-					Cell: func(gtx kit.C, r ui.DataRow, col int) kit.D {
+					Cell: func(gtx layout.Context, r ui.DataRow, col int) layout.Dimensions {
 						if col == 1 {
 							return ui.Badge{Status: kit.StatusGood, Text: "passing"}.Layout(gtx, th)
 						}
@@ -52,7 +53,7 @@ func TestRenderers(t *testing.T) {
 	h.ExpectText("passing")
 	h.ClickID("size/field")
 	h.ExpectText("Large (custom)")
-	for id, want := range map[string]string{"size/1": "Large", "files/a": "Alpha", "t/r": "Build, ok"} {
+	for id, want := range map[string]string{"size/large": "Large", "files/a": "Alpha", "t/r": "Build, ok"} {
 		if got := label(h, id); got != want {
 			t.Errorf("%s spoken as %q, want %q", id, got, want)
 		}
@@ -83,9 +84,9 @@ func TestTypeAhead(t *testing.T) {
 	var s ui.SelectableListState
 	sel := "a"
 	items := []ui.Choice{{ID: "a", Label: "Alpha"}, {ID: "b", Label: "Beta"}, {ID: "br", Label: "Bravo"}, {ID: "c", Label: "Charlie"}}
-	h := kittest.NewT(t, 300, 300, func(gtx kit.C) {
-		if id, ok := s.Update(gtx); ok {
-			sel = id
+	h := kittest.NewT(t, 300, 300, func(gtx layout.Context) {
+		if e, ok := s.Update(gtx); ok {
+			sel = e.Selected
 		}
 		ui.SelectableList{ID: "l", Items: items, Selected: sel}.Layout(gtx, th, &s)
 	})
@@ -123,9 +124,9 @@ func TestMultiSelect(t *testing.T) {
 	for _, id := range []string{"a", "b", "c", "d", "e"} {
 		items = append(items, ui.Choice{ID: id, Label: strings.ToUpper(id)})
 	}
-	h := kittest.NewT(t, 300, 400, func(gtx kit.C) {
-		if e, ok := s.UpdateMulti(gtx); ok {
-			focus, chosen = e.Focus, e.Chosen
+	h := kittest.NewT(t, 300, 400, func(gtx layout.Context) {
+		if e, ok := s.Update(gtx); ok {
+			focus, chosen = e.Selected, e.Chosen
 		}
 		ui.SelectableList{ID: "l", Items: items, Selected: focus, Multiple: true, Chosen: chosen}.Layout(gtx, th, &s)
 	})
@@ -171,19 +172,19 @@ func TestMultiSelectTreeTable(t *testing.T) {
 	roots := []ui.TreeNode{{ID: "p", Label: "Project", Children: []ui.TreeNode{{ID: "x", Label: "X"}, {ID: "y", Label: "Y"}}}}
 	rows := []ui.DataRow{{ID: "3", Cells: []string{"Charlie"}}, {ID: "1", Cells: []string{"Alpha"}}, {ID: "2", Cells: []string{"Bravo"}}}
 	ts.SetExpanded("p", true)
-	h := kittest.NewT(t, 640, 360, func(gtx kit.C) {
-		if e, ok := ts.UpdateMulti(gtx); ok {
-			tf, tc = e.Focus, e.Chosen
+	h := kittest.NewT(t, 640, 360, func(gtx layout.Context) {
+		if e, ok := ts.Update(gtx); ok {
+			tf, tc = e.Selected, e.Chosen
 		}
-		if e, ok := ds.UpdateMulti(gtx); ok {
-			df, dc = e.Focus, e.Chosen
+		if e, ok := ds.Update(gtx); ok {
+			df, dc = e.Selected, e.Chosen
 		}
 		kit.Flex{Gap: kit.Space4}.Layout(gtx, th,
-			kit.Flexed(1, func(gtx kit.C) kit.D {
+			kit.Flexed(1, func(gtx layout.Context) layout.Dimensions {
 				return ui.Tree{ID: "tree", Roots: roots, Selected: tf, Multiple: true, Chosen: tc}.Layout(gtx, th, &ts)
 			}),
-			kit.Flexed(1, func(gtx kit.C) kit.D {
-				return ui.DataTable{ID: "t", Columns: []kit.Column{{Title: "Name"}}, Rows: rows, Selected: df, Multiple: true, Chosen: dc}.Layout(gtx, th, &ds)
+			kit.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+				return ui.DataTable{ID: "t", Columns: []ui.DataColumn{{ID: "name", Title: "Name"}}, Rows: rows, Selected: df, Multiple: true, Chosen: dc}.Layout(gtx, th, &ds)
 			}),
 		)
 	})
@@ -192,7 +193,7 @@ func TestMultiSelectTreeTable(t *testing.T) {
 	if len(tc) != 3 || !tc["x"] {
 		t.Fatalf("tree range: %v", tc)
 	}
-	h.ClickID("t/sort/0") // sort by name: Alpha, Bravo, Charlie
+	h.ClickID("t/sort/name") // sort by name: Alpha, Bravo, Charlie
 	h.ClickID("t/1")
 	h.ClickIDMods("t/2", key.ModShift)
 	if len(dc) != 2 || !dc["1"] || !dc["2"] || dc["3"] {
@@ -205,9 +206,9 @@ func TestMultiSelectTreeTable(t *testing.T) {
 func TestRowHoverVisibleOnCard(t *testing.T) {
 	th := kit.Dark()
 	var s ui.SelectableListState
-	h := kittest.NewT(t, 300, 200, func(gtx kit.C) {
+	h := kittest.NewT(t, 300, 200, func(gtx layout.Context) {
 		s.Update(gtx)
-		th.Card(gtx, func(gtx kit.C) kit.D {
+		th.Card(gtx, func(gtx layout.Context) layout.Dimensions {
 			return ui.SelectableList{ID: "l", Items: []ui.Choice{{ID: "a", Label: "Alpha"}, {ID: "b", Label: "Beta"}}}.Layout(gtx, th, &s)
 		})
 	})
@@ -225,43 +226,43 @@ func TestRoles(t *testing.T) {
 	var table ui.DataTableState
 	var sel ui.SelectState
 	var nav kit.Clickable
-	h := kittest.NewT(t, 900, 400, func(gtx kit.C) {
+	h := kittest.NewT(t, 900, 400, func(gtx layout.Context) {
 		sel.Update(gtx)
 		kit.Flex{Gap: kit.Space2}.Layout(gtx, th,
-			kit.Rigid(func(gtx kit.C) kit.D {
-				return ui.Tabs{ID: "tabs", Labels: []string{"One", "Two"}}.Layout(gtx, th, &tabs)
+			kit.Rigid(func(gtx layout.Context) layout.Dimensions {
+				return ui.Tabs{ID: "tabs", Items: []ui.Choice{{ID: "one", Label: "One"}, {ID: "two", Label: "Two"}}}.Layout(gtx, th, &tabs)
 			}),
-			kit.Rigid(kit.Fixed(120, func(gtx kit.C) kit.D {
+			kit.Rigid(kit.Fixed(120, func(gtx layout.Context) layout.Dimensions {
 				return ui.SelectableList{ID: "list", Items: []ui.Choice{{ID: "a", Label: "A"}}}.Layout(gtx, th, &list)
 			})),
-			kit.Rigid(kit.Fixed(120, func(gtx kit.C) kit.D {
+			kit.Rigid(kit.Fixed(120, func(gtx layout.Context) layout.Dimensions {
 				return ui.Tree{ID: "tree", Roots: []ui.TreeNode{{ID: "n", Label: "N"}}}.Layout(gtx, th, &tree)
 			})),
-			kit.Rigid(kit.Fixed(160, func(gtx kit.C) kit.D {
-				return ui.DataTable{ID: "t", Columns: []kit.Column{{Title: "C"}}, Rows: []ui.DataRow{{ID: "r", Cells: []string{"R"}}}}.Layout(gtx, th, &table)
+			kit.Rigid(kit.Fixed(160, func(gtx layout.Context) layout.Dimensions {
+				return ui.DataTable{ID: "t", Columns: []ui.DataColumn{{ID: "c", Title: "C"}}, Rows: []ui.DataRow{{ID: "r", Cells: []string{"R"}}}}.Layout(gtx, th, &table)
 			})),
-			kit.Rigid(kit.Fixed(140, func(gtx kit.C) kit.D {
-				return ui.Select{ID: "s", Options: []string{"X", "Y"}}.Layout(gtx, th, &sel)
+			kit.Rigid(kit.Fixed(140, func(gtx layout.Context) layout.Dimensions {
+				return ui.Select{ID: "s", Options: []ui.Choice{{ID: "x", Label: "X"}, {ID: "y", Label: "Y"}}}.Layout(gtx, th, &sel)
 			})),
-			kit.Rigid(kit.Fixed(120, func(gtx kit.C) kit.D {
+			kit.Rigid(kit.Fixed(120, func(gtx layout.Context) layout.Dimensions {
 				return ui.NavItem{ID: "nav", Label: "Home"}.Layout(gtx, th, &nav)
 			})),
 		)
 	})
 	h.ClickID("s/field")
 	for id, want := range map[string]kit.Role{
-		"tabs": kit.RoleTabList, "tabs/One": kit.RoleTab,
+		"tabs": kit.RoleTabList, "tabs/one": kit.RoleTab,
 		"list": kit.RoleListbox, "list/a": kit.RoleOption,
 		"tree": kit.RoleTree, "tree/n": kit.RoleTreeItem,
 		"t/rows": kit.RoleGrid, "t/r": kit.RoleRow,
-		"s/field": kit.RoleCombobox, "s": kit.RoleListbox, "s/1": kit.RoleOption,
+		"s/field": kit.RoleCombobox, "s": kit.RoleListbox, "s/y": kit.RoleOption,
 		"nav": kit.RoleLink,
 	} {
 		if got := h.Role(id); got != want {
 			t.Errorf("%s: role %q, want %q", id, got, want)
 		}
 	}
-	if id := h.ByRole(kit.RoleTab, "Two"); id != "tabs/Two" {
+	if id := h.ByRole(kit.RoleTab, "Two"); id != "tabs/two" {
 		t.Errorf("ByRole(tab, Two) = %q", id)
 	}
 }

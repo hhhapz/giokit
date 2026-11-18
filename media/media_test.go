@@ -5,6 +5,7 @@ import (
 	"image"
 	"io"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -231,6 +232,68 @@ func TestAutoPolicy(t *testing.T) {
 	}
 }
 
+// FFmpeg errors carry one "media:" prefix and say what failed.
+func TestErrorContext(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "missing.mp4")
+	_, err := OpenFile(path)
+	var e *Error
+	if !errors.As(err, &e) || e.Code >= 0 {
+		t.Fatalf("OpenFile(missing): %v, want an *Error", err)
+	}
+	if msg := err.Error(); !strings.HasPrefix(msg, "media: open "+path+": ") || strings.Count(msg, "media:") != 1 {
+		t.Errorf("error %q, want one prefix and the operation", msg)
+	}
+}
+
+// Using a Decoder or File after Close reports ErrClosed instead of passing
+// freed C state to FFmpeg. Frames handed out before Close stay valid.
+func TestAfterClose(t *testing.T) {
+	f, err := OpenFile(filepath.Join("testdata", "h264.mp4"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, err := NewDecoder(f.Codec, Options{Hardware: HardwareOff})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var kept []Frame
+	emit := func(fr Frame) { kept = append(kept, fr) }
+	if err := d.Decode(Packet{Data: f.Config(), Config: true}, emit); err != nil {
+		t.Fatal(err)
+	}
+	p, err := f.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Decode(p, emit); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+	f.Close()
+	if _, err := f.Read(); !errors.Is(err, ErrClosed) {
+		t.Errorf("File.Read after Close: %v, want ErrClosed", err)
+	}
+	d.Close()
+	d.Close()
+	if err := d.Decode(p, emit); !errors.Is(err, ErrClosed) {
+		t.Errorf("Decode after Close: %v, want ErrClosed", err)
+	}
+	if err := d.Flush(emit); !errors.Is(err, ErrClosed) {
+		t.Errorf("Flush after Close: %v, want ErrClosed", err)
+	}
+	if d.Hardware() {
+		t.Error("Hardware after Close")
+	}
+	d.DisableDMABuf()
+	if len(kept) == 0 {
+		t.Fatal("no frame decoded before Close")
+	}
+	for _, fr := range kept {
+		_ = fr.Image.Pix[len(fr.Image.Pix)-1]
+		fr.Release()
+	}
+}
+
 // A device rotating or resizing its display sends new parameter sets
 // mid-stream: one decoder must follow, on every output path.
 func TestResolutionChange(t *testing.T) {
@@ -259,7 +322,9 @@ func TestResolutionChange(t *testing.T) {
 				t.Fatal(err)
 			}
 			if c := f.Config(); c != nil {
-				d.Decode(Packet{Data: c, Config: true}, emit)
+				if err := d.Decode(Packet{Data: c, Config: true}, emit); err != nil {
+					t.Fatal(err)
+				}
 			}
 			for {
 				p, err := f.Read()

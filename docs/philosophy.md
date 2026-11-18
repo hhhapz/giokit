@@ -13,13 +13,13 @@ entities or observers for now.
 | GPUI | giokit today | Direction |
 |---|---|---|
 | Main thread owns entities; views render from state each frame | UI goroutine owns plain structs (no entities); `Frame` = handle, then layout; whole window every frame | Keep. Never draw from snapshots. Revisit entities only if large multi-pane apps need partial redraw. |
-| `cx.notify()` | `kit.Notify(gtx)`; `kit.Clickable` notifies on click | Every stateful component notifies on change. |
-| `cx.spawn` / background executor | `kit.Spawn(app, work, done)`, `app.Post` | Add cancellation (context tied to the view). |
-| Elements with a fluent style API (`div().flex().p_2()`) | Functional helpers (`Row`, `Pad`, `Surface`) | Consider a small style struct; avoid reflection. |
-| Actions + keymap + focus handles | `Actions`, context-scoped `Keymap`, CommandPalette and focus rings | Add a router, multistroke chords and richer focus handles. |
-| Theme as data | Palette, light/dark presets, density and type-scale tokens | Add theme tooling and per-component tokens. |
-| `TestAppContext` / `VisualTestContext` simulate input | `kittest` (semantic queries, strict stale check, focus/Tab audits, a11y snapshot) | Add richer semantic roles and values. |
-| Text system with font fallback | Bundled Go fonts only (deterministic) | Bundle an icon font or more vector icons; maybe a UI font with wider coverage. |
+| `cx.notify()` | `kit.Notify(gtx)`; `kit.Clickable` and every component notify when they record an event for the next `Update` | Keep; kittest's strict mode catches a missing Notify. |
+| `cx.spawn` / background executor | `kit.Spawn(app, work, done)` with a cancellable `Task` (its context is cancelled and `done` is dropped), `app.Post`; kittest's `h.App()` + `RunTasks` | Cancellation is explicit (`Task.Cancel`); tie it to a view's lifetime only if apps need it. |
+| Elements with a fluent style API (`div().flex().p_2()`) | Plain structs: `kit.Flex{Axis, Gap, Pad, Bg, Border, Radius, W, MinW...}` as the styled container, helpers (`Row`, `Col`, `Pad`, `Fixed`, `Box`), components as props structs | Keep structs; no fluent builder, no reflection. |
+| Actions + keymap + focus handles | `Actions` registry with stable IDs; `Keymap` with JSON overrides, attached per `KeyContext`; a key dispatch tree (`OnAction`, keys bubble from the focused widget); `Focus`, `FocusGroup`, `FocusVisible`; `ui.CommandPalette` | Single-stroke chords only; add multi-stroke chords (Ctrl+K Ctrl+S) when an app needs them. |
+| Theme as data | `Palette`, `TypeScale`, `Metrics`, `Strings` and shape/motion knobs; presets and OKLCH `Generate` with contrast enforced; DTCG token files (`ThemeFromTokens`, `Tokens`); `Derive` restyles a subtree | Add a token when a component needs one; prefer palette roles over per-component tokens. |
+| `TestAppContext` / `VisualTestContext` simulate input | `kittest`: real input through Gio's router, semantic queries by id and WAI-ARIA role, strict stale check, audits (labels, targets, occlusion, contrast, glyphs), focus traps, the `conform` suite | A screen-reader bridge that exports kit's roles is not built yet. |
+| Text system with font fallback | Bundled font sets only (`kit/fonts`: Go, Inter, Plex, Atkinson), system fonts off, vector icons; the missing-glyph audit | Add font sets, not system fallback. |
 
 ## Principles
 

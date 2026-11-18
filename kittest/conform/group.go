@@ -7,8 +7,6 @@ import (
 	"testing"
 
 	"gioui.org/io/key"
-	"gioui.org/layout"
-	"gioui.org/op/paint"
 
 	"github.com/hhhapz/giokit/kit"
 	"github.com/hhhapz/giokit/kittest"
@@ -21,13 +19,19 @@ import (
 // and labelled, disabled blocks Tab, keys and clicks, and the page is clean
 // under every preset, scale 2 and the extreme styles.
 type Group struct {
-	Name          string
+	Name          string // subtest name
 	First, Second string // row ids; First starts selected, Second is next
-	// Build returns the frame and a counter of picks reported by Update; the
-	// frame wraps the collection in th.Disable when disabled.
-	Build func(th *kit.Theme, disabled bool) (frame func(gtx kit.C), picks *int)
+	// Build makes the collection; its Activations count picks reported by
+	// Update.
+	Build Builder
 	Size  image.Point // window in dp; default 420×300
 }
+
+var groupSize = image.Pt(420, 300) // default Group window, dp
+
+// groupTabs is how many Tab presses the disabled check makes looking for a
+// way into the collection.
+const groupTabs = 6
 
 // RunGroup runs each group's contract as subtests.
 func RunGroup(t *testing.T, cases ...Group) {
@@ -37,26 +41,25 @@ func RunGroup(t *testing.T, cases ...Group) {
 	}
 }
 
-func (c Group) harness(t *testing.T, th *kit.Theme, disabled bool, scale float32) (*kittest.Harness, *int) {
-	return c.harnessOn(t, th, th.Bg, disabled, scale)
-}
-
-func (c Group) harnessOn(t *testing.T, th *kit.Theme, bg color.NRGBA, disabled bool, scale float32) (*kittest.Harness, *int) {
-	t.Helper()
+// stage is the window a group opens in. A collection fills the space it
+// is given, so it keeps the window's minimum size.
+func (c Group) stage(bg color.NRGBA, scale float32) stage {
 	size := c.Size
 	if size == (image.Point{}) {
-		size = image.Pt(420, 300)
+		size = groupSize
 	}
-	frame, n := c.Build(th, disabled)
-	h := kittest.NewTAt(t, size.X, size.Y, scale, func(gtx layout.Context) {
-		paint.Fill(gtx.Ops, bg)
-		layout.UniformInset(24).Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-			frame(gtx)
-			return layout.Dimensions{Size: gtx.Constraints.Max}
-		})
-	})
-	h.Theme = th
-	return h, n
+	return stage{size: size, scale: scale, bg: bg, stretch: true}
+}
+
+func (c Group) harness(t *testing.T, th *kit.Theme, disabled bool, scale float32) (*kittest.Harness, *int) {
+	t.Helper()
+	return c.harnessOn(t, th, c.stage(th.Bg, scale), disabled)
+}
+
+func (c Group) harnessOn(t *testing.T, th *kit.Theme, s stage, disabled bool) (*kittest.Harness, *int) {
+	t.Helper()
+	ctl := c.Build(th, disabled)
+	return s.open(t, th, ctl), ctl.Activations
 }
 
 func (c Group) run(t *testing.T) {
@@ -97,12 +100,12 @@ func (c Group) run(t *testing.T) {
 	})
 	// Row hover shows on a card (Panel) too.
 	t.Run("hover-on-card", func(t *testing.T) {
-		h, _ := c.harnessOn(t, th, th.Panel, false, 1)
+		h, _ := c.harnessOn(t, th, c.stage(th.Panel, 1), false)
 		r := h.ExpectID(c.Second)
 		img := func() []byte { return crop(h, r) }
-		rest := img()
+		before := img()
 		h.Hover(c.Second)
-		if bytes.Equal(rest, img()) {
+		if bytes.Equal(before, img()) {
 			t.Error("row hover changes nothing on a card (Panel background)")
 		}
 	})
@@ -110,7 +113,7 @@ func (c Group) run(t *testing.T) {
 		h, n := c.harness(t, th, true, 1)
 		*n = 0
 		h.ClickID(c.Second)
-		for range 6 {
+		for range groupTabs {
 			h.Tab(false)
 			if f := h.FocusedID(); f == c.First || f == c.Second {
 				t.Fatalf("Tab reached disabled row %q", f)

@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"image"
+	"slices"
 	"time"
 
 	"gioui.org/op/paint"
@@ -16,7 +17,7 @@ import (
 // paint.Stream, the way a decoder would push frames.
 type mediaState struct {
 	vstream  *paint.Stream
-	video    video.VideoState
+	video    video.State
 	fit      int
 	fitTabs  ui.TabsState
 	play     kit.Clickable
@@ -24,23 +25,35 @@ type mediaState struct {
 	pool     []*image.RGBA // frames handed back by the stream
 	frames   int
 	lastTick time.Time
+	shown    bool // the demo was laid out last frame
 }
+
+// patternInterval is the test pattern's frame period (30 fps).
+const patternInterval = time.Second / 30
 
 var fitNames = []string{"Contain", "Cover", "Fill", "1:1"}
 
 func (g *gallery) initMedia() {
-	g.vstream = paint.NewStream()
-	g.playing = true
+	g.media.vstream = paint.NewStream()
+	g.media.playing = true
 	g.submitPattern(0)
 }
 
 func (g *gallery) handleMedia(gtx C) {
-	if i, ok := g.fitTabs.Update(gtx); ok {
-		g.fit = i
+	if id, ok := g.media.fitTabs.Update(gtx); ok {
+		g.media.fit = slices.Index(fitNames, id)
 	}
-	if g.play.Clicked(gtx) {
-		g.playing = !g.playing
+	if g.media.play.Clicked(gtx) {
+		g.media.playing = !g.media.playing
 	}
+	// Produce the next pattern frame while the demo is on screen; its
+	// kit.Loop keeps these frames coming.
+	if g.media.playing && g.media.shown && gtx.Now.Sub(g.media.lastTick) >= patternInterval {
+		g.media.lastTick = gtx.Now
+		g.media.frames++
+		g.submitPattern(g.media.frames)
+	}
+	g.media.shown = false
 }
 
 // submitPattern draws frame n of the pattern into a pooled buffer and
@@ -48,8 +61,8 @@ func (g *gallery) handleMedia(gtx C) {
 func (g *gallery) submitPattern(n int) {
 	const w, h = 320, 180
 	var img *image.RGBA
-	if k := len(g.pool); k > 0 {
-		img, g.pool = g.pool[k-1], g.pool[:k-1]
+	if k := len(g.media.pool); k > 0 {
+		img, g.media.pool = g.media.pool[k-1], g.media.pool[:k-1]
 	} else {
 		img = image.NewRGBA(image.Rect(0, 0, w, h))
 	}
@@ -69,33 +82,29 @@ func (g *gallery) submitPattern(n int) {
 			img.Pix[i], img.Pix[i+1], img.Pix[i+2], img.Pix[i+3] = c[0], c[1], c[2], 255
 		}
 	}
-	g.vstream.Submit(paint.StreamFrame{Image: img, Release: func() { g.pool = append(g.pool, img) }})
+	g.media.vstream.Submit(paint.StreamFrame{Image: img, Release: func() { g.media.pool = append(g.media.pool, img) }})
 }
 
 func (g *gallery) demoVideo(gtx C) D {
 	th := g.th
-	if g.playing {
+	g.media.shown = true
+	if g.media.playing {
 		kit.Loop(gtx, time.Second) // keep frames coming while visible
-		if gtx.Now.Sub(g.lastTick) >= time.Second/30 {
-			g.lastTick = gtx.Now
-			g.frames++
-			g.submitPattern(g.frames)
-		}
 	}
 	return kit.Col(gtx,
 		kit.Rigid(func(gtx C) D {
 			return kit.Row(gtx,
 				kit.Rigid(func(gtx C) D {
-					return ui.Tabs{ID: "video-fit", Labels: fitNames, Selected: g.fit, Style: ui.TabsSegmented}.Layout(gtx, th, &g.fitTabs)
+					return ui.Tabs{ID: "video-fit", Items: choices(fitNames), Selected: fitNames[g.media.fit], Style: ui.TabsSegmented}.Layout(gtx, th, &g.media.fitTabs)
 				}),
 				kit.Rigid(kit.Gap(kit.Space3, 0)),
 				kit.Rigid(func(gtx C) D {
-					return ui.Switch{ID: "video-play", Label: "Play", On: g.playing}.Layout(gtx, th, &g.play)
+					return ui.Switch{ID: "video-play", Label: "Play", On: g.media.playing}.Layout(gtx, th, &g.media.play)
 				}),
 				kit.Flexed(1, kit.Grow),
 				kit.Rigid(func(gtx C) D {
-					sz := g.vstream.Size()
-					return th.Text(gtx, fmt.Sprintf("%d×%d · frame %d", sz.X, sz.Y, g.frames), th.Type.Small, th.Muted, kit.Regular)
+					sz := g.media.vstream.Size()
+					return th.Text(gtx, fmt.Sprintf("%d×%d · frame %d", sz.X, sz.Y, g.media.frames), th.Type.Small, th.Muted, kit.Regular)
 				}),
 			)
 		}),
@@ -104,7 +113,7 @@ func (g *gallery) demoVideo(gtx C) D {
 			gtx.Constraints.Max.Y = gtx.Dp(220)
 			gtx.Constraints.Min = gtx.Constraints.Max
 			return kit.Fill(gtx, th.Surface, func(gtx C) D {
-				return video.Video{ID: "video-screen", Stream: g.vstream, Fit: video.Fit(g.fit), Label: "Test pattern"}.Layout(gtx, th, &g.video)
+				return video.Video{ID: "video-screen", Stream: g.media.vstream, Fit: video.Fit(g.media.fit), Label: "Test pattern"}.Layout(gtx, th, &g.media.video)
 			})
 		}),
 	)

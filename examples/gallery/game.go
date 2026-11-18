@@ -44,14 +44,24 @@ func (lo *lightsOut) press(i int) {
 	}
 }
 
+// lcgNext advances seed with a linear congruential generator (the
+// Numerical Recipes constants) and returns a value in [0, n). The demos use
+// it instead of math/rand so tests see the same sequence every run.
+func lcgNext(seed *uint32, n int) int {
+	*seed = *seed*1664525 + 1013904223
+	return int(*seed>>16) % n
+}
+
+// minShufflePresses is how many random presses make a new puzzle, at least.
+const minShufflePresses = 6
+
 // shuffle starts a new puzzle by pressing random cells from all-off, so it
 // is always solvable. A small LCG keeps it deterministic for tests.
 func (lo *lightsOut) shuffle() {
 	lo.on = [lightsN * lightsN]bool{}
 	lo.moves, lo.solved, lo.solution = 0, false, nil
-	for len(lo.solution) < 6 || lo.allOff() {
-		lo.seed = lo.seed*1664525 + 1013904223
-		i := int(lo.seed>>16) % len(lo.on)
+	for len(lo.solution) < minShufflePresses || lo.allOff() {
+		i := lcgNext(&lo.seed, len(lo.on))
 		lo.press(i)
 		lo.solution = append(lo.solution, i)
 	}
@@ -87,7 +97,7 @@ func (lo *lightsOut) play(i int) {
 }
 
 func (g *gallery) handleGame(gtx C) {
-	lo := &g.game
+	lo := &g.overview.game
 	if lo.newGame.Clicked(gtx) {
 		lo.shuffle()
 	}
@@ -101,7 +111,7 @@ func (g *gallery) handleGame(gtx C) {
 }
 
 func (g *gallery) demoGame(gtx C) D {
-	th, lo := g.th, &g.game
+	th, lo := g.th, &g.overview.game
 	status := fmt.Sprintf("%d lit · %d moves", lo.lit(), lo.moves)
 	if lo.solved {
 		status = fmt.Sprintf("Solved in %d moves!", lo.moves)
@@ -135,17 +145,24 @@ func (g *gallery) demoGame(gtx C) D {
 	)
 }
 
-// lightsGrid is the board: one focus group with grid arrow keys.
-func (g *gallery) lightsGrid(gtx C) D {
-	lo := &g.game
-	cur := 0
+// active is the index of the group's active cell.
+func (lo *lightsOut) active() int {
 	for i := range lo.cells {
 		if cellID(i) == lo.group.Active {
-			cur = i
+			return i
 		}
 	}
+	return 0
+}
+
+// lightsGrid is the board: one focus group with grid arrow keys. Each key
+// acts on the active cell as the previous key left it, so keys delivered in
+// one frame all count.
+func (g *gallery) lightsGrid(gtx C) D {
+	lo := &g.overview.game
 	move := func(dr, dc int) func() {
 		return func() {
+			cur := lo.active()
 			r := min(max(cur/lightsN+dr, 0), lightsN-1)
 			c := min(max(cur%lightsN+dc, 0), lightsN-1)
 			lo.group.Active = cellID(r*lightsN + c)
@@ -158,7 +175,7 @@ func (g *gallery) lightsGrid(gtx C) D {
 		kit.OnAction(gtx, kit.ActExpand, move(0, 1))    // Right
 		kit.OnAction(gtx, kit.ActFirst, func() { lo.group.Active = cellID(0) })
 		kit.OnAction(gtx, kit.ActLast, func() { lo.group.Active = cellID(len(lo.cells) - 1) })
-		kit.OnAction(gtx, kit.ActConfirm, func() { lo.play(cur) })
+		kit.OnAction(gtx, kit.ActConfirm, func() { lo.play(lo.active()) })
 		return lo.group.Layout(gtx, "lights", func(gtx C) D { return kit.TagArea(gtx, "lights", g.lightsCells) })
 	})
 }
@@ -186,8 +203,8 @@ func (g *gallery) lightsCells(gtx C) D {
 }
 
 func (g *gallery) lightCell(gtx C, th *kit.Theme, i int) D {
-	lo := &g.game
-	return lo.cells[i].Press(gtx, kit.Part("lights", cellID(i)), func(gtx C, st kit.State) D {
+	lo := &g.overview.game
+	return th.Press(gtx, &lo.cells[i], kit.Part("lights", cellID(i)), func(gtx C, st kit.State) D {
 		semantic.CheckBox.Add(gtx.Ops)
 		r, c := i/lightsN+1, i%lightsN+1
 		semantic.LabelOp(fmt.Sprintf("Light, row %d column %d", r, c)).Add(gtx.Ops)

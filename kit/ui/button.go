@@ -14,38 +14,43 @@ import (
 )
 
 // ButtonStyle draws a button in a state: its surface (fill, border, ring)
-// and content colour. The predeclared styles cover the usual variants; an
-// app adds its own as a plain function.
+// and content colour. Secondary (the default), Primary, Ghost, Danger and
+// Solid cover the usual variants; an app adds its own as a plain function.
 type ButtonStyle func(th *kit.Theme, st kit.State) (kit.Surface, color.NRGBA)
 
-// The predeclared button styles.
-var (
-	// Secondary is an outlined surface: the default.
-	Secondary ButtonStyle = func(th *kit.Theme, st kit.State) (kit.Surface, color.NRGBA) {
-		return state(th, st, kit.Surface{Bg: th.Surface, Border: th.Border}, th.Fg, th.Focus)
+// Secondary is an outlined surface: the default.
+func Secondary(th *kit.Theme, st kit.State) (kit.Surface, color.NRGBA) {
+	return state(th, st, kit.Surface{Bg: th.Surface, Border: th.Border}, th.Fg, th.Focus)
+}
+
+// Primary is an accent tint.
+func Primary(th *kit.Theme, st kit.State) (kit.Surface, color.NRGBA) {
+	return state(th, st, kit.Surface{Bg: th.AccentBg, Border: th.AccentBorder}, th.Accent, th.Focus)
+}
+
+// Ghost has no fill until hovered (toolbars).
+func Ghost(th *kit.Theme, st kit.State) (kit.Surface, color.NRGBA) {
+	fg := th.Muted
+	if st.Hovered {
+		fg = th.Fg
 	}
-	// Primary is an accent tint.
-	Primary ButtonStyle = func(th *kit.Theme, st kit.State) (kit.Surface, color.NRGBA) {
-		return state(th, st, kit.Surface{Bg: th.AccentBg, Border: th.AccentBorder}, th.Accent, th.Focus)
-	}
-	// Ghost has no fill until hovered (toolbars).
-	Ghost ButtonStyle = func(th *kit.Theme, st kit.State) (kit.Surface, color.NRGBA) {
-		fg := th.Muted
-		if st.Hovered {
-			fg = th.Fg
-		}
-		return state(th, st, kit.Surface{}, fg, th.Focus)
-	}
-	// Danger is destructive.
-	Danger ButtonStyle = func(th *kit.Theme, st kit.State) (kit.Surface, color.NRGBA) {
-		return state(th, st, kit.Surface{Bg: th.BadBg, Border: kit.WithAlpha(th.Bad, 90)}, th.Bad, th.Focus)
-	}
-	// Solid is a solid accent fill: the one main action. Its ring is
-	// OnAccent, since an accent ring would vanish on the fill.
-	Solid ButtonStyle = func(th *kit.Theme, st kit.State) (kit.Surface, color.NRGBA) {
-		return state(th, st, kit.Surface{Bg: th.Accent}, th.OnAccent, th.OnAccent)
-	}
-)
+	return state(th, st, kit.Surface{}, fg, th.Focus)
+}
+
+// dangerBorderAlpha is the opacity of Danger's Bad border over its BadBg
+// fill: a visible edge that stays quieter than the label.
+const dangerBorderAlpha = 90
+
+// Danger is destructive.
+func Danger(th *kit.Theme, st kit.State) (kit.Surface, color.NRGBA) {
+	return state(th, st, kit.Surface{Bg: th.BadBg, Border: kit.WithAlpha(th.Bad, dangerBorderAlpha)}, th.Bad, th.Focus)
+}
+
+// Solid is a solid accent fill: the one main action. Its ring is
+// OnAccent, since an accent ring would vanish on the fill.
+func Solid(th *kit.Theme, st kit.State) (kit.Surface, color.NRGBA) {
+	return state(th, st, kit.Surface{Bg: th.Accent}, th.OnAccent, th.OnAccent)
+}
 
 // state finishes a style's surface: theme corners and widths, the state
 // colour, the ring while focused.
@@ -65,15 +70,18 @@ func state(th *kit.Theme, st kit.State, s kit.Surface, fg, ring color.NRGBA) (ki
 //
 // Read clicks with Clickable.Clicked in the handle pass.
 type Button struct {
-	ID    string
-	Text  string
+	ID    string          // the button's semantic id
+	Text  string          // the visible text
 	Icon  kit.Icon        // optional, before the text
 	Label string          // spoken name when Text is not enough; default Text
 	Style ButtonStyle     // nil is Secondary
 	Size  kit.ControlSize // ControlDefault is the theme's size
 }
 
-func (b Button) Layout(gtx C, th *kit.Theme, c *kit.Clickable) D {
+// Layout draws the button with Style for c's hover, press and focus state.
+// It registers c as the press and focus target; read clicks with
+// c.Clicked in the handle pass. Inside th.Disable it is dimmed and inert.
+func (b Button) Layout(gtx layout.Context, th *kit.Theme, c *kit.Clickable) layout.Dimensions {
 	style := b.Style
 	if style == nil {
 		style = Secondary
@@ -82,43 +90,43 @@ func (b Button) Layout(gtx C, th *kit.Theme, c *kit.Clickable) D {
 	if label == "" {
 		label = b.Text
 	}
-	return th.Press(gtx, c, b.ID, func(gtx C, st kit.State) D {
-		semantic.Button.Add(gtx.Ops)
-		semantic.LabelOp(label).Add(gtx.Ops)
-		kit.SetRole(gtx, b.ID, kit.RoleButton)
+	return th.Press(gtx, c, b.ID, func(gtx layout.Context, st kit.State) layout.Dimensions {
+		describe(gtx, b.ID, kit.RoleButton, semantic.Button, label)
 		s, fg := style(th, st)
-		return s.Layout(gtx, func(gtx C) D {
-			v, h := th.ControlPad(b.Size, 7), th.Space(kit.Space3p5) // 7: one height with fields
-			return layout.Inset{Top: v, Bottom: v, Left: h, Right: h}.Layout(gtx, func(gtx C) D {
+		return s.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+			v, h := th.FieldPad(b.Size), th.Space(kit.Space3p5) // one height with fields
+			return layout.Inset{Top: v, Bottom: v, Left: h, Right: h}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 				return kit.Flex{Align: layout.Middle, Gap: kit.Space1p5}.Layout(gtx, th, b.parts(th, fg)...)
 			})
 		})
 	})
 }
 
+// parts are the button's row contents in fg: the icon, if any, then the
+// text.
 func (b Button) parts(th *kit.Theme, fg color.NRGBA) []layout.FlexChild {
-	text := kit.Rigid(func(gtx C) D { return th.Text(gtx, b.Text, th.Type.Body, fg, kit.Medium) })
+	text := kit.Rigid(func(gtx layout.Context) layout.Dimensions { return th.Text(gtx, b.Text, th.Type.Body, fg, kit.Medium) })
 	if b.Icon == nil {
 		return []layout.FlexChild{text}
 	}
-	return []layout.FlexChild{kit.Rigid(func(gtx C) D { return b.Icon(gtx, th.IconSize, fg) }), text}
+	return []layout.FlexChild{kit.Rigid(func(gtx layout.Context) layout.Dimensions { return b.Icon(gtx, th.IconSize, fg) }), text}
 }
 
-// IconButton is a small square icon-only button. Label is required: it is
-// the spoken name. It stays quiet until hovered, or until Active (its row
-// is hovered or selected) shows it at rest.
+// IconButton is a small square icon-only button. It stays quiet until
+// hovered, or until Active (its row is hovered or selected) shows it at
+// rest.
 type IconButton struct {
-	ID     string
-	Icon   kit.Icon
-	Label  string
-	Active bool
+	ID     string   // the button's semantic id
+	Icon   kit.Icon // nil draws an empty button
+	Label  string   // the spoken name; required, since there is no text
+	Active bool     // draw the icon at rest, not only while hovered
 }
 
-func (b IconButton) Layout(gtx C, th *kit.Theme, c *kit.Clickable) D {
-	return th.Press(gtx, c, b.ID, func(gtx C, st kit.State) D {
-		semantic.Button.Add(gtx.Ops)
-		semantic.LabelOp(b.Label).Add(gtx.Ops)
-		kit.SetRole(gtx, b.ID, kit.RoleButton)
+// Layout draws the icon in a square hit target for c's state. It registers
+// c as the press and focus target; read clicks with c.Clicked.
+func (b IconButton) Layout(gtx layout.Context, th *kit.Theme, c *kit.Clickable) layout.Dimensions {
+	return th.Press(gtx, c, b.ID, func(gtx layout.Context, st kit.State) layout.Dimensions {
+		describe(gtx, b.ID, kit.RoleButton, semantic.Button, b.Label)
 		s, fg := th.Styled(kit.Surface{Radius: th.RadiusSm()}), th.Dim
 		if b.Active {
 			s.Bg, fg = kit.LerpColor(th.Surface, th.Hover, st.Hover), th.Muted
@@ -129,22 +137,28 @@ func (b IconButton) Layout(gtx C, th *kit.Theme, c *kit.Clickable) D {
 		if st.Focused {
 			s.Focus = th.Focus
 		}
-		return kit.Box(gtx, th.IconButtonSize, s, func(gtx C) D { return b.Icon(gtx, th.IconSize, fg) })
+		return kit.Box(gtx, th.IconButtonSize, s, func(gtx layout.Context) layout.Dimensions {
+			if b.Icon == nil {
+				return layout.Dimensions{}
+			}
+			return b.Icon(gtx, th.IconSize, fg)
+		})
 	})
 }
 
 // Link is an underlined text button, for navigation inside text-heavy UI.
 type Link struct {
-	ID   string
-	Text string
+	ID   string // the link's semantic id
+	Text string // the visible and spoken text
 }
 
-func (l Link) Layout(gtx C, th *kit.Theme, c *kit.Clickable) D {
+// Layout draws Text underlined, in the accent colour at rest and in Fg
+// while hovered or focused. It registers c as the press and focus target;
+// read clicks with c.Clicked. It opens nothing itself.
+func (l Link) Layout(gtx layout.Context, th *kit.Theme, c *kit.Clickable) layout.Dimensions {
 	gtx.Constraints.Min.X = 0
-	return th.Press(gtx, c, l.ID, func(gtx C, st kit.State) D {
-		semantic.Button.Add(gtx.Ops)
-		semantic.LabelOp(l.Text).Add(gtx.Ops)
-		kit.SetRole(gtx, l.ID, kit.RoleLink)
+	return th.Press(gtx, c, l.ID, func(gtx layout.Context, st kit.State) layout.Dimensions {
+		describe(gtx, l.ID, kit.RoleLink, semantic.Button, l.Text)
 		fg := th.Accent
 		if st.Hovered || st.Focused {
 			fg = th.Fg
@@ -153,8 +167,8 @@ func (l Link) Layout(gtx C, th *kit.Theme, c *kit.Clickable) D {
 		if st.Focused {
 			s.Focus = th.Focus
 		}
-		return s.Layout(gtx, func(gtx C) D {
-			return layout.UniformInset(th.Space(kit.Space1)).Layout(gtx, func(gtx C) D {
+		return s.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+			return layout.UniformInset(th.Space(kit.Space1)).Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 				gtx.Constraints.Min.X = 0
 				d := th.Text(gtx, l.Text, th.Type.Body, fg, kit.Medium)
 				h := max(1, gtx.Dp(th.Stroke))
@@ -171,35 +185,61 @@ func (l Link) Layout(gtx C, th *kit.Theme, c *kit.Clickable) D {
 // Toolbar is a row of actions that wraps onto another line when space is
 // short. Each action keeps its full text and normal focus behaviour. The
 // group is named by Theme.Strings.Toolbar; action ids are ID/<action ID>.
+//
+//	if id, ok := v.tools.Update(gtx); ok { ... }   // handle pass
+//	ui.Toolbar{ID: "tools", Actions: actions}.Layout(gtx, th, &v.tools)
 type Toolbar struct {
-	ID      string
-	Actions []ToolbarAction
+	ID      string          // the group's id; actions are ID/<action ID>
+	Actions []ToolbarAction // left to right, wrapping
 }
 
-// ToolbarAction is one toolbar button. Read Clickable.Clicked in the handle
-// pass, as for a Button. Actions without a Clickable are skipped.
+// ToolbarAction is one toolbar button, reported by ToolbarState.Update
+// with its ID. IDs must be unique within the toolbar and stable.
 type ToolbarAction struct {
-	ID, Text  string
-	Icon      kit.Icon
-	Style     ButtonStyle // nil is Secondary
-	Clickable *kit.Clickable
-	Disabled  bool
+	ID, Text string      // stable id within the toolbar, and visible text
+	Icon     kit.Icon    // optional, before the text
+	Style    ButtonStyle // nil is Secondary
+	Disabled bool        // dimmed, out of the Tab order, never reported
 }
 
-func (tb Toolbar) Layout(gtx C, th *kit.Theme) D {
-	items := make([]kit.W, 0, len(tb.Actions))
-	for _, a := range tb.Actions {
-		if a.Clickable == nil {
-			continue
+// ToolbarState holds a Toolbar's buttons, one per action ID. Buttons of
+// actions that leave the toolbar are dropped a few frames later. The zero
+// value is ready to use; do not copy it after first use.
+type ToolbarState struct {
+	buttons kit.Pool[kit.Clickable]
+	last    []string // the action ids laid out last
+}
+
+// Update returns the ID of an action clicked since the last call. Call it
+// in the handle pass; a second click in the same frame is returned by the
+// next call.
+func (s *ToolbarState) Update(gtx layout.Context) (string, bool) {
+	for _, id := range s.last {
+		if s.buttons.Get(id).Clicked(gtx) {
+			return id, true
 		}
-		items = append(items, func(gtx C) D {
-			return th.Disable(gtx, a.Disabled, func(gtx C) D {
-				return Button{ID: kit.Part(tb.ID, a.ID), Text: a.Text, Icon: a.Icon, Style: a.Style}.Layout(gtx, th, a.Clickable)
+	}
+	return "", false
+}
+
+// Layout draws one Button per action from s's buttons, wrapping onto new
+// lines, and records the toolbar group. It remembers the actions for
+// s.Update, which reports clicks; it drops buttons of departed actions.
+func (tb Toolbar) Layout(gtx layout.Context, th *kit.Theme, s *ToolbarState) layout.Dimensions {
+	s.last = s.last[:0]
+	items := make([]layout.Widget, 0, len(tb.Actions))
+	for _, a := range tb.Actions {
+		s.last = append(s.last, a.ID)
+		c := s.buttons.Get(a.ID)
+		items = append(items, func(gtx layout.Context) layout.Dimensions {
+			return th.Disable(gtx, a.Disabled, func(gtx layout.Context) layout.Dimensions {
+				return Button{ID: kit.Part(tb.ID, a.ID), Text: a.Text, Icon: a.Icon, Style: a.Style}.Layout(gtx, th, c)
 			})
 		})
 	}
+	s.buttons.Sweep()
 	kit.SetRole(gtx, tb.ID, kit.RoleToolbar)
-	return kit.Group(gtx, tb.ID, th.Strings.Toolbar, func(gtx C) D {
+	return kit.Group(gtx, tb.ID, th.Strings.Toolbar, func(gtx layout.Context) layout.Dimensions {
 		return kit.Flow(gtx, th.Space(kit.Space1p5), th.Space(kit.Space1p5), items...)
 	})
 }

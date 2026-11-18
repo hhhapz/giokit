@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"fmt"
 	"image"
 	"strconv"
 	"time"
@@ -8,6 +9,7 @@ import (
 	"gioui.org/io/key"
 	"gioui.org/io/semantic"
 	"gioui.org/layout"
+	"gioui.org/unit"
 
 	"github.com/hhhapz/giokit/kit"
 )
@@ -15,39 +17,62 @@ import (
 // DateField is a field showing Value (zero shows Placeholder) that opens a
 // calendar. It is controlled: set Value from what Update returns.
 //
+// The calendar works in civil dates. Value's calendar day in its own
+// location is authoritative (its time of day is ignored), and Update
+// returns the picked day at midnight in that location: time.Local while
+// Value is zero. Today is the day of gtx.Now in time.Local.
+//
 // The calendar has three views. The title (ID/view) zooms out from days to
 // months to years; picking a year zooms into its months, a month into its
-// days. Prev/next (ID/prev, ID/next) step by a month, a year or a decade.
-// Ids: days ID/YYYY-MM-DD, months ID/YYYY-MM, years ID/YYYY; the panel is
-// ID, the field ID/field. Keyboard: arrows move within the view (by day and
-// week, or across the 3-column month and year grids), PageUp/PageDown step
-// like prev/next, Enter picks, Escape closes.
+// days. Prev/next (ID/prev, ID/next) step by a month, a year or a decade;
+// a day that does not exist in the target month (January 31 to February)
+// becomes that month's last day. Ids: days ID/YYYY-MM-DD, months
+// ID/YYYY-MM, years ID/YYYY; the panel is ID, the field ID/field.
+// Keyboard: arrows move within the view (by day and week, or across the
+// 3-column month and year grids), PageUp/PageDown step like prev/next,
+// Enter picks, Escape closes. Month and weekday names come from
+// Theme.Strings.
 type DateField struct {
-	ID          string
-	Value       time.Time
-	Placeholder string
-	Format      string          // field text layout; default "Mon, Jan 2, 2006"
+	ID          string          // the calendar panel's id; see the type doc for its parts
+	Value       time.Time       // the controlled value; zero shows Placeholder
+	Placeholder string          // the field's text while Value is zero
+	Format      string          // field text layout; default Theme.Strings.DateFormat
 	SundayFirst bool            // weeks start on Sunday instead of Monday
 	Size        kit.ControlSize // ControlDefault is the theme's
 }
 
-// DateFieldState is a DateField's interaction state.
+// DateFieldState is a DateField's interaction state. The zero value is
+// closed; do not copy it after first use.
 type DateFieldState struct {
-	kit.Popup
+	// Trigger is the field's press target; Update toggles the calendar
+	// when it is clicked.
 	Trigger kit.Clickable
 
-	view       calView
-	shown      time.Time // first of the month on display (its year in the year views)
-	days       kit.Pool[kit.Clickable]
-	months     kit.Pool[kit.Clickable]
-	years      kit.Pool[kit.Clickable]
+	popup kit.Popup
+	view  calView
+	// shown is the first of the month on display (its year in the year
+	// views); cursor is the active cell's date. Both are civil dates: UTC
+	// midnight.
+	shown, cursor time.Time
+	// cells holds the visible cells' clickables, keyed by calendar key (the
+	// keys of days, months and years differ in form). Entries are kept only
+	// while visible.
+	cells      kit.Pool[kit.Clickable]
 	head       kit.Clickable
 	prev, next kit.Clickable
 	grid       kit.FocusGroup // the cells: one Tab stop, arrows move the cursor
-	cursor     time.Time      // the active cell's date (day, month or year)
 	refocus    bool           // focus the grid after this layout (a view changed)
+
+	// From the last layout, for Update.
+	loc       *time.Location // the zone picked dates are returned in
+	weekStart time.Weekday
 }
 
+// Opened reports whether the calendar is open.
+func (s *DateFieldState) Opened() bool { return s.popup.Opened() }
+
+// calView is a calendar view: days of a month, months of a year, or years
+// of a decade.
 type calView int
 
 const (
@@ -56,95 +81,159 @@ const (
 	viewYears
 )
 
+// Calendar keys and geometry.
 const (
 	dayKey   = "2006-01-02"
 	monthKey = "2006-01"
 	gridCols = 3 // month and year grids: 3 × 4
+	gridRows = 4
+	// The day grid: 7 columns of weekdays, 6 rows of weeks (every month
+	// fits in 6 weeks from its first week's start).
+	weekDays  = 7
+	monthRows = 6
+	yearCells = gridCols * gridRows // a decade and the years either side
 )
+
+// Day cell geometry.
+const (
+	dayCellWidth  unit.Dp = 34
+	dayCellHeight unit.Dp = 30
+	weekdayHeight unit.Dp = 20 // the weekday names row
+)
+
+// civil is t's calendar date in t's location, as UTC midnight: the form
+// the calendar computes in, free of zone offsets and daylight saving.
+func civil(t time.Time) time.Time {
+	if t.IsZero() {
+		return t
+	}
+	y, m, d := t.Date()
+	return time.Date(y, m, d, 0, 0, 0, 0, time.UTC)
+}
+
+// firstOfMonth is the first day of d's month.
+func firstOfMonth(d time.Time) time.Time {
+	return time.Date(d.Year(), d.Month(), 1, 0, 0, 0, 0, time.UTC)
+}
+
+// addMonths moves d by n months, keeping its day of the month or, when the
+// target month is shorter, taking its last day (unlike time.AddDate, which
+// rolls January 31 over into March).
+func addMonths(d time.Time, n int) time.Time {
+	first := time.Date(d.Year(), d.Month()+time.Month(n), 1, 0, 0, 0, 0, time.UTC)
+	last := first.AddDate(0, 1, -1).Day()
+	return first.AddDate(0, 0, min(d.Day(), last)-1)
+}
+
+// decade is the first year of the decade holding y.
+func decade(y int) int { return y - ((y%10)+10)%10 }
+
+// sameMonth reports whether a and b fall in the same month of the same
+// year. A zero b (no date) matches no month.
+func sameMonth(a, b time.Time) bool {
+	return !b.IsZero() && a.Year() == b.Year() && a.Month() == b.Month()
+}
+
+// key is the view's calendar key for d: a day, a month or a year.
+func (v calView) key(d time.Time) string {
+	switch v {
+	case viewMonths:
+		return d.Format(monthKey)
+	case viewYears:
+		return strconv.Itoa(d.Year())
+	}
+	return d.Format(dayKey)
+}
+
+// visible are the dates of the view's cells: the six weeks around the
+// shown month, its year's twelve months, or the decade with a year either
+// side.
+func (s *DateFieldState) visible() []time.Time {
+	switch s.view {
+	case viewMonths:
+		out := make([]time.Time, 12)
+		for i := range out {
+			out[i] = time.Date(s.shown.Year(), time.Month(i+1), 1, 0, 0, 0, 0, time.UTC)
+		}
+		return out
+	case viewYears:
+		first := decade(s.shown.Year()) - 1
+		out := make([]time.Time, yearCells)
+		for i := range out {
+			out[i] = time.Date(first+i, time.January, 1, 0, 0, 0, 0, time.UTC)
+		}
+		return out
+	}
+	lead := (int(s.shown.Weekday()) - int(s.weekStart) + weekDays) % weekDays
+	start := s.shown.AddDate(0, 0, -lead)
+	out := make([]time.Time, weekDays*monthRows)
+	for i := range out {
+		out[i] = start.AddDate(0, 0, i)
+	}
+	return out
+}
 
 // Update returns a date picked since the last call, and handles the
 // calendar's navigation. Call it in the handle pass. A pick closes the
 // calendar and returns focus to the field.
-func (s *DateFieldState) Update(gtx C) (time.Time, bool) {
+func (s *DateFieldState) Update(gtx layout.Context) (time.Time, bool) {
 	if s.Trigger.Clicked(gtx) {
-		s.Toggle()
+		s.popup.Toggle()
+	}
+	// Cells first: a click lands on a cell of the view as last drawn.
+	var picked time.Time
+	ok := false
+	if s.popup.Opened() {
+		for _, d := range s.visible() {
+			if !s.cells.Get(s.view.key(d)).Clicked(gtx) {
+				continue
+			}
+			switch s.view {
+			case viewYears:
+				s.shown = time.Date(d.Year(), s.shown.Month(), 1, 0, 0, 0, 0, time.UTC)
+				s.cursor, s.view, s.refocus = s.shown, viewMonths, true
+			case viewMonths:
+				s.shown, s.cursor, s.view, s.refocus = d, d, viewDays, true
+			default:
+				picked, ok = d, true
+			}
+			break
+		}
 	}
 	if s.head.Clicked(gtx) && s.view < viewYears {
 		s.view++
 		s.refocus = true
 	}
-	years, months := 0, 1 // prev/next step: a month, a year or a decade
-	switch s.view {
-	case viewMonths:
-		years, months = 1, 0
-	case viewYears:
-		years, months = 10, 0
-	}
 	if s.prev.Clicked(gtx) {
-		s.shown = s.shown.AddDate(-years, -months, 0)
-		s.cursor = s.cursor.AddDate(-years, -months, 0)
+		s.page(-1)
 	}
 	if s.next.Clicked(gtx) {
-		s.shown = s.shown.AddDate(years, months, 0)
-		s.cursor = s.cursor.AddDate(years, months, 0)
+		s.page(1)
 	}
-	s.years.Each(func(k string, c *kit.Clickable) {
-		if !c.Clicked(gtx) {
-			return
-		}
-		if y, err := strconv.Atoi(k); err == nil {
-			s.shown = time.Date(y, s.shown.Month(), 1, 0, 0, 0, 0, time.Local)
-			s.cursor = s.shown
-			s.view = viewMonths
-			s.refocus = true
-		}
-	})
-	s.months.Each(func(k string, c *kit.Clickable) {
-		if !c.Clicked(gtx) {
-			return
-		}
-		if m, err := time.ParseInLocation(monthKey, k, time.Local); err == nil {
-			s.shown, s.cursor = m, m
-			s.view = viewDays
-			s.refocus = true
-		}
-	})
-	var picked time.Time
-	ok := false
-	s.days.Each(func(k string, c *kit.Clickable) {
-		if c.Clicked(gtx) {
-			if t, err := time.ParseInLocation(dayKey, k, time.Local); err == nil {
-				picked, ok = t, true
-			}
-		}
-	})
-	if ok {
-		s.Hide()
-		s.Trigger.FocusQuiet(gtx)
+	if !ok {
+		return time.Time{}, false
 	}
-	return picked, ok
+	s.popup.Hide()
+	s.Trigger.FocusQuiet(gtx)
+	loc := s.loc
+	if loc == nil {
+		loc = time.Local
+	}
+	return time.Date(picked.Year(), picked.Month(), picked.Day(), 0, 0, 0, 0, loc), true
 }
 
-// cellKey is the current view's key for t: a day, a month or a year.
-func (s *DateFieldState) cellKey(t time.Time) string {
+// page steps the view by n pages (a month, a year or a decade each),
+// moving the cursor with it.
+func (s *DateFieldState) page(n int) {
+	months := n
 	switch s.view {
 	case viewMonths:
-		return t.Format(monthKey)
+		months = 12 * n
 	case viewYears:
-		return strconv.Itoa(t.Year())
+		months = 120 * n
 	}
-	return t.Format(dayKey)
-}
-
-// cell is the current view's cell for t.
-func (s *DateFieldState) cell(t time.Time) *kit.Clickable {
-	switch s.view {
-	case viewMonths:
-		return s.months.Get(s.cellKey(t))
-	case viewYears:
-		return s.years.Get(s.cellKey(t))
-	}
-	return s.days.Get(s.cellKey(t))
+	s.shown = addMonths(s.shown, months)
+	s.cursor = addMonths(s.cursor, months)
 }
 
 // move moves the cursor by n steps of the view's unit (a day, a month or
@@ -154,37 +243,46 @@ func (s *DateFieldState) move(n int) {
 	case viewDays:
 		s.cursor = s.cursor.AddDate(0, 0, n)
 		if !sameMonth(s.cursor, s.shown) {
-			s.shown = time.Date(s.cursor.Year(), s.cursor.Month(), 1, 0, 0, 0, 0, time.Local)
+			s.shown = firstOfMonth(s.cursor)
 		}
 	case viewMonths:
-		s.cursor = s.cursor.AddDate(0, n, 0)
-		s.shown = time.Date(s.cursor.Year(), s.shown.Month(), 1, 0, 0, 0, 0, time.Local)
+		s.cursor = addMonths(s.cursor, n)
+		s.shown = time.Date(s.cursor.Year(), s.shown.Month(), 1, 0, 0, 0, 0, time.UTC)
 	case viewYears:
-		s.cursor = s.cursor.AddDate(n, 0, 0)
+		s.cursor = addMonths(s.cursor, 12*n)
 		if decade(s.cursor.Year()) != decade(s.shown.Year()) {
-			s.shown = time.Date(s.cursor.Year(), s.shown.Month(), 1, 0, 0, 0, 0, time.Local)
+			s.shown = time.Date(s.cursor.Year(), s.shown.Month(), 1, 0, 0, 0, 0, time.UTC)
 		}
 	}
 }
 
-// Layout lays out the field and, while open, the calendar.
-func (f DateField) Layout(gtx C, th *kit.Theme, s *DateFieldState) D {
-	sel := day(f.Value)
-	if s.Opening() || s.shown.IsZero() {
+// Layout draws the field showing Value in Format and, while s is open, the
+// calendar in a popover. It handles the calendar's view, paging and arrow
+// keys while laying out, and keeps Value's zone and the week start for
+// s.Update, which reports a picked day.
+func (f DateField) Layout(gtx layout.Context, th *kit.Theme, s *DateFieldState) layout.Dimensions {
+	s.loc = time.Local
+	if !f.Value.IsZero() {
+		s.loc = f.Value.Location()
+	}
+	s.weekStart = time.Monday
+	if f.SundayFirst {
+		s.weekStart = time.Sunday
+	}
+	sel := civil(f.Value)
+	if s.popup.Opening() || s.shown.IsZero() {
 		base := sel
 		if base.IsZero() {
-			base = day(gtx.Now)
+			base = civil(gtx.Now.In(time.Local))
 		}
-		s.shown = time.Date(base.Year(), base.Month(), 1, 0, 0, 0, 0, time.Local)
-		s.cursor = base
-		s.view = viewDays
+		s.shown, s.cursor, s.view = firstOfMonth(base), base, viewDays
 	}
-	s.FocusOnOpen(s.grid.FocusHandle()) // an open calendar focuses its grid
+	s.popup.FocusOnOpen(s.grid.FocusHandle()) // an open calendar focuses its grid
 	if s.refocus {
 		s.refocus = false
 		defer s.grid.FocusQuiet(gtx)
 	}
-	if dm, byKey := s.DidDismiss(); dm {
+	if dm, byKey := s.popup.DidDismiss(); dm {
 		if byKey {
 			s.Trigger.Focus(gtx)
 		} else {
@@ -197,100 +295,89 @@ func (f DateField) Layout(gtx C, th *kit.Theme, s *DateFieldState) D {
 		if layoutStr == "" {
 			layoutStr = th.Strings.DateFormat
 		}
-		label, lc = sel.Format(layoutStr), th.Fg
+		label, lc = f.Value.Format(layoutStr), th.Fg
 	}
-	return th.Popover(gtx, &s.Popup, f.ID, func(gtx C) D {
+	return th.Popover(gtx, &s.popup, f.ID, func(gtx layout.Context) layout.Dimensions {
 		kit.SetRole(gtx, f.ID, kit.RoleDialog)
-		return th.Press(gtx, &s.Trigger, kit.Part(f.ID, "field"), func(gtx C, st kit.State) D {
-			semantic.Button.Add(gtx.Ops)
-			kit.SetRole(gtx, kit.Part(f.ID, "field"), kit.RoleCombobox)
-			st.Focused = st.Focused || s.Opened()
-			return th.SizedField(gtx, f.Size, st, func(gtx C) D {
+		return th.Press(gtx, &s.Trigger, kit.Part(f.ID, "field"), func(gtx layout.Context, st kit.State) layout.Dimensions {
+			describe(gtx, kit.Part(f.ID, "field"), kit.RoleCombobox, semantic.Button, "") // spoken by its text
+			st.Focused = st.Focused || s.popup.Opened()
+			return th.SizedField(gtx, f.Size, st, func(gtx layout.Context) layout.Dimensions {
 				return kit.Row(gtx,
-					kit.Flexed(1, func(gtx C) D { return th.Text(gtx, label, th.Type.Body, lc, kit.Regular) }),
-					kit.Rigid(func(gtx C) D { return kit.IconChevronDown(gtx, th.IconSize, th.Muted) }),
+					kit.Flexed(1, func(gtx layout.Context) layout.Dimensions { return th.Text(gtx, label, th.Type.Body, lc, kit.Regular) }),
+					kit.Rigid(func(gtx layout.Context) layout.Dimensions { return kit.IconChevronDown(gtx, th.IconSize, th.Muted) }),
 				)
 			})
 		})
-	}, func(gtx C) D { return f.calendar(gtx, th, s, sel) })
+	}, func(gtx layout.Context) layout.Dimensions { return f.calendar(gtx, th, s, sel) })
 }
 
-func day(t time.Time) time.Time {
-	if t.IsZero() {
-		return t
+// calCell is one cell of a calendar view, ready to draw.
+type calCell struct {
+	date  time.Time // the day, or the first of the month or year
+	label string
+	// selected is Value's day, month or year; current is today's; outside
+	// is a day of another month or a year of a neighbouring decade.
+	selected, current, outside bool
+}
+
+// cellsOf describes the view's visible cells for drawing.
+func (s *DateFieldState) cellsOf(th *kit.Theme, dates []time.Time, sel, today time.Time) []calCell {
+	out := make([]calCell, len(dates))
+	for i, d := range dates {
+		c := calCell{date: d}
+		switch s.view {
+		case viewMonths:
+			c.label = th.Strings.Months[d.Month()-1]
+			c.selected, c.current = sameMonth(d, sel), sameMonth(d, today)
+		case viewYears:
+			c.label = strconv.Itoa(d.Year())
+			c.selected = !sel.IsZero() && sel.Year() == d.Year()
+			c.current = today.Year() == d.Year()
+			c.outside = i == 0 || i == len(dates)-1
+		default:
+			c.label = strconv.Itoa(d.Day())
+			c.selected, c.current = d.Equal(sel), d.Equal(today)
+			c.outside = d.Month() != s.shown.Month()
+		}
+		out[i] = c
 	}
-	t = t.Local()
-	return time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, time.Local)
+	return out
 }
-
-// decade is the first year of the decade holding y.
-func decade(y int) int { return y - ((y%10)+10)%10 }
 
 // calendar handles the current view's keys (before drawing, so a page
 // lands this frame), then lays out the header and the view's grid.
-func (f DateField) calendar(gtx C, th *kit.Theme, s *DateFieldState, sel time.Time) D {
-	// The cursor's cell is the grid's active member: the one Tab stop.
-	s.grid.Active = s.cellKey(s.cursor)
-	page, row := 0, 7 // PageUp/Down step (a month in the day view) and arrow row
-	switch s.view {
-	case viewMonths:
-		page, row = 12, gridCols
-	case viewYears:
-		page, row = 10, gridCols
+func (f DateField) calendar(gtx layout.Context, th *kit.Theme, s *DateFieldState, sel time.Time) layout.Dimensions {
+	// Every visible cell joins the grid: members, not Tab stops. The
+	// cursor's cell is the active member: the one Tab stop.
+	s.grid.Active = s.view.key(s.cursor)
+	for _, d := range s.visible() {
+		k := s.view.key(d)
+		s.grid.Join(s.cells.Get(k), k == s.grid.Active)
 	}
-	// Every cell of the view joins the grid: members, not Tab stops.
-	switch s.view {
-	case viewDays:
-		for _, c := range f.cells(s) {
-			k := c.Format(dayKey)
-			s.grid.Join(s.days.Get(k), k == s.grid.Active)
-		}
-	case viewMonths:
-		for m := range 12 {
-			k := time.Date(s.shown.Year(), time.Month(m+1), 1, 0, 0, 0, 0, time.Local).Format(monthKey)
-			s.grid.Join(s.months.Get(k), k == s.grid.Active)
-		}
-	case viewYears:
-		first := decade(s.shown.Year()) - 1
-		for i := range 12 {
-			k := strconv.Itoa(first + i)
-			s.grid.Join(s.years.Get(k), k == s.grid.Active)
-		}
+	f.pageKeys(gtx, s)
+	row := weekDays // the arrow keys' vertical step
+	if s.view != viewDays {
+		row = gridCols
 	}
-	for {
-		e, ok := gtx.Event(key.Filter{Focus: s.grid.FocusHandle(), Name: key.NamePageUp}, key.Filter{Focus: s.grid.FocusHandle(), Name: key.NamePageDown})
-		if !ok {
-			break
-		}
-		if ke, ok := e.(key.Event); ok && ke.State == key.Press {
-			d := 1
-			if ke.Name == key.NamePageUp {
-				d = -1
-			}
-			if s.view == viewDays {
-				s.cursor = s.cursor.AddDate(0, d, 0)
-				s.shown = time.Date(s.cursor.Year(), s.cursor.Month(), 1, 0, 0, 0, 0, time.Local)
-			} else {
-				s.move(d * page)
-			}
-			s.grid.Active = s.cellKey(s.cursor)
-			kit.Notify(gtx)
-		}
-	}
-	keys := func(gtx C) {
+	keys := func(gtx layout.Context) {
 		step := func(n int) func() {
-			return func() { s.move(n); s.grid.Active = s.cellKey(s.cursor) }
+			return func() {
+				s.move(n)
+				s.grid.Active = s.view.key(s.cursor)
+			}
 		}
 		kit.OnAction(gtx, kit.ActCollapse, step(-1))
 		kit.OnAction(gtx, kit.ActExpand, step(1))
 		kit.OnAction(gtx, kit.ActMoveUp, step(-row))
 		kit.OnAction(gtx, kit.ActMoveDown, step(row))
-		kit.OnAction(gtx, kit.ActConfirm, func() { s.cell(s.cursor).Click() }) // reported by Update
+		kit.OnAction(gtx, kit.ActConfirm, func() { s.cells.Get(s.view.key(s.cursor)).Click() }) // reported by Update
 	}
 
-	cell := image.Pt(gtx.Dp(34), gtx.Dp(30))
-	weekdays := gtx.Dp(20)                      // the weekday names row
-	gridW, gridH := cell.X*7, weekdays+cell.Y*6 // the day grid's size: every view keeps it
+	cell := image.Pt(gtx.Dp(dayCellWidth), gtx.Dp(dayCellHeight))
+	weekdays := gtx.Dp(weekdayHeight)
+	// The day grid's size: every view keeps it, so paging never resizes.
+	gridW, gridH := cell.X*weekDays, weekdays+cell.Y*monthRows
 	var title string
 	switch s.view {
 	case viewDays:
@@ -299,127 +386,122 @@ func (f DateField) calendar(gtx C, th *kit.Theme, s *DateFieldState, sel time.Ti
 		title = strconv.Itoa(s.shown.Year())
 	default:
 		d := decade(s.shown.Year())
-		title = strconv.Itoa(d) + "–" + strconv.Itoa(d+9)
+		title = fmt.Sprintf(th.Strings.DecadeFormat, d, d+9)
 	}
-	header := func(gtx C) D {
+	header := func(gtx layout.Context) layout.Dimensions {
 		gtx.Constraints.Min.X, gtx.Constraints.Max.X = gridW, gridW
 		return kit.Row(gtx,
-			kit.Rigid(func(gtx C) D {
+			kit.Rigid(func(gtx layout.Context) layout.Dimensions {
 				return IconButton{ID: kit.Part(f.ID, "prev"), Icon: kit.IconChevronLeft, Label: th.Strings.PrevPage, Active: true}.Layout(gtx, th, &s.prev)
 			}),
-			kit.Flexed(1, func(gtx C) D {
-				return layout.Center.Layout(gtx, func(gtx C) D { return f.viewButton(gtx, th, s, title) })
+			kit.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+				return layout.Center.Layout(gtx, func(gtx layout.Context) layout.Dimensions { return f.viewButton(gtx, th, s, title) })
 			}),
-			kit.Rigid(func(gtx C) D {
+			kit.Rigid(func(gtx layout.Context) layout.Dimensions {
 				return IconButton{ID: kit.Part(f.ID, "next"), Icon: kit.IconChevronRight, Label: th.Strings.NextPage, Active: true}.Layout(gtx, th, &s.next)
 			}),
 		)
 	}
-	body := func(gtx C) D {
+	cells := s.cellsOf(th, s.visible(), sel, civil(gtx.Now.In(time.Local)))
+	body := func(gtx layout.Context) layout.Dimensions {
 		gtx.Constraints = layout.Exact(image.Pt(gridW, gridH))
-		switch s.view {
-		case viewMonths:
-			return f.grid(gtx, th, 12, func(gtx C, i int) D {
-				m := time.Date(s.shown.Year(), time.Month(i+1), 1, 0, 0, 0, 0, time.Local)
-				key := m.Format(monthKey)
-				return f.gridCell(gtx, th, s.months.Get(key), kit.Part(f.ID, key), m.Month().String()[:3],
-					sameMonth(m, sel), sameMonth(m, gtx.Now), false)
-			})
-		case viewYears:
-			first := decade(s.shown.Year()) - 1
-			return f.grid(gtx, th, 12, func(gtx C, i int) D {
-				y := first + i
-				key := strconv.Itoa(y)
-				return f.gridCell(gtx, th, s.years.Get(key), kit.Part(f.ID, key), key,
-					!sel.IsZero() && sel.Year() == y, gtx.Now.Year() == y, i == 0 || i == 11)
-			})
+		if s.view == viewDays {
+			return f.dayGrid(gtx, th, s, cells, cell, weekdays)
 		}
-		return f.dayGrid(gtx, th, s, sel, cell, weekdays)
+		return f.grid(gtx, th, len(cells), func(gtx layout.Context, i int) layout.Dimensions { return f.gridCell(gtx, th, s, cells[i]) })
 	}
-	grid := func(gtx C) D {
-		return kit.KeyContext(gtx, "calendar", func(gtx C) D {
+	grid := func(gtx layout.Context) layout.Dimensions {
+		return kit.KeyContext(gtx, "calendar", func(gtx layout.Context) layout.Dimensions {
 			keys(gtx)
 			kit.SetRole(gtx, kit.Part(f.ID, "grid"), kit.RoleGrid)
-			return s.grid.Layout(gtx, kit.Part(f.ID, "grid"), func(gtx C) D {
+			return s.grid.Layout(gtx, kit.Part(f.ID, "grid"), func(gtx layout.Context) layout.Dimensions {
 				// The group's own area takes no pointer gestures: name it on a nested one.
 				return kit.TagArea(gtx, kit.Part(f.ID, "grid"), body)
 			})
 		})
 	}
-	return kit.Flex{Axis: layout.Vertical, Pad: kit.Space2, Gap: kit.Space1p5}.Layout(gtx, th, kit.Rigid(header), kit.Rigid(grid))
+	d := kit.Flex{Axis: layout.Vertical, Pad: kit.Space2, Gap: kit.Space1p5}.Layout(gtx, th, kit.Rigid(header), kit.Rigid(grid))
+	s.cells.Sweep() // every visible cell was touched: drop the ones paged away
+	return d
 }
 
-func sameMonth(a, b time.Time) bool {
-	return !b.IsZero() && a.Year() == b.Year() && a.Month() == b.Month()
+// pageKeys handles PageUp and PageDown on the grid: a page of the view.
+func (f DateField) pageKeys(gtx layout.Context, s *DateFieldState) {
+	focus := s.grid.FocusHandle()
+	for {
+		e, ok := gtx.Event(key.Filter{Focus: focus, Name: key.NamePageUp}, key.Filter{Focus: focus, Name: key.NamePageDown})
+		if !ok {
+			return
+		}
+		ke, ok := e.(key.Event)
+		if !ok || ke.State != key.Press {
+			continue
+		}
+		n := 1
+		if ke.Name == key.NamePageUp {
+			n = -1
+		}
+		switch s.view {
+		case viewDays:
+			s.cursor = addMonths(s.cursor, n)
+			s.shown = firstOfMonth(s.cursor)
+		case viewMonths:
+			s.move(12 * n)
+		case viewYears:
+			s.move(10 * n)
+		}
+		s.grid.Active = s.view.key(s.cursor)
+		kit.Notify(gtx)
+	}
 }
 
 // viewButton is the title: it zooms out to the next coarser view.
-func (f DateField) viewButton(gtx C, th *kit.Theme, s *DateFieldState, title string) D {
-	return th.Press(gtx, &s.head, kit.Part(f.ID, "view"), func(gtx C, st kit.State) D {
-		semantic.Button.Add(gtx.Ops)
-		semantic.LabelOp(title).Add(gtx.Ops)
-		kit.SetRole(gtx, kit.Part(f.ID, "view"), kit.RoleButton)
+func (f DateField) viewButton(gtx layout.Context, th *kit.Theme, s *DateFieldState, title string) layout.Dimensions {
+	return th.Press(gtx, &s.head, kit.Part(f.ID, "view"), func(gtx layout.Context, st kit.State) layout.Dimensions {
+		describe(gtx, kit.Part(f.ID, "view"), kit.RoleButton, semantic.Button, title)
 		sf := th.Styled(kit.Surface{Bg: th.Highlight(st.Hover), Radius: th.RadiusSm()})
 		if st.Focused {
 			sf.Focus = th.Focus
 		}
-		return sf.Layout(gtx, func(gtx C) D {
+		return sf.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 			return kit.Flex{Gap: kit.Space1, Align: layout.Middle, PadX: kit.Space2, PadY: kit.Space1}.Layout(gtx, th,
-				kit.Rigid(func(gtx C) D { return th.Text(gtx, title, th.Type.Body, th.Fg, kit.SemiBold) }),
-				kit.Rigid(func(gtx C) D {
+				kit.Rigid(func(gtx layout.Context) layout.Dimensions {
+					return th.Text(gtx, title, th.Type.Body, th.Fg, kit.SemiBold)
+				}),
+				kit.Rigid(func(gtx layout.Context) layout.Dimensions {
 					if s.view == viewYears {
-						return D{}
+						return layout.Dimensions{}
 					}
-					return kit.IconChevronDown(gtx, 12, th.Muted)
+					return kit.IconChevronDown(gtx, th.IconSize, th.Muted)
 				}),
 			)
 		})
 	})
 }
 
-// cells are the 42 days the month grid shows, from the week start.
-func (f DateField) cells(s *DateFieldState) []time.Time {
-	weekStart := time.Monday
-	if f.SundayFirst {
-		weekStart = time.Sunday
-	}
-	lead := (int(s.shown.Weekday()) - int(weekStart) + 7) % 7
-	start := s.shown.AddDate(0, 0, -lead)
-	cells := make([]time.Time, 42)
-	for i := range cells {
-		cells[i] = start.AddDate(0, 0, i)
-	}
-	return cells
-}
-
-func (f DateField) dayGrid(gtx C, th *kit.Theme, s *DateFieldState, sel time.Time, cell image.Point, headH int) D {
-	weekStart := time.Monday
-	if f.SundayFirst {
-		weekStart = time.Sunday
-	}
-	cells := f.cells(s)
-	today := day(gtx.Now)
-	rows := []layout.FlexChild{kit.Rigid(func(gtx C) D {
+// dayGrid lays out the weekday names over six weeks of day cells.
+func (f DateField) dayGrid(gtx layout.Context, th *kit.Theme, s *DateFieldState, cells []calCell, cell image.Point, headH int) layout.Dimensions {
+	rows := []layout.FlexChild{kit.Rigid(func(gtx layout.Context) layout.Dimensions {
 		var hs []layout.FlexChild
-		for i := range 7 {
-			name := time.Weekday((int(weekStart) + i) % 7).String()[:2]
-			hs = append(hs, kit.Rigid(func(gtx C) D {
+		for i := range weekDays {
+			name := th.Strings.Weekdays[(int(s.weekStart)+i)%weekDays]
+			hs = append(hs, kit.Rigid(func(gtx layout.Context) layout.Dimensions {
 				gtx.Constraints = layout.Exact(image.Pt(cell.X, headH))
-				return layout.Center.Layout(gtx, func(gtx C) D { return th.Text(gtx, name, th.Type.Small, th.Muted, kit.Medium) })
+				return layout.Center.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+					return th.Text(gtx, name, th.Type.Small, th.Muted, kit.Medium)
+				})
 			}))
 		}
 		return layout.Flex{}.Layout(gtx, hs...)
 	})}
-	for w := range 6 {
-		week := cells[w*7 : w*7+7]
-		rows = append(rows, kit.Rigid(func(gtx C) D {
+	for w := range monthRows {
+		week := cells[w*weekDays : (w+1)*weekDays]
+		rows = append(rows, kit.Rigid(func(gtx layout.Context) layout.Dimensions {
 			var ds []layout.FlexChild
 			for _, c := range week {
-				ds = append(ds, kit.Rigid(func(gtx C) D {
+				ds = append(ds, kit.Rigid(func(gtx layout.Context) layout.Dimensions {
 					gtx.Constraints = layout.Exact(cell)
-					key := c.Format(dayKey)
-					return f.gridCell(gtx, th, s.days.Get(key), kit.Part(f.ID, key), strconv.Itoa(c.Day()),
-						c.Equal(sel), c.Equal(today), c.Month() != s.shown.Month())
+					return f.gridCell(gtx, th, s, c)
 				}))
 			}
 			return layout.Flex{}.Layout(gtx, ds...)
@@ -429,21 +511,21 @@ func (f DateField) dayGrid(gtx C, th *kit.Theme, s *DateFieldState, sel time.Tim
 }
 
 // grid lays out n cells in rows of gridCols, filling the constraints.
-func (f DateField) grid(gtx C, th *kit.Theme, n int, cell func(gtx C, i int) D) D {
+func (f DateField) grid(gtx layout.Context, th *kit.Theme, n int, cell func(gtx layout.Context, i int) layout.Dimensions) layout.Dimensions {
 	rowsN := (n + gridCols - 1) / gridCols
 	sz := image.Pt(gtx.Constraints.Max.X/gridCols, gtx.Constraints.Max.Y/rowsN)
 	var rows []layout.FlexChild
 	for r := range rowsN {
-		rows = append(rows, kit.Rigid(func(gtx C) D {
+		rows = append(rows, kit.Rigid(func(gtx layout.Context) layout.Dimensions {
 			var cs []layout.FlexChild
 			for c := range gridCols {
 				i := r*gridCols + c
 				if i >= n {
 					break
 				}
-				cs = append(cs, kit.Rigid(func(gtx C) D {
+				cs = append(cs, kit.Rigid(func(gtx layout.Context) layout.Dimensions {
 					gtx.Constraints = layout.Exact(sz)
-					return layout.UniformInset(th.Space(kit.Space0p5)).Layout(gtx, func(gtx C) D {
+					return layout.UniformInset(th.Space(kit.Space0p5)).Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 						gtx.Constraints.Min = gtx.Constraints.Max
 						return cell(gtx, i)
 					})
@@ -456,34 +538,34 @@ func (f DateField) grid(gtx C, th *kit.Theme, n int, cell func(gtx C, i int) D) 
 }
 
 // gridCell is one day, month or year: selected is accent-filled, current
-// (today, this month, this year) outlined, outside (another month, a
-// neighbouring decade) dimmed.
-func (f DateField) gridCell(gtx C, th *kit.Theme, c *kit.Clickable, id, label string, selected, current, outside bool) D {
-	return th.Press(gtx, c, id, func(gtx C, st kit.State) D {
-		semantic.Button.Add(gtx.Ops)
-		semantic.SelectedOp(selected).Add(gtx.Ops)
-		kit.SetRole(gtx, id, kit.RoleGridCell)
+// outlined, outside dimmed.
+func (f DateField) gridCell(gtx layout.Context, th *kit.Theme, s *DateFieldState, c calCell) layout.Dimensions {
+	k := s.view.key(c.date)
+	id := kit.Part(f.ID, k)
+	return th.Press(gtx, s.cells.Get(k), id, func(gtx layout.Context, st kit.State) layout.Dimensions {
+		describe(gtx, id, kit.RoleGridCell, semantic.Button, "") // spoken by its text
+		semantic.SelectedOp(c.selected).Add(gtx.Ops)
 		fg := th.Fg
-		if outside {
+		if c.outside {
 			fg = th.Dim
 		}
 		sf := th.Styled(kit.Surface{Bg: th.Highlight(st.Hover), Radius: th.RadiusSm()})
 		switch {
-		case selected:
+		case c.selected:
 			sf.Bg, fg = th.Accent, th.OnAccent
-		case current:
+		case c.current:
 			sf.Border = th.Border
 		}
 		if st.Focused {
 			sf.Focus = th.Focus
 		}
-		return sf.Layout(gtx, func(gtx C) D {
-			return layout.Center.Layout(gtx, func(gtx C) D {
+		return sf.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+			return layout.Center.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 				w := kit.Regular
-				if current || selected {
+				if c.current || c.selected {
 					w = kit.SemiBold
 				}
-				return th.Text(gtx, label, th.Type.Body, fg, w)
+				return th.Text(gtx, c.label, th.Type.Body, fg, w)
 			})
 		})
 	})

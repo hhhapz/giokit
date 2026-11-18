@@ -10,8 +10,10 @@ import (
 
 // Flow lays children out left to right, wrapping onto new lines when the
 // width runs out, like words in a paragraph (diff tokens, chips, tags).
-// Each line is as tall as its tallest child; children top-align.
-func Flow(gtx C, hgap, vgap unit.Dp, children ...W) D {
+// Each line is as tall as its tallest child; children top-align. hgap and
+// vgap separate children on a line and the lines; they are used as given,
+// not scaled by Density: pass th.Space(kit.SpaceN) for themed spacing.
+func Flow(gtx layout.Context, hgap, vgap unit.Dp, children ...layout.Widget) layout.Dimensions {
 	maxW := gtx.Constraints.Max.X
 	hg, vg := gtx.Dp(hgap), gtx.Dp(vgap)
 	cgtx := gtx
@@ -31,5 +33,5 @@ func Flow(gtx C, hgap, vgap unit.Dp, children ...W) D {
 		lineH = max(lineH, d.Size.Y)
 		width = max(width, x-hg)
 	}
-	return D{Size: image.Pt(max(width, gtx.Constraints.Min.X), max(y+lineH, gtx.Constraints.Min.Y))}
+	return layout.Dimensions{Size: image.Pt(max(width, gtx.Constraints.Min.X), max(y+lineH, gtx.Constraints.Min.Y))}
 }

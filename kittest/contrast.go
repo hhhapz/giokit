@@ -7,18 +7,17 @@ import (
 	"math"
 
 	"gioui.org/f32"
-	"gioui.org/io/input"
 
 	"github.com/hhhapz/giokit/kit"
 )
 
 // TextContrast is one label's measured contrast.
 type TextContrast struct {
-	Text    string
-	Bounds  image.Rectangle
-	Fg, Bg  color.NRGBA
-	Ratio   float64 // WCAG contrast ratio, 1..21
-	LargePx int     // glyph-box height in px, for the large-text threshold
+	Text    string          // the label's text
+	Bounds  image.Rectangle // the label's bounds in pixels
+	Fg, Bg  color.NRGBA     // the measured text and background colours
+	Ratio   float64         // WCAG contrast ratio, 1..21
+	LargePx int             // visible label-box height in px, for the large-text threshold
 }
 
 // Contrasts measures every enabled, visible label from the rendered pixels:
@@ -26,24 +25,21 @@ type TextContrast struct {
 // color the pixel that contrasts with it most (a glyph's solid core).
 // Disabled labels (Theme.Disable) are exempt, as in WCAG.
 func (h *Harness) Contrasts() []TextContrast {
+	h.tb.Helper()
 	img := h.Image()
-	nodes := h.nodes()
-	byID := map[input.SemanticID]input.SemanticNode{}
-	for _, n := range nodes {
-		byID[n.ID] = n
-	}
+	t := h.semantics()
 	images := h.kwin.Images()
 	var out []TextContrast
-	for _, n := range nodes {
+	for _, n := range t.nodes {
 		d := n.Desc
-		if d.Label == "" || disabled(byID, n) {
+		if d.Label == "" || t.disabled(n) {
 			continue
 		}
 		if images[d.Description] {
 			continue // an image label is alternative text, not painted glyphs
 		}
-		r := visible(byID, n, img.Rect)
-		if r.Dx() < 2 || r.Dy() < 4 {
+		r := t.visible(n, img.Rect)
+		if r.Dx() < minInkBox.X || r.Dy() < minInkBox.Y {
 			continue
 		}
 		// Cut off by a scroll container (a row half scrolled out): a sliver
@@ -53,14 +49,14 @@ func (h *Harness) Contrasts() []TextContrast {
 		}
 		// Covered (by a menu, a dialog's scrim): what shows there is
 		// something else's pixels.
-		c := r.Min.Add(r.Size().Div(2))
-		if hit, ok := h.router.SemanticAt(f32.Pt(float32(c.X), float32(c.Y))); ok && hit != n.ID && !within(byID, n.ID, hit) {
+		mid := Center(r)
+		if hit, ok := h.router.SemanticAt(f32.Pt(float32(mid.X), float32(mid.Y))); ok && hit != n.ID && !t.within(n.ID, hit) {
 			continue
 		}
 		hist := map[color.NRGBA]int{}
 		for y := r.Min.Y; y < r.Max.Y; y++ {
 			for x := r.Min.X; x < r.Max.X; x++ {
-				hist[px(img, x, y)]++
+				hist[opaque(img, x, y)]++
 			}
 		}
 		var bg color.NRGBA
@@ -76,20 +72,55 @@ func (h *Harness) Contrasts() []TextContrast {
 				fg, ratio = c, cr
 			}
 		}
-		if ratio < 1.1 {
+		if ratio < minInkContrast {
 			continue // no ink: covered, or clipped by something that isn't a semantic area
 		}
-		if t := h.inkToken(fg, bg); t != nil {
-			fg, ratio = *t, kit.Contrast(*t, bg)
+		if tok := h.inkToken(fg, bg); tok != nil {
+			fg, ratio = *tok, kit.Contrast(*tok, bg)
 		}
 		out = append(out, TextContrast{Text: d.Label, Bounds: r, Fg: fg, Bg: bg, Ratio: ratio, LargePx: r.Dy()})
 	}
 	return out
 }
 
-func px(img *image.RGBA, x, y int) color.NRGBA {
+// minInkBox is the smallest visible label box, in pixels, that Contrasts
+// measures: a narrower or shorter box holds no measurable glyph. It is a
+// var only because image.Point cannot be a constant.
+var minInkBox = image.Pt(2, 4)
+
+// Contrast measurement thresholds.
+const (
+	// minInkContrast is the ratio below which a box has no ink to judge:
+	// its most contrasting pixel is that close to its background (covered
+	// or clipped).
+	minInkContrast = 1.1
+	// inkMinCoverage and inkMaxCoverage bound how far along the line from
+	// the background to a theme colour an antialiased pixel may lie to be
+	// read as that colour's ink (1 is the colour itself; a little over 1
+	// allows GPU rounding).
+	inkMinCoverage = 0.6
+	inkMaxCoverage = 1.02
+	// inkMaxError is the largest linear-light distance from that line a
+	// pixel may have and still be read as the colour's ink.
+	inkMaxError = 0.03
+	// largeTextDp approximates WCAG "large text" (18pt, i.e. 24px, regular)
+	// by its line box: kit's label boxes are about 28dp tall at that size.
+	// Bold text from 14pt also counts as large in WCAG; the audit cannot see
+	// weight in pixels, so it holds bold text to the normal threshold.
+	largeTextDp = 28
+	// contrastSlack forgives rounding in the measured ratio.
+	contrastSlack = 0.005
+	// inkMinSpan is the smallest squared linear-light distance between a
+	// theme colour and the background for inkToken to try that colour: a
+	// colour this close to the background leaves no line to project onto.
+	inkMinSpan = 1e-4
+)
+
+// opaque is the colour of img at (x, y) with full alpha: the composited
+// window shows it that way.
+func opaque(img *image.RGBA, x, y int) color.NRGBA {
 	i := img.PixOffset(x, y)
-	return color.NRGBA{img.Pix[i], img.Pix[i+1], img.Pix[i+2], 255}
+	return color.NRGBA{R: img.Pix[i], G: img.Pix[i+1], B: img.Pix[i+2], A: 255}
 }
 
 // inkToken recognizes antialiased ink. Thin glyphs at small sizes may never
@@ -107,7 +138,7 @@ func (h *Harness) inkToken(fg, bg color.NRGBA) *color.NRGBA {
 	}
 	f, b := lin(fg), lin(bg)
 	var best *color.NRGBA
-	bestErr := 0.03
+	bestErr := inkMaxError
 	for _, tok := range []color.NRGBA{p.Fg, p.Muted, p.Dim, p.Accent, p.OnAccent, p.Good, p.Warn, p.Bad} {
 		t := lin(tok)
 		var num, den float64
@@ -115,11 +146,11 @@ func (h *Harness) inkToken(fg, bg color.NRGBA) *color.NRGBA {
 			num += (f[i] - b[i]) * (t[i] - b[i])
 			den += (t[i] - b[i]) * (t[i] - b[i])
 		}
-		if den < 1e-4 {
+		if den < inkMinSpan {
 			continue
 		}
 		a := num / den
-		if a < 0.6 || a > 1.02 {
+		if a < inkMinCoverage || a > inkMaxCoverage {
 			continue
 		}
 		var e float64
@@ -128,13 +159,13 @@ func (h *Harness) inkToken(fg, bg color.NRGBA) *color.NRGBA {
 			e += d * d
 		}
 		if e = math.Sqrt(e); e < bestErr {
-			tok := tok
 			best, bestErr = &tok, e
 		}
 	}
 	return best
 }
 
+// srgb converts an sRGB channel to linear light (IEC 61966-2-1).
 func srgb(v uint8) float64 {
 	c := float64(v) / 255
 	if c <= 0.04045 {
@@ -143,51 +174,23 @@ func srgb(v uint8) float64 {
 	return math.Pow((c+0.055)/1.055, 2.4)
 }
 
-// visible clips n's bounds to its ancestors' (a scrolled list's rows report
-// bounds outside its viewport) and to the screen.
-func visible(byID map[input.SemanticID]input.SemanticNode, n input.SemanticNode, screen image.Rectangle) image.Rectangle {
-	r := n.Desc.Bounds.Intersect(screen)
-	for p, ok := byID[n.ParentID]; ok; p, ok = byID[p.ParentID] {
-		if b := p.Desc.Bounds; !b.Empty() {
-			r = r.Intersect(b)
-		}
-		if p.ParentID == 0 {
-			break
-		}
-	}
-	return r
-}
-
 // lowContrast returns a low-contrast problem per label under MinContrast
 // (MinContrastLarge for large text), or nothing while MinContrast is 0.
 func (h *Harness) lowContrast() []Problem {
 	if h.MinContrast == 0 {
 		return nil
 	}
-	large := h.Metric.Dp(28) // ~ a 24px (18pt) font's line box: WCAG "large text"
+	large := h.Metric.Dp(largeTextDp)
 	var out []Problem
 	for _, c := range h.Contrasts() {
 		want := h.MinContrast
 		if c.LargePx >= large && h.MinContrastLarge > 0 {
 			want = h.MinContrastLarge
 		}
-		if c.Ratio < want-0.005 {
-			out = append(out, Problem{Kind: "low-contrast", Bounds: c.Bounds,
+		if c.Ratio < want-contrastSlack {
+			out = append(out, Problem{Kind: ProblemLowContrast, Bounds: c.Bounds,
 				Msg: fmt.Sprintf("%q is %.2f:1 (%s on %s), want %.1f:1", c.Text, c.Ratio, kit.Hex(c.Fg), kit.Hex(c.Bg), want)})
 		}
 	}
 	return out
-}
-
-// disabled reports whether n or an ancestor is disabled.
-func disabled(byID map[input.SemanticID]input.SemanticNode, n input.SemanticNode) bool {
-	for ok := true; ok; n, ok = byID[n.ParentID] {
-		if n.Desc.Disabled {
-			return true
-		}
-		if n.ParentID == 0 {
-			break
-		}
-	}
-	return false
 }

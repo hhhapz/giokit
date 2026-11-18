@@ -21,36 +21,49 @@ import (
 
 // Badge is a pill coloured by status.
 type Badge struct {
-	Status kit.Status
-	Text   string
+	Status kit.Status // picks the pill's text and fill colours
+	Text   string     // the pill's text, in the user's language
 }
 
-func (b Badge) Layout(gtx C, th *kit.Theme) D {
+// Layout draws the pill at its natural size. It takes no input.
+func (b Badge) Layout(gtx layout.Context, th *kit.Theme) layout.Dimensions {
 	fg, bg, _ := th.StatusColors(b.Status)
 	return th.Pill(gtx, b.Text, fg, bg)
 }
 
+// statusIconNudge lowers a status icon (a banner's, a toast's) to sit on
+// its title's first line.
+const statusIconNudge unit.Dp = 1
+
 // Banner is an inline alert: status icon, bold title, optional body.
 type Banner struct {
-	Status      kit.Status
-	Title, Body string
+	Status      kit.Status // picks the icon, tint and border
+	Title, Body string     // a bold line, then an optional wrapped paragraph
 }
 
-func (b Banner) Layout(gtx C, th *kit.Theme) D {
+// bannerBorderAlpha is the opacity of a Banner's border in its status
+// colour: enough to edge the tinted fill without competing with the icon.
+const bannerBorderAlpha = 60
+
+// Layout draws the banner stretched to the available width. It takes no
+// input; put actions beside it.
+func (b Banner) Layout(gtx layout.Context, th *kit.Theme) layout.Dimensions {
 	fg, bg, icon := th.StatusColors(b.Status)
-	return th.Styled(kit.Surface{Bg: bg, Border: kit.WithAlpha(fg, 60), Radius: th.Radius}).Layout(gtx, kit.Stretch(kit.Pad(th.Space(kit.Space2p5), th.Space(kit.Space3), func(gtx C) D {
+	return th.Styled(kit.Surface{Bg: bg, Border: kit.WithAlpha(fg, bannerBorderAlpha), Radius: th.Radius}).Layout(gtx, kit.Stretch(kit.Pad(th.Space(kit.Space2p5), th.Space(kit.Space3), func(gtx layout.Context) layout.Dimensions {
 		return layout.Flex{}.Layout(gtx,
-			kit.Rigid(func(gtx C) D {
-				return layout.Inset{Top: 1, Right: th.Space(kit.Space2p5)}.Layout(gtx, func(gtx C) D { return icon(gtx, th.IconSizeLg, fg) })
+			kit.Rigid(func(gtx layout.Context) layout.Dimensions {
+				return layout.Inset{Top: statusIconNudge, Right: th.Space(kit.Space2p5)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions { return icon(gtx, th.IconSizeLg, fg) })
 			}),
-			kit.Flexed(1, func(gtx C) D {
+			kit.Flexed(1, func(gtx layout.Context) layout.Dimensions {
 				return kit.Col(gtx,
-					kit.Rigid(func(gtx C) D { return th.Text(gtx, b.Title, th.Type.Body, th.Fg, kit.SemiBold) }),
-					kit.Rigid(func(gtx C) D {
+					kit.Rigid(func(gtx layout.Context) layout.Dimensions {
+						return th.Text(gtx, b.Title, th.Type.Body, th.Fg, kit.SemiBold)
+					}),
+					kit.Rigid(func(gtx layout.Context) layout.Dimensions {
 						if b.Body == "" {
-							return D{}
+							return layout.Dimensions{}
 						}
-						return layout.Inset{Top: 2}.Layout(gtx, func(gtx C) D { return th.Paragraph(gtx, b.Body, th.Muted) })
+						return layout.Inset{Top: th.Space(kit.Space0p5)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions { return th.Paragraph(gtx, b.Body, th.Muted) })
 					}),
 				)
 			}),
@@ -58,43 +71,62 @@ func (b Banner) Layout(gtx C, th *kit.Theme) D {
 	})))
 }
 
-// Kbd renders a key chord as key caps: "Ctrl+K" is [Ctrl] [K]. Show a
-// bound shortcut with Kbd{Chord: keymap.Hint("Save")}.
-type Kbd struct{ Chord string }
+// Kbd renders a key chord as key caps: "Ctrl+K" is [Ctrl] [K], and
+// "Ctrl++" is [Ctrl] [+]. Show a bound shortcut with
+// Kbd{Chord: keymap.HintFor("file.save")}.
+type Kbd struct {
+	Chord string // a display chord, keys joined by "+" (kit.FormatChord's form)
+}
 
-func (k Kbd) Layout(gtx C, th *kit.Theme) D {
-	keys := strings.Split(k.Chord, "+")
+// chordKeys splits a display chord into its keys. A trailing "+" after a
+// separator is the plus key itself.
+func chordKeys(chord string) []string {
+	switch {
+	case chord == "+":
+		return []string{"+"}
+	case strings.HasSuffix(chord, "++"):
+		return append(strings.Split(chord[:len(chord)-2], "+"), "+")
+	}
+	return strings.Split(chord, "+")
+}
+
+// Layout draws one key cap per key, in a row. It takes no input.
+func (k Kbd) Layout(gtx layout.Context, th *kit.Theme) layout.Dimensions {
+	keys := chordKeys(k.Chord)
 	caps := make([]layout.FlexChild, 0, len(keys))
-	for _, key := range keys {
-		caps = append(caps, kit.Rigid(func(gtx C) D {
-			return th.Styled(kit.Surface{Bg: th.Surface, Border: th.Border, Radius: th.RadiusSm()}).Layout(gtx, func(gtx C) D {
-				return layout.Inset{Top: 1, Bottom: 2, Left: 5, Right: 5}.Layout(gtx, func(gtx C) D {
-					return th.Text(gtx, key, th.Type.Small, th.Muted, kit.Medium)
-				})
+	for _, name := range keys {
+		caps = append(caps, kit.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return th.Styled(kit.Surface{Bg: th.Surface, Border: th.Border, Radius: th.RadiusSm()}).Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+				return kit.Flex{PadX: kit.Space1, PadY: kit.Space0p5}.Layout(gtx, th, kit.Rigid(func(gtx layout.Context) layout.Dimensions {
+					return th.Text(gtx, name, th.Type.Small, th.Muted, kit.Medium)
+				}))
 			})
 		}))
 	}
-	return kit.Flex{Align: layout.Middle, Gap: kit.Space1 - 1}.Layout(gtx, th, caps...)
+	return kit.Flex{Align: layout.Middle, Gap: kit.Space1}.Layout(gtx, th, caps...)
 }
 
 // Stat is a card with a caption and a big value; it fills the width (use
 // it inside Flexed for equal-width rows).
 type Stat struct {
-	Title, Value string
+	Title, Value string      // an uppercase caption above a large value
 	ValueColor   color.NRGBA // zero is Fg
 }
 
-func (s Stat) Layout(gtx C, th *kit.Theme) D {
+// Layout draws the card at the full available width. It takes no input.
+func (s Stat) Layout(gtx layout.Context, th *kit.Theme) layout.Dimensions {
 	vc := s.ValueColor
 	if vc.A == 0 {
 		vc = th.Fg
 	}
 	gtx.Constraints.Min.X = gtx.Constraints.Max.X
-	return th.Styled(kit.Surface{Bg: th.Panel, Border: th.Divider, Radius: th.RadiusLg()}).Layout(gtx, kit.Stretch(kit.Pad(th.Space(kit.Space3), th.Space(kit.Space3p5), func(gtx C) D {
+	return th.Styled(kit.Surface{Bg: th.Panel, Border: th.Divider, Radius: th.RadiusLg()}).Layout(gtx, kit.Stretch(kit.Pad(th.Space(kit.Space3), th.Space(kit.Space3p5), func(gtx layout.Context) layout.Dimensions {
 		return kit.Col(gtx,
-			kit.Rigid(func(gtx C) D { return th.Caption(gtx, s.Title) }),
+			kit.Rigid(func(gtx layout.Context) layout.Dimensions { return th.Caption(gtx, s.Title) }),
 			kit.Rigid(kit.Gap(0, th.Space(kit.Space1))),
-			kit.Rigid(func(gtx C) D { return th.Text(gtx, s.Value, th.Type.Stat, vc, kit.SemiBold) }),
+			kit.Rigid(func(gtx layout.Context) layout.Dimensions {
+				return th.Text(gtx, s.Value, th.Type.Stat, vc, kit.SemiBold)
+			}),
 		)
 	})))
 }
@@ -102,11 +134,14 @@ func (s Stat) Layout(gtx C, th *kit.Theme) D {
 // Artwork draws square, cropped artwork, or a placeholder while the image
 // is not set. Label describes the image to screen readers and tests.
 type Artwork struct {
-	ID, Label string
-	Size      unit.Dp
+	ID, Label string  // semantic id and alternative text (kit.TagImage)
+	Size      unit.Dp // the square's side
 }
 
-func (a Artwork) Layout(gtx C, th *kit.Theme, im *kit.Image) D {
+// Layout draws im cropped to cover a Size square with the theme's corner
+// radius, or an AccentBg placeholder while im holds no image. It reads im
+// only; decode and Set it elsewhere. It takes no input.
+func (a Artwork) Layout(gtx layout.Context, th *kit.Theme, im *kit.Image) layout.Dimensions {
 	px := gtx.Dp(a.Size)
 	gtx.Constraints = layout.Exact(image.Pt(px, px))
 	r := gtx.Dp(th.Radius)
@@ -116,22 +151,35 @@ func (a Artwork) Layout(gtx C, th *kit.Theme, im *kit.Image) D {
 		return widget.Image{Src: src, Fit: widget.Cover, Position: layout.Center}.Layout(gtx)
 	}
 	paint.FillShape(gtx.Ops, th.AccentBg, clip.Rect{Max: gtx.Constraints.Max}.Op())
-	return D{Size: gtx.Constraints.Max}
+	return layout.Dimensions{Size: gtx.Constraints.Max}
 }
 
 // Split is a resizable two-pane layout. Drag the divider, or focus it (Tab)
-// and use the arrow keys. The divider's id is ID.
+// and use the arrow keys; keys it does not use reach the enclosing
+// KeyContext. The divider's id is ID.
+//
+// Split fills its maximum constraints. Each pane keeps at least Min along
+// the axis while there is room for both; when there is not, the panes
+// share the space equally. With no room at all (zero size), both panes are
+// laid out with zero size.
 type Split struct {
-	ID   string
-	Axis layout.Axis // Horizontal: panes side by side; Vertical: stacked
-	Min  unit.Dp     // minimum pane size; 0 is Theme.PaneMinSize
-	A, B kit.W
+	ID   string        // the divider's id
+	Axis layout.Axis   // Horizontal: panes side by side; Vertical: stacked
+	Min  unit.Dp       // minimum pane size; 0 is Theme.PaneMinSize
+	A, B layout.Widget // the first (left or top) and second panes
 }
 
-// SplitState holds the divider position (Ratio: the first pane's share; 0
-// is half). Save Ratio with your app state to keep the layout.
+// SplitState holds the divider position. Unlike most component values it
+// is owned by the state: dragging is continuous interaction, so the split
+// keeps its own Ratio rather than round-tripping it through props.
+//
+// Ratio is the first pane's share of the space along the axis, in 0..1;
+// 0 means unset and becomes 0.5 at the first layout. Set it before layout
+// to restore a saved split; it is clamped to keep both panes at least Min.
+// Read it after layout to save it with your app state. A SplitState is its
+// own event tag: do not copy it after first use.
 type SplitState struct {
-	Ratio float32
+	Ratio float32 // the first pane's share, 0..1; see above
 
 	drag  gesture.Drag
 	hover gesture.Hover
@@ -141,40 +189,91 @@ type SplitState struct {
 	hov   kit.Tween
 }
 
-func (sp Split) Layout(gtx C, th *kit.Theme, s *SplitState) D {
+// splitKeyStep is how far one arrow key moves the divider: a share of the
+// whole length.
+const splitKeyStep = 0.05
+
+// splitGeom is a split's geometry along its axis for one frame, in pixels.
+type splitGeom struct {
+	axis  layout.Axis
+	total int // length along the axis
+	min   int // minimum pane length
+	hit   int // the handle's thickness: a usable target around the thin line
+	line  int // the visible divider's thickness
+}
+
+// along is p's coordinate along the split axis.
+func (g splitGeom) along(p image.Point) float32 {
+	if g.axis == layout.Vertical {
+		return float32(p.Y)
+	}
+	return float32(p.X)
+}
+
+// ratio converts a divider position px into a ratio, keeping both panes
+// at least min long, or centring the divider when there is no room for
+// that. It returns false when the split has no length.
+func (g splitGeom) ratio(px float32) (float32, bool) {
+	if g.total <= 0 {
+		return 0, false
+	}
+	lo, hi := float32(g.min), float32(g.total-g.min)
+	if hi < lo {
+		lo, hi = float32(g.total)/2, float32(g.total)/2
+	}
+	return max(lo, min(hi, px)) / float32(g.total), true
+}
+
+// first is the first pane's length for ratio r, clamped like ratio and to
+// leave room for the divider line.
+func (g splitGeom) first(r float32) int {
+	f := int(r * float32(g.total))
+	f = max(min(f, g.total-g.min), min(g.min, g.total/2))
+	return max(0, min(f, g.total-g.line))
+}
+
+// Layout draws both panes and the divider at s.Ratio, filling its maximum
+// constraints. It handles the divider's drags, hover and arrow keys itself
+// (see the package doc), clamps s.Ratio and leaves the result in it; there
+// is no Update.
+func (sp Split) Layout(gtx layout.Context, th *kit.Theme, s *SplitState) layout.Dimensions {
 	if s.Ratio == 0 {
 		s.Ratio = 0.5
 	}
-	total := gtx.Constraints.Max.X
-	if sp.Axis == layout.Vertical {
-		total = gtx.Constraints.Max.Y
+	g := splitGeom{
+		axis:  sp.Axis,
+		total: max(0, gtx.Constraints.Max.X),
+		min:   gtx.Dp(sp.Min),
+		hit:   gtx.Dp(th.HitSize),
+		line:  max(1, gtx.Dp(th.Stroke)),
 	}
-	minPx := gtx.Dp(sp.Min)
+	if sp.Axis == layout.Vertical {
+		g.total = max(0, gtx.Constraints.Max.Y)
+	}
 	if sp.Min == 0 {
-		minPx = gtx.Dp(th.PaneMinSize)
+		g.min = gtx.Dp(th.PaneMinSize)
 	}
-	hit := gtx.Dp(th.HitSize)              // a usable target; the visible line stays thin
-	along := func(p image.Point) float32 { // coordinate along the split axis
-		if sp.Axis == layout.Vertical {
-			return float32(p.Y)
-		}
-		return float32(p.X)
-	}
-	set := func(px float32) {
-		if total <= 0 {
-			return
-		}
-		lo, hi := float32(minPx), float32(total-minPx)
-		if hi < lo {
-			lo, hi = float32(total)/2, float32(total)/2
-		}
-		s.Ratio = max(lo, min(hi, px)) / float32(total)
-		kit.Notify(gtx)
-	}
+	hovered := s.update(gtx, g)
 
-	// Input before drawing.
+	first := g.first(s.Ratio)
+	s.pos = first - g.hit/2
+	sp.pane(gtx, sp.A, 0, first)
+	sp.pane(gtx, sp.B, first+g.line, g.total-first-g.line)
+	s.paint(gtx, th, sp.ID, g, first, hovered)
+	return layout.Dimensions{Size: gtx.Constraints.Max}
+}
+
+// update handles the divider's drag and keys before drawing, and reports
+// whether the pointer is over it.
+func (s *SplitState) update(gtx layout.Context, g splitGeom) bool {
+	set := func(px float32) {
+		if r, ok := g.ratio(px); ok {
+			s.Ratio = r
+			kit.Notify(gtx)
+		}
+	}
 	axis := gesture.Horizontal
-	if sp.Axis == layout.Vertical {
+	if g.axis == layout.Vertical {
 		axis = gesture.Vertical
 	}
 	for {
@@ -184,12 +283,12 @@ func (sp Split) Layout(gtx C, th *kit.Theme, s *SplitState) D {
 		}
 		// Gio reports a drag relative to the handle as it was at press time
 		// (the grab), not as it is now: anchor to the press position.
-		p := along(e.Position.Round())
+		p := g.along(e.Position.Round())
 		switch e.Kind {
 		case pointer.Press:
 			s.grab, s.start = p, s.pos
 		case pointer.Drag:
-			set(float32(s.start) + p - s.grab + float32(hit)/2)
+			set(float32(s.start) + p - s.grab + float32(g.hit)/2)
 		}
 	}
 	for {
@@ -201,55 +300,57 @@ func (sp Split) Layout(gtx C, th *kit.Theme, s *SplitState) D {
 		if !ok {
 			break
 		}
-		if ke, ok := e.(key.Event); ok && ke.State == key.Press {
-			step := float32(total) * 0.05
-			switch ke.Name {
-			case key.NameLeftArrow, key.NameUpArrow:
-				set(s.Ratio*float32(total) - step)
-			case key.NameRightArrow, key.NameDownArrow:
-				set(s.Ratio*float32(total) + step)
-			}
+		ke, ok := e.(key.Event)
+		if !ok || ke.State != key.Press {
+			continue
+		}
+		step := float32(g.total) * splitKeyStep
+		switch ke.Name {
+		case key.NameLeftArrow, key.NameUpArrow:
+			set(s.Ratio*float32(g.total) - step)
+		case key.NameRightArrow, key.NameDownArrow:
+			set(s.Ratio*float32(g.total) + step)
 		}
 	}
-	hovered := s.hover.Update(gtx.Source)
+	return s.hover.Update(gtx.Source)
+}
 
-	first := int(s.Ratio * float32(total))
-	first = max(min(first, total-minPx), min(minPx, total/2))
-	s.pos = first - hit/2
-	pane := func(w kit.W, off, size int) {
-		gtx := gtx
-		var o image.Point
-		if sp.Axis == layout.Vertical {
-			gtx.Constraints = layout.Exact(image.Pt(gtx.Constraints.Max.X, size))
-			o = image.Pt(0, off)
-		} else {
-			gtx.Constraints = layout.Exact(image.Pt(size, gtx.Constraints.Max.Y))
-			o = image.Pt(off, 0)
-		}
-		st := op.Offset(o).Push(gtx.Ops)
-		cl := clip.Rect(image.Rectangle{Max: gtx.Constraints.Max}).Push(gtx.Ops)
-		w(gtx)
-		cl.Pop()
-		st.Pop()
+// pane lays out w at off along the axis, size long and clipped to it.
+func (sp Split) pane(gtx layout.Context, w layout.Widget, off, size int) {
+	size = max(0, size)
+	var o image.Point
+	if sp.Axis == layout.Vertical {
+		gtx.Constraints = layout.Exact(image.Pt(gtx.Constraints.Max.X, size))
+		o = image.Pt(0, off)
+	} else {
+		gtx.Constraints = layout.Exact(image.Pt(size, gtx.Constraints.Max.Y))
+		o = image.Pt(off, 0)
 	}
-	line := max(1, gtx.Dp(th.Stroke))
-	pane(sp.A, 0, first)
-	pane(sp.B, first+line, total-first-line)
+	defer op.Offset(o).Push(gtx.Ops).Pop()
+	defer clip.Rect(image.Rectangle{Max: gtx.Constraints.Max}).Push(gtx.Ops).Pop()
+	w(gtx)
+}
 
-	// Divider line, highlighted while hovered, dragged or focused.
+// paint draws the divider line, highlighted while hovered, dragged or
+// focused, and registers its handle: the drag, hover, cursor, focus and
+// semantics.
+func (s *SplitState) paint(gtx layout.Context, th *kit.Theme, id string, g splitGeom, first int, hovered bool) {
 	focused := gtx.Focused(s)
 	active := float32(0)
 	if hovered || s.drag.Dragging() || focused {
 		active = 1
 	}
 	ha := s.hov.To(gtx, active, th.Dur(kit.DurFast))
+	// The highlight is the line widened by its own thickness on each side.
 	maxX, maxY := gtx.Constraints.Max.X, gtx.Constraints.Max.Y
-	lineRect, hitRect := image.Rect(first, 0, first+line, maxY), image.Rect(s.pos, 0, s.pos+hit, maxY)
-	glow := image.Rect(first-1, 0, first+2, maxY)
+	lineRect := image.Rect(first, 0, first+g.line, maxY)
+	hitRect := image.Rect(s.pos, 0, s.pos+g.hit, maxY)
+	glow := image.Rect(first-g.line, 0, first+2*g.line, maxY)
 	cursor := pointer.CursorColResize
-	if sp.Axis == layout.Vertical {
-		lineRect, hitRect = image.Rect(0, first, maxX, first+line), image.Rect(0, s.pos, maxX, s.pos+hit)
-		glow = image.Rect(0, first-1, maxX, first+2)
+	if g.axis == layout.Vertical {
+		lineRect = image.Rect(0, first, maxX, first+g.line)
+		hitRect = image.Rect(0, s.pos, maxX, s.pos+g.hit)
+		glow = image.Rect(0, first-g.line, maxX, first+2*g.line)
 		cursor = pointer.CursorRowResize
 	}
 	paint.FillShape(gtx.Ops, th.Border, clip.Rect(lineRect).Op())
@@ -260,14 +361,12 @@ func (sp Split) Layout(gtx C, th *kit.Theme, s *SplitState) D {
 		}
 		paint.FillShape(gtx.Ops, kit.WithAlpha(c, uint8(255*ha)), clip.Rect(glow).Op())
 	}
-	area := clip.Rect(hitRect).Push(gtx.Ops)
+	defer clip.Rect(hitRect).Push(gtx.Ops).Pop()
 	cursor.Add(gtx.Ops)
 	s.drag.Add(gtx.Ops)
 	s.hover.Add(gtx.Ops)
 	event.Op(gtx.Ops, s)
-	kit.Tag(gtx, sp.ID) // the drag listens for presses, so this area keeps its semantics
-	kit.FocusID(gtx, s, sp.ID)
-	kit.SetRole(gtx, sp.ID, kit.RoleSeparator)
-	area.Pop()
-	return D{Size: gtx.Constraints.Max}
+	kit.Tag(gtx, id) // the drag listens for presses, so this area keeps its semantics
+	kit.FocusID(gtx, s, id)
+	kit.SetRole(gtx, id, kit.RoleSeparator)
 }

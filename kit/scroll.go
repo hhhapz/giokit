@@ -13,38 +13,105 @@ import (
 	"gioui.org/op"
 	"gioui.org/op/clip"
 	"gioui.org/op/paint"
+	"gioui.org/unit"
 	"gioui.org/widget"
 )
 
+// Wheel smoothing. Gio turns each wheel notch into an instant jump of about
+// 150px; List glides there instead, covering a fixed fraction of the
+// remaining distance each frame.
+const (
+	// smoothDelta is the size, in pixels, below which a wheel delta counts
+	// as touchpad motion: already smooth, so it applies at once.
+	smoothDelta = 8
+	// glideTau is the glide's time constant: a frame of length dt covers
+	// 1-exp(-dt/glideTau) of the remaining distance. Theme.Motion scales it.
+	glideTau = 70 * time.Millisecond
+	// glideMaxFrame bounds the frame time a glide step assumes; a longer gap
+	// (the first frame, a stall) steps as one glideFrame instead.
+	glideMaxFrame = 50 * time.Millisecond
+	glideFrame    = 16 * time.Millisecond
+	// unboundedScroll is a scroll range limit that never binds.
+	unboundedScroll = 1 << 30
+)
+
+// Continuity check: while a scroll gesture is in progress, every row must
+// move by the distance the input asked for.
+const (
+	// settleFrames is how many frames after the last scroll input rows must
+	// still hold still.
+	settleFrames = 4
+	// jumpTolerance is the error, in pixels, tolerated between the distance
+	// asked for and the distance moved (rounding).
+	jumpTolerance = 1
+)
+
+// Scrollbar geometry. The track is Theme.HitSize wide; the bar drawn in it
+// is thinner and widens while hovered or dragged.
+const (
+	thumbMinLength unit.Dp = 24 // shortest thumb, however long the content
+	thumbGlideJump unit.Dp = 12 // thumb moves larger than this glide
+	barWidth       unit.Dp = 4
+	barWidthActive unit.Dp = 6
+	barEdgeInset   unit.Dp = 3 // between the bar and the list's right edge
+	barEndInset    unit.Dp = 2 // trimmed from each end of the thumb
+)
+
 // List is the state of a th.List: Gio's widget.List plus smooth wheel
-// scrolling. (Gio turns each wheel notch into an instant ~150px jump; List
-// glides there instead. Small touchpad deltas apply immediately.)
+// scrolling, a gliding thumb and the continuity check behind Jumps. The zero
+// value is ready to use. Like Gio's own widget state, a List identifies its
+// input areas by address: do not copy it after first use.
+//
+// The embedded widget.List is a supported escape hatch. Reading or setting
+// its Position between frames (to save and restore a scroll offset or jump
+// to an item) works as in Gio, and th.List picks the change up on the next
+// frame. Laying the embedded list out directly bypasses kit: no wheel
+// smoothing, scrollbar or continuity check.
 type List struct {
 	widget.List
 	wheel   gesture.Scroll
-	pending float32
-	last    time.Time
-	thumbLo Tween // the thumb glides too: size estimates change as items of
-	thumbHi Tween // different heights scroll in, which made it jump
+	pending float32   // wheel distance still to glide, in pixels
+	last    time.Time // the previous frame's time, for the glide step
+	thumbLo Tween     // the thumb's ends; they glide over jumps in the size
+	thumbHi Tween     // estimate, which changes as items of different heights scroll in
 
-	// continuity check: did the content move exactly as far as we asked?
 	sizes     map[int]int // item heights this frame
-	prevY     map[int]int // row tops last frame
+	tops      rowTops     // row tops this frame
+	prevTops  rowTops     // row tops last frame
 	jumps     int
 	scrolling int // frames left in the current scroll gesture
 
 	tr listTrace // GIOKIT_TRACE only
 }
 
-// listTrace is the per-frame state GIOKIT_TRACE logs for a List.
-type listTrace struct {
-	known   map[int]int           // last measured height of each item, ever
-	cost    map[int]time.Duration // item layout time this frame
-	visible map[int]bool          // items on screen last frame
-	moved   int                   // continuity result this frame
-	common  bool
-	uneven  string // per-row deltas when they disagree
-	skipped bool
+// rowTops are the top edges, in pixels from the viewport's top, of the
+// consecutive rows laid out from index first.
+type rowTops struct {
+	first int
+	y     []int
+	valid bool // recorded at least once
+}
+
+// at returns the top of row i, if it was laid out.
+func (r *rowTops) at(i int) (int, bool) {
+	j := i - r.first
+	if j < 0 || j >= len(r.y) {
+		return 0, false
+	}
+	return r.y[j], true
+}
+
+// listFrame is what one frame's input did to a List, for the continuity
+// check and GIOKIT_TRACE.
+type listFrame struct {
+	n, viewH  int
+	requested int     // pixels the wheel moved the list this frame
+	dragged   bool    // the scrollbar moved it, by items: not checked
+	wheel     int     // wheel distance read this frame
+	pending   float32 // glide distance pending before this frame's step
+	glide     int     // pixels glided this frame (part of requested)
+	pos0      layout.Position
+	before    layout.Position // after input, before layout
 }
 
 // Jumps counts frames where the content moved a different distance than the
@@ -58,133 +125,157 @@ func (l *List) Jumps() int { return l.jumps }
 //
 // Unlike material.List it applies scrollbar drags before laying out the
 // list, so the frame that handles a drag also shows it.
-func (t *Theme) List(gtx C, l *List, id string, n int, item layout.ListElement) D {
+func (t *Theme) List(gtx layout.Context, l *List, id string, n int, item layout.ListElement) layout.Dimensions {
 	l.Axis = layout.Vertical
-	hit := gtx.Dp(t.HitSize)
+	fr := listFrame{n: n, pos0: l.Position}
 
-	// Wheel input first (rule 1). Our wheel handler is the list's ancestor,
-	// so it only sees scrolls no item claimed (a focused slider keeps its
-	// wheel): input bubbles up. Its range stops at the list's ends, so a
-	// list that can't move further passes the wheel on to its parent.
-	requested := 0
-	pos0 := l.Position
-	up, down := 1<<30, 1<<30
+	// Input first (rule 1), against last frame's layout.
+	fr.wheel, fr.requested = l.updateWheel(gtx)
+	fr.pending = l.pending
+	fr.glide = l.glide(gtx, t)
+	fr.requested += fr.glide
+	fr.before = l.Position
+	fr.dragged = l.updateScrollbar(gtx, gtx.Dp(t.HitSize), n)
+
+	dims := l.layoutItems(gtx, id, n, item)
+	fr.viewH = dims.Size.Y
+	l.checkContinuity(fr.requested, fr.dragged)
+	if traceEnabled {
+		l.trace(id, fr)
+	}
+	if fr.glide != 0 && l.Position.First == fr.before.First && l.Position.Offset == fr.before.Offset-fr.glide {
+		l.pending = 0 // clamped at an end: stop gliding
+	}
+	l.drawScrollbar(gtx, t, id, n, dims.Size)
+	return dims
+}
+
+// updateWheel reads this frame's wheel input and returns its distance. A
+// small delta moves the list at once and is also returned as moved; a larger
+// one joins the pending glide.
+//
+// The wheel handler is the list's ancestor, so it only sees scrolls no item
+// claimed (a focused slider keeps its wheel): input bubbles up. Its range
+// stops at the list's ends, so a list that can't move further passes the
+// wheel on to its parent.
+func (l *List) updateWheel(gtx layout.Context) (dist, moved int) {
+	up, down := unboundedScroll, unboundedScroll
 	if l.Position.First == 0 && l.Position.Offset <= 0 {
 		up = 0
 	}
 	if !l.Position.BeforeEnd && l.Position.Length > 0 {
 		down = 0
 	}
-	dist := l.wheel.Update(gtx.Metric, gtx.Source, gtx.Now, gesture.Vertical,
+	dist = l.wheel.Update(gtx.Metric, gtx.Source, gtx.Now, gesture.Vertical,
 		pointer.ScrollRange{}, pointer.ScrollRange{Min: -up, Max: down})
-	if d := float32(dist); d != 0 {
-		if d < 0 {
-			l.Position.BeforeEnd = true // leave a ScrollToEnd tail, as Gio's own scroll does
-		}
-		if d > -8 && d < 8 && l.pending == 0 {
-			l.Position.Offset += dist // tiny deltas are already smooth
-			requested += dist
-		} else {
-			l.pending += d
-		}
+	d := float32(dist)
+	if d == 0 {
+		return 0, 0
 	}
-	wheel, pend0 := dist, l.pending
-	glide := 0
-	if l.pending != 0 {
-		dt := gtx.Now.Sub(l.last)
-		if l.last.IsZero() || dt <= 0 || dt > 50*time.Millisecond {
-			dt = 16 * time.Millisecond
-		}
-		step := l.pending * float32(1-math.Exp(-float64(dt)/float64(t.Dur(70*time.Millisecond)+1)))
-		if t.Motion == 0 {
-			step = l.pending
-		} else if step < 1 && step > -1 { // tail: 1px per frame, no snap
-			step = max(-1, min(1, l.pending))
-		}
-		glide = int(step)
-		if glide == 0 {
-			glide = int(l.pending)
-			l.pending = 0
-		}
-		l.pending -= float32(glide)
-		l.Position.Offset += glide
-		requested += glide
-		if glide < 0 {
-			l.Position.BeforeEnd = true
-		}
-		gtx.Execute(op.InvalidateCmd{})
+	if d < 0 {
+		l.Position.BeforeEnd = true // leave a ScrollToEnd tail, as Gio's own scroll does
 	}
+	if d > -smoothDelta && d < smoothDelta && l.pending == 0 {
+		l.Position.Offset += dist
+		return dist, dist
+	}
+	l.pending += d
+	return dist, 0
+}
+
+// glide moves the list by this frame's share of the pending wheel distance
+// and returns that distance in pixels. The tail moves 1px per frame rather
+// than snapping; with Motion 0 the whole distance applies at once.
+func (l *List) glide(gtx layout.Context, th *Theme) int {
+	dt := gtx.Now.Sub(l.last)
+	firstFrame := l.last.IsZero()
 	l.last = gtx.Now
-	before := l.Position
-
-	// Handle scrollbar input first, against last frame's viewport.
-	{
-		gtx := gtx
-		gtx.Constraints.Max.X = hit
-		start, end := viewport(l.Position, n, gtx.Constraints.Max.Y)
-		l.Scrollbar.Update(gtx, layout.Vertical, start, end)
-		if d := l.Scrollbar.ScrollDistance(); d != 0 {
-			l.List.ScrollBy(d * float32(n))
-			requested = -1 << 30 // scrollbar drags move by items: skip the check
-		}
+	if l.pending == 0 {
+		return 0
 	}
+	if firstFrame || dt <= 0 || dt > glideMaxFrame {
+		dt = glideFrame
+	}
+	// The extra nanosecond keeps the divisor nonzero when Motion scales the
+	// time constant to 0; that case takes the whole distance below anyway.
+	step := l.pending * float32(1-math.Exp(-float64(dt)/float64(th.Dur(glideTau)+1)))
+	if th.Motion == 0 {
+		step = l.pending
+	} else if step < 1 && step > -1 {
+		step = max(-1, min(1, l.pending))
+	}
+	glide := int(step)
+	if glide == 0 {
+		// Less than a pixel is left: drop the sub-pixel remainder.
+		l.pending = 0
+	}
+	l.pending -= float32(glide)
+	l.Position.Offset += glide
+	if glide < 0 {
+		l.Position.BeforeEnd = true
+	}
+	gtx.Execute(op.InvalidateCmd{})
+	return glide
+}
 
-	// layout.List runs with input disabled, so its own scroll handler never
-	// registers and can't grab the wheel (it would jump a whole notch at
-	// once); items get the real input source back.
+// updateScrollbar applies scrollbar drags and track clicks against last
+// frame's viewport, before the list is laid out, and reports whether they
+// moved the list. hit is the track width in pixels.
+func (l *List) updateScrollbar(gtx layout.Context, hit, n int) bool {
+	gtx.Constraints.Max.X = hit
+	start, end := viewport(l.Position, n, gtx.Constraints.Max.Y)
+	l.Scrollbar.Update(gtx, layout.Vertical, start, end)
+	d := l.Scrollbar.ScrollDistance()
+	if d == 0 {
+		return false
+	}
+	l.List.ScrollBy(d * float32(n))
+	return true
+}
+
+// layoutItems lays out the visible items and records their heights in
+// l.sizes. layout.List runs with input disabled, so its own scroll handler
+// never registers and can't grab the wheel (it would jump a whole notch at
+// once); items get the real input source back.
+func (l *List) layoutItems(gtx layout.Context, id string, n int, item layout.ListElement) layout.Dimensions {
 	src := gtx.Source
 	area := clip.Rect(image.Rectangle{Max: gtx.Constraints.Max}).Push(gtx.Ops)
+	defer area.Pop()
 	l.wheel.Add(gtx.Ops)
 	Tag(gtx, id)
 	if l.sizes == nil {
 		l.sizes = map[int]int{}
 	}
 	clear(l.sizes)
-	if traceEnabled {
-		if l.tr.cost == nil {
-			l.tr.cost = map[int]time.Duration{}
-		}
-		clear(l.tr.cost)
-	}
-	dims := l.List.Layout(gtx.Disabled(), n, func(gtx C, i int) D {
+	element := func(gtx layout.Context, i int) layout.Dimensions {
 		gtx.Source = src
-		var t0 time.Time
-		if traceEnabled {
-			t0 = time.Now()
-		}
 		d := item(gtx, i)
-		if traceEnabled {
-			l.tr.cost[i] += time.Since(t0)
-			if _, again := l.sizes[i]; again {
-				tracef("list_relayout", "id", id, "i", i, "h", d.Size.Y, "prev_h", l.sizes[i])
-			}
-		}
 		l.sizes[i] = d.Size.Y
 		return d
-	})
-	area.Pop()
-	l.checkContinuity(id, requested)
+	}
 	if traceEnabled {
-		l.trace(id, n, dims.Size.Y, requested, wheel, pend0, glide, pos0, before)
+		element = l.tr.timed(id, l.sizes, element)
 	}
-	if glide != 0 && l.Position.First == before.First && l.Position.Offset == before.Offset-glide {
-		l.pending = 0 // clamped at an end: stop gliding
-	}
-	start, end := viewport(l.Position, n, dims.Size.Y)
-	if n == 0 || (start <= 0 && end >= 1) {
-		return dims
-	}
+	return l.List.Layout(gtx.Disabled(), n, element)
+}
 
-	// Track: the full height along the right edge, 16dp wide (a usable target);
-	// it draws nothing but the thumb.
-	h := dims.Size.Y
-	track := image.Rect(dims.Size.X-hit, 0, dims.Size.X, h)
-	minLen := gtx.Dp(24)
+// drawScrollbar draws the thumb and registers the scrollbar's input areas,
+// unless all of the content is visible. The track spans the full height
+// along the right edge, Theme.HitSize wide (a usable target); it draws
+// nothing but the thumb.
+func (l *List) drawScrollbar(gtx layout.Context, th *Theme, id string, n int, size image.Point) {
+	start, end := viewport(l.Position, n, size.Y)
+	if n == 0 || (start <= 0 && end >= 1) {
+		return
+	}
+	h := size.Y
+	track := image.Rect(size.X-gtx.Dp(th.HitSize), 0, size.X, h)
+	minLen := gtx.Dp(thumbMinLength)
 	lo, hi := start*float32(h), end*float32(h)
 	d := time.Duration(0) // track scrolling exactly...
-	if jump := float32(gtx.Dp(12)); !l.Scrollbar.Dragging() &&
+	if jump := float32(gtx.Dp(thumbGlideJump)); !l.Scrollbar.Dragging() &&
 		(abs32(lo-l.thumbLo.Value(gtx)) > jump || abs32(hi-l.thumbHi.Value(gtx)) > jump) {
-		d = t.Dur(DurFast) // ...but glide over estimate jumps
+		d = th.Dur(DurFast) // ...but glide over estimate jumps
 		if traceEnabled {
 			tracef("list_thumb_jump", "id", id, "lo", lo, "hi", hi, "was_lo", l.thumbLo.Value(gtx), "was_hi", l.thumbHi.Value(gtx), "track", h)
 		}
@@ -197,13 +288,14 @@ func (t *Theme) List(gtx C, l *List, id string, n int, item layout.ListElement) 
 	thumb := image.Rect(track.Min.X, y0, track.Max.X, y1)
 
 	active := l.Scrollbar.IndicatorHovered() || l.Scrollbar.Dragging()
-	w, c := gtx.Dp(4), t.Border
+	w, c := gtx.Dp(barWidth), th.Border
 	if active {
-		w, c = gtx.Dp(6), t.Dim
+		w, c = gtx.Dp(barWidthActive), th.Dim
 	} else if l.Scrollbar.TrackHovered() {
-		c = LerpColor(t.Border, t.Dim, 0.5)
+		c = LerpColor(th.Border, th.Dim, 0.5)
 	}
-	bar := image.Rect(dims.Size.X-gtx.Dp(3)-w, y0+gtx.Dp(2), dims.Size.X-gtx.Dp(3), y1-gtx.Dp(2))
+	edge, end2 := gtx.Dp(barEdgeInset), gtx.Dp(barEndInset)
+	bar := image.Rect(size.X-edge-w, y0+end2, size.X-edge, y1-end2)
 	paint.FillShape(gtx.Ops, c, clip.UniformRRect(bar, w/2).Op(gtx.Ops))
 
 	// Same layering as material: drag on the track, a pass-through click
@@ -221,7 +313,6 @@ func (t *Theme) List(gtx C, l *List, id string, n int, item layout.ListElement) 
 	tha.Pop()
 	pass.Pop()
 	ta.Pop()
-	return dims
 }
 
 // viewport estimates the visible fraction [start, end] of a list's content
@@ -253,143 +344,85 @@ func abs32(v float32) float32 {
 // checkContinuity compares where each row visible in both frames was and is.
 // A clean scroll moves every row by the same amount, the amount asked for
 // (less if clamped at an end). Rows moving by different amounts, or all of
-// them by the wrong amount, is a visible skip.
-func (l *List) checkContinuity(id string, requested int) {
-	y := map[int]int{}
+// them by the wrong amount, is a visible skip. requested is the wheel
+// distance this frame; dragged reports a scrollbar move, which moves by
+// items and so is not checked.
+func (l *List) checkContinuity(requested int, dragged bool) {
+	// Reuse last frame's buffer for this frame's tops: no per-frame garbage.
+	l.tops, l.prevTops = l.prevTops, l.tops
+	tops, prev := &l.tops, &l.prevTops
+	tops.first, tops.y, tops.valid = l.Position.First, tops.y[:0], true
 	pos := -l.Position.Offset
 	for i := l.Position.First; ; i++ {
 		h, ok := l.sizes[i]
 		if !ok {
 			break
 		}
-		y[i] = pos
+		tops.y = append(tops.y, pos)
 		pos += h
 	}
-	prev := l.prevY
-	l.prevY = y
 	l.tr.moved, l.tr.common, l.tr.uneven, l.tr.skipped = 0, false, "", false
 	// Check while a scroll gesture is in progress: frames with input, and a
 	// few after (rows must hold still then: content changing size mid-scroll
 	// is exactly the skip). Outside gestures, content may legitimately move.
-	if requested != 0 {
-		l.scrolling = 4
+	if requested != 0 || dragged {
+		l.scrolling = settleFrames
 	} else if l.scrolling > 0 {
 		l.scrolling--
 	}
-	if l.scrolling == 0 || requested == -1<<30 || prev == nil {
+	if l.scrolling == 0 || dragged || !prev.valid {
 		return
 	}
-	moved, first, uneven := 0, true, false
-	for i, yi := range y {
-		p, ok := prev[i]
+	moved, common, uneven := 0, false, false
+	for j, yi := range tops.y {
+		p, ok := prev.at(tops.first + j)
 		if !ok {
 			continue
 		}
 		d := p - yi // positive: content moved up (scrolled down)
-		if first {
-			moved, first = d, false
+		if !common {
+			moved, common = d, true
 		} else if d != moved {
 			uneven = true
 		}
 	}
-	if first {
+	if !common {
 		return // no row in common (a jump of more than a screen)
 	}
 	l.tr.moved, l.tr.common = moved, true
 	if uneven && traceEnabled {
-		var b strings.Builder
-		for i := l.Position.First; ; i++ {
-			yi, ok := y[i]
-			if !ok {
-				break
-			}
-			if p, ok := prev[i]; ok {
-				fmt.Fprintf(&b, "%d:%+d,", i, p-yi)
-			}
-		}
-		l.tr.uneven = strings.TrimSuffix(b.String(), ",")
+		l.tr.uneven = rowDeltas(tops, prev)
 	}
 	atTop := l.Position.First == 0 && l.Position.Offset == 0
 	atEnd := !l.Position.BeforeEnd
 	wrong := moved != requested && !(atTop && moved > requested) && !(atEnd && moved < requested)
-	if uneven || (wrong && (moved-requested > 1 || moved-requested < -1)) {
+	if uneven || (wrong && (moved-requested > jumpTolerance || moved-requested < -jumpTolerance)) {
 		l.jumps++
 		l.tr.skipped = true
 	}
 }
 
-// trace logs this frame's list state under GIOKIT_TRACE. It writes a "list"
-// line on every frame that scrolled (or is still settling) or whose items
-// changed, plus events for items entering, leaving or changing height, and
-// for slow item layouts. A skip the continuity check saw is "LIST_SKIP".
-func (l *List) trace(id string, n, viewH, requested, wheel int, pend0 float32, glide int, pos0, before layout.Position) {
-	tr := &l.tr
-	if tr.known == nil {
-		tr.known, tr.visible = map[int]int{}, map[int]bool{}
-	}
-	p := l.Position
-	// Visible rows and their tops, from First down.
-	vis := map[int]bool{}
-	var rows strings.Builder
-	y := -p.Offset
-	for i := p.First; ; i++ {
-		h, ok := l.sizes[i]
-		if !ok || y >= viewH {
-			break
-		}
-		vis[i] = true
-		fmt.Fprintf(&rows, "%d@%d+%d,", i, y, h)
-		y += h
-	}
-	changed := false
-	for i := range vis {
-		if !tr.visible[i] {
-			changed = true
-			_, seen := tr.known[i]
-			tracef("list_enter", "id", id, "i", i, "h", l.sizes[i], "first_time", !seen,
-				"build_ms", ms(tr.cost[i]), "prev_h", tr.known[i])
+// rowDeltas lists how far each row in both frames moved, as "row:delta,…".
+func rowDeltas(tops, prev *rowTops) string {
+	var b strings.Builder
+	for j, yi := range tops.y {
+		i := tops.first + j
+		if p, ok := prev.at(i); ok {
+			if b.Len() > 0 {
+				b.WriteByte(',')
+			}
+			fmt.Fprintf(&b, "%d:%+d", i, p-yi)
 		}
 	}
-	for i := range tr.visible {
-		if !vis[i] {
-			changed = true
-			tracef("list_leave", "id", id, "i", i, "h", tr.known[i])
-		}
-	}
-	// Height changes, for every item laid out (visible or in the margin).
-	for i, h := range l.sizes {
-		if old, ok := tr.known[i]; ok && old != h {
-			changed = true
-			tracef("list_resize", "id", id, "i", i, "from", old, "to", h, "visible", vis[i],
-				"above_first", i < p.First)
-		}
-		tr.known[i] = h
-		if c := tr.cost[i]; c > 2*time.Millisecond {
-			tracef("list_slow_item", "id", id, "i", i, "build_ms", ms(c), "h", h)
-		}
-	}
-	tr.visible = vis
-	if requested == 0 && wheel == 0 && pend0 == 0 && l.scrolling == 0 && !changed && pos0 == p {
-		return
-	}
-	start, end := viewport(p, n, viewH)
-	kind := "list"
-	if tr.skipped {
-		kind = "LIST_SKIP"
-	}
-	tracef(kind, "id", id, "req", requested, "wheel", wheel, "pend", pend0, "glide", glide,
-		"moved", map[bool]any{true: tr.moved, false: "-"}[tr.common], "uneven", tr.uneven,
-		// pos: last frame -> after input -> after layout (First/Offset)
-		"pos", fmt.Sprintf("%d/%d->%d/%d->%d/%d", pos0.First, pos0.Offset, before.First, before.Offset, p.First, p.Offset),
-		"count", p.Count, "off_last", p.OffsetLast, "len", p.Length, "before_end", p.BeforeEnd,
-		"view", viewH, "laid", len(l.sizes), "rows", strings.TrimSuffix(rows.String(), ","),
-		"vp", fmt.Sprintf("%.4f-%.4f", start, end), "settle", l.scrolling)
+	return b.String()
 }
 
 // ScrollIntoView scrolls the least distance that shows item i whole, using
 // last frame's layout (rows of similar height). Call it from a handler; the
-// next frame shows the result.
+// next frame shows the result. A negative i scrolls to the top; an i past
+// the end scrolls to the end when the list is next laid out.
 func (l *List) ScrollIntoView(i int) {
+	i = max(i, 0)
 	p := &l.Position
 	l.pending = 0
 	if p.Count == 0 {

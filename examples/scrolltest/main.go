@@ -24,6 +24,8 @@ package main
 import (
 	"fmt"
 	"image"
+	"log"
+	"os"
 	"sort"
 	"time"
 
@@ -60,8 +62,25 @@ type lane struct {
 
 func (l *lane) reset() {
 	l.list.Position = layout.Position{}
-	l.abs, l.started, l.recent, l.deltas, l.flagged, l.skips, l.lastD = 0, false, nil, nil, nil, 0, 0
+	l.abs = 0
+	l.started = false
+	l.recent = nil
+	l.deltas = nil
+	l.flagged = nil
+	l.skips = 0
+	l.lastD = 0
 }
+
+// Skip detection: a frame is a skip when it moves at least skipRatio times
+// the median of the gesture's recent frames, and at least skipMinDp more.
+const (
+	gestureGap     = 250 * time.Millisecond // a pause this long starts a new gesture
+	skipMinSamples = 4                      // recent frames needed before judging one
+	skipRatio      = 3                      // a skip moves this many medians or more
+	skipMinDp      = 6                      // and this much (dp) beyond the median
+	recentFrames   = 12                     // frames of the gesture kept for the median
+	graphFrames    = 600                    // moving frames the graph keeps
+)
 
 // measure records how far the content moved this frame and flags a skip: one
 // frame moving far more than the frames around it in the same gesture. It
@@ -82,20 +101,20 @@ func (l *lane) measure(gtx C) {
 		return
 	}
 	kit.Notify(gtx)
-	if gtx.Now.Sub(l.last) > 250*time.Millisecond {
+	if gtx.Now.Sub(l.last) > gestureGap {
 		l.recent = l.recent[:0] // a new gesture
 	}
 	l.last = gtx.Now
 	ad := max(d, -d)
 	skip := false
-	if len(l.recent) >= 4 {
+	if len(l.recent) >= skipMinSamples {
 		s := append([]int(nil), l.recent...)
 		sort.Ints(s)
 		med := s[len(s)/2]
-		skip = ad >= 3*med && ad-med >= gtx.Dp(6)
+		skip = ad >= skipRatio*med && ad-med >= gtx.Dp(skipMinDp)
 	}
 	l.recent = append(l.recent, ad)
-	if len(l.recent) > 12 {
+	if len(l.recent) > recentFrames {
 		l.recent = l.recent[1:]
 	}
 	if skip {
@@ -104,7 +123,7 @@ func (l *lane) measure(gtx C) {
 	l.lastD = d
 	l.deltas = append(l.deltas, d)
 	l.flagged = append(l.flagged, skip)
-	if len(l.deltas) > 600 {
+	if len(l.deltas) > graphFrames {
 		l.deltas, l.flagged = l.deltas[1:], l.flagged[1:]
 	}
 }
@@ -119,20 +138,23 @@ type bench struct {
 	sliders kit.Pool[slider]
 	tabs    kit.Pool[ui.TabsState]
 	on      map[string]bool
-	tab     map[string]int
+	tab     map[string]string
 }
 
 var compHeights = []unit.Dp{40, 48, 48, 44, 48, 44, 64, 40} // per row kind
 
 func newBench() *bench {
-	b := &bench{th: kit.Dark(), on: map[string]bool{}, tab: map[string]int{}}
+	b := &bench{th: kit.Dark(), on: map[string]bool{}, tab: map[string]string{}}
 	b.plain = lane{id: "plain", height: func(int) unit.Dp { return 36 }}
 	b.comp = lane{id: "comp", height: func(i int) unit.Dp { return compHeights[i%len(compHeights)] }}
 	b.keys.MustBind("U", "Toggle upstream wheel scaling", func() {
 		app.GiokitUpstreamWheel.Store(!app.GiokitUpstreamWheel.Load())
 	})
 	b.keys.MustBind("C", "Toggle components / placeholders", func() { b.placeholder = !b.placeholder })
-	b.keys.MustBind("R", "Reset", func() { b.plain.reset(); b.comp.reset() })
+	b.keys.MustBind("R", "Reset", func() {
+		b.plain.reset()
+		b.comp.reset()
+	})
 	return b
 }
 
@@ -149,10 +171,11 @@ func (b *bench) handle(gtx C) {
 		}
 	})
 	b.tabs.Each(func(id string, t *ui.TabsState) {
-		if i, ok := t.Update(gtx); ok {
-			b.tab[id] = i
+		if tab, ok := t.Update(gtx); ok {
+			b.tab[id] = tab
 		}
 	})
+	b.sliders.Each(func(_ string, s *slider) { s.update(gtx) })
 }
 
 func (b *bench) layout(gtx C) D {
@@ -276,7 +299,7 @@ func (b *bench) graph(gtx C, l *lane) D {
 
 // rowFrame draws the shared row chrome: a divider on top and the row index on
 // the right, so continuity is easy to follow by eye.
-func (b *bench) rowFrame(gtx C, i int, body kit.W) D {
+func (b *bench) rowFrame(gtx C, i int, body layout.Widget) D {
 	th := b.th
 	size := gtx.Constraints.Max
 	paint.FillShape(gtx.Ops, th.Divider, clip.Rect(image.Rect(0, 0, size.X, max(1, gtx.Dp(1)))).Op())
@@ -321,7 +344,7 @@ func (b *bench) compRow(gtx C, i int) D {
 	return b.rowFrame(gtx, i, func(gtx C) D {
 		switch i % len(compHeights) {
 		case 0:
-			return th.Text(gtx, "BUTTONS (SIZE FOLLOWS THE RADIOS BELOW)", th.Type.Caption, th.Dim, kit.Bold)
+			return th.Text(gtx, "BUTTONS", th.Type.Caption, th.Dim, kit.Bold)
 		case 1:
 			return row(
 				kit.Rigid(func(gtx C) D { return ui.Button{ID: id("sec"), Text: "Secondary"}.Layout(gtx, th, click("sec")) }), gap,
@@ -332,7 +355,7 @@ func (b *bench) compRow(gtx C, i int) D {
 					return ui.Button{ID: id("ghost"), Text: "Ghost", Style: ui.Ghost}.Layout(gtx, th, click("ghost"))
 				}), gap,
 				kit.Rigid(func(gtx C) D {
-					return ui.IconButton{ID: id("icon"), Icon: kit.IconSun, Label: id("icon")}.Layout(gtx, th, click("icon"))
+					return ui.IconButton{ID: id("icon"), Icon: kit.IconSun, Label: "Brightness"}.Layout(gtx, th, click("icon"))
 				}),
 			)
 		case 2:
@@ -350,7 +373,11 @@ func (b *bench) compRow(gtx C, i int) D {
 		case 3:
 			return kit.Fixed(240, func(gtx C) D { return b.sliders.Get(id("sl")).layout(gtx, th, id("sl"), "Slider") })(gtx)
 		case 4:
-			return ui.Tabs{ID: id("tabs"), Labels: []string{"One", "Two", "Three"}, Selected: b.tab[id("tabs")]}.Layout(gtx, th, b.tabs.Get(id("tabs")))
+			sel := b.tab[id("tabs")]
+			if sel == "" {
+				sel = "one"
+			}
+			return ui.Tabs{ID: id("tabs"), Items: []ui.Choice{{ID: "one", Label: "One"}, {ID: "two", Label: "Two"}, {ID: "three", Label: "Three"}}, Selected: sel}.Layout(gtx, th, b.tabs.Get(id("tabs")))
 		case 5:
 			return row(
 				kit.Rigid(func(gtx C) D { return th.Spinner(gtx, 18) }), gap,
@@ -370,19 +397,33 @@ func (b *bench) compRow(gtx C, i int) D {
 }
 
 func main() {
-	kit.NewApp("giokit-scrolltest", "giokit scroll bench", 1100, 760).Run(newBench().Frame)
+	a := kit.NewApp("giokit-scrolltest", "giokit scroll bench", 1100, 760)
+	go func() {
+		if err := a.Run(newBench().Frame); err != nil {
+			log.Fatal(err)
+		}
+		os.Exit(0)
+	}()
+	kit.Main()
 }
 
-// slider pairs a ui.Slider's value with its state, for sliders that keep
-// their own value.
+// slider is a ui.Slider that keeps its own value: update applies input in
+// the handle pass, layout draws the value.
 type slider struct {
 	Value float32
 	state ui.SliderState
 }
 
-func (s *slider) layout(gtx C, th *kit.Theme, id, label string) D {
-	if v, ok := s.state.Update(gtx); ok {
+// update applies this frame's input to Value and reports whether it
+// changed.
+func (s *slider) update(gtx C) bool {
+	v, ok := s.state.Update(gtx)
+	if ok {
 		s.Value = v
 	}
+	return ok
+}
+
+func (s *slider) layout(gtx C, th *kit.Theme, id, label string) D {
 	return ui.Slider{ID: id, Label: label, Value: s.Value}.Layout(gtx, th, &s.state)
 }

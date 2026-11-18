@@ -5,9 +5,9 @@ import (
 	"time"
 
 	"gioui.org/io/event"
-	"gioui.org/io/input"
 	"gioui.org/io/key"
 	"gioui.org/io/pointer"
+	"gioui.org/layout"
 	"gioui.org/op"
 	"gioui.org/op/clip"
 )
@@ -20,6 +20,9 @@ import (
 //	gtx = w.Begin(gtx)
 //	frame(gtx)
 //	w.End(gtx)
+//
+// The zero value is ready to use. A Window belongs to the goroutine that
+// runs its window's frames; one Window serves one window.
 type Window struct {
 	fr     frame
 	values map[string]any
@@ -30,7 +33,7 @@ type Window struct {
 type frame struct {
 	nodes   []ctxNode
 	cur     int
-	focus   []focusRec
+	focus   map[event.Tag]int   // focusable tag → its KeyContext node (FocusID)
 	modals  []int               // nodes of open modal dialogs, outermost first
 	members map[string][]string // focus group id → member ids, for kittest
 	active  map[string]string   // focus group id → active member id
@@ -40,7 +43,6 @@ type frame struct {
 	pointers []pointerSeen        // this frame's pointer events at the root, window coordinates
 	root     clip.Stack           // the window area, pushed for the whole frame (Begin to End)
 	ids      map[event.Tag]string // focusable tag → id path, for FocusedID
-	images   map[string]bool      // ids of image areas (TagImage)
 	roles    map[string]Role      // id path → role (SetRole)
 }
 
@@ -51,6 +53,7 @@ type pointerSeen struct {
 	pos image.Point
 }
 
+// ctxNode is one KeyContext: what it handles and the keymaps attached in it.
 type ctxNode struct {
 	parent   int
 	name     string
@@ -58,21 +61,20 @@ type ctxNode struct {
 	keymaps  []*Keymap
 }
 
+// actionHandler is one OnAction registration.
 type actionHandler struct {
 	action ActionID
 	run    func()
 }
 
-type focusRec struct {
-	tag  event.Tag
-	node int
-}
-
 const frameKey = "giokit.frame"
 
 // Begin starts a frame: it registers the window bounds (Root) and installs
-// the dispatch tree in gtx, which KeyContext, OnAction and Focus use.
-func (w *Window) Begin(gtx C) C {
+// the dispatch tree in gtx, which KeyContext, OnAction and Focus use. It
+// resets what the last frame recorded (roles, focus groups, focus ids), so
+// maps the window returned earlier are reused from here on. Every Begin
+// needs a matching End on the same gtx.
+func (w *Window) Begin(gtx layout.Context) layout.Context {
 	f := &w.fr
 	f.size = gtx.Constraints.Max
 	f.pointers = f.pointers[:0]
@@ -92,13 +94,12 @@ func (w *Window) Begin(gtx C) C {
 	event.Op(gtx.Ops, rootTag)
 	f.nodes = append(f.nodes[:0], ctxNode{parent: -1})
 	f.cur = 0
-	f.focus = f.focus[:0]
+	clear(f.focus)
 	f.modals = f.modals[:0]
 	f.scope = ""
 	clear(f.members)
 	clear(f.active)
 	clear(f.ids)
-	clear(f.images)
 	clear(f.roles)
 	if gtx.Values == nil {
 		if w.values == nil {
@@ -110,13 +111,18 @@ func (w *Window) Begin(gtx C) C {
 	return gtx
 }
 
-func frameOf(gtx C) *frame {
+func frameOf(gtx layout.Context) *frame {
 	f, _ := gtx.Values[frameKey].(*frame)
 	return f
 }
 
-// ActionID names an action. Components declare the actions they handle with
-// OnAction; the keymap binds chords to them.
+// ActionID names a key action: something the focused control does
+// (move, expand, confirm), resolved through the KeyContexts around the
+// focus. Components declare the actions they handle with OnAction, and the
+// default keymap binds chords to them.
+//
+// It is distinct from Action, a named application command listed in menus
+// and palettes and bound to chords with Keymap.BindActions.
 type ActionID string
 
 // Built-in actions, bound by the default keymap.
@@ -132,11 +138,14 @@ const (
 	ActExtendUp   ActionID = "ui.extend_up"   // Shift+Up: grow a multiple selection upward
 	ActExtendDown ActionID = "ui.extend_down" // Shift+Down: grow it downward
 	ActSelectAll  ActionID = "ui.select_all"  // Ctrl/Cmd+A: select every item
+	// ActContextMenu is Shift+F10: open the context menu of the focused
+	// control (the keyboard's right click).
+	ActContextMenu ActionID = "ui.context_menu"
 )
 
+// defaultBinding binds a chord to a built-in action.
 type defaultBinding struct {
-	name   key.Name
-	mods   key.Modifiers
+	keys   chord
 	action ActionID
 }
 
@@ -144,25 +153,26 @@ type defaultBinding struct {
 // platforms may not deliver text for a key a filter claimed, and editors
 // must keep typing spaces.
 var defaultKeys = []defaultBinding{
-	{key.NameUpArrow, 0, ActMoveUp},
-	{key.NameDownArrow, 0, ActMoveDown},
-	{key.NameHome, 0, ActFirst},
-	{key.NameEnd, 0, ActLast},
-	{key.NameRightArrow, 0, ActExpand},
-	{key.NameLeftArrow, 0, ActCollapse},
-	{key.NameReturn, 0, ActConfirm},
-	{key.NameEnter, 0, ActConfirm},
-	{key.NameEscape, 0, ActCancel},
-	{key.NameUpArrow, key.ModShift, ActExtendUp},
-	{key.NameDownArrow, key.ModShift, ActExtendDown},
-	{"A", key.ModShortcut, ActSelectAll},
+	{keys: chord{name: key.NameUpArrow}, action: ActMoveUp},
+	{keys: chord{name: key.NameDownArrow}, action: ActMoveDown},
+	{keys: chord{name: key.NameHome}, action: ActFirst},
+	{keys: chord{name: key.NameEnd}, action: ActLast},
+	{keys: chord{name: key.NameRightArrow}, action: ActExpand},
+	{keys: chord{name: key.NameLeftArrow}, action: ActCollapse},
+	{keys: chord{name: key.NameReturn}, action: ActConfirm},
+	{keys: chord{name: key.NameEnter}, action: ActConfirm},
+	{keys: chord{name: key.NameEscape}, action: ActCancel},
+	{keys: chord{name: key.NameUpArrow, mods: key.ModShift}, action: ActExtendUp},
+	{keys: chord{name: key.NameDownArrow, mods: key.ModShift}, action: ActExtendDown},
+	{keys: chord{name: "A", mods: key.ModShortcut}, action: ActSelectAll},
+	{keys: chord{name: key.NameF10, mods: key.ModShift}, action: ActContextMenu},
 }
 
 // KeyContext lays out w inside a named dispatch node. Actions and keymaps
 // declared inside apply while focus is anywhere within it; nested contexts
 // are asked first. Popups lay out inside their opener's context, so a menu
 // opened from an editor still reaches the editor's handlers.
-func KeyContext(gtx C, name string, w W) D {
+func KeyContext(gtx layout.Context, name string, w layout.Widget) layout.Dimensions {
 	f := frameOf(gtx)
 	if f == nil {
 		return w(gtx)
@@ -177,7 +187,7 @@ func KeyContext(gtx C, name string, w W) D {
 // OnAction handles action while focus is inside the current KeyContext (or
 // anywhere, at the top level). The nearest handler to the focus wins. run is
 // called after layout; the frame is redrawn afterwards.
-func OnAction(gtx C, action ActionID, run func()) {
+func OnAction(gtx layout.Context, action ActionID, run func()) {
 	if f := frameOf(gtx); f != nil {
 		n := &f.nodes[f.cur]
 		n.handlers = append(n.handlers, actionHandler{action, run})
@@ -186,127 +196,30 @@ func OnAction(gtx C, action ActionID, run func()) {
 
 // markModal makes the current context a modal one: with nothing focused,
 // keys resolve from the innermost modal rather than the window.
-func markModal(gtx C) {
+func markModal(gtx layout.Context) {
 	if f := frameOf(gtx); f != nil {
 		f.modals = append(f.modals, f.cur)
 	}
 }
 
-// trackFocus records that tag can hold focus in the current KeyContext, so
-// actions resolve from here while it is focused. Focus, Clickable and the
-// text fields call it; custom focusable widgets should too.
-// FocusID records that the focusable tag is the control id this frame, so
-// the window can name what holds focus (kittest's FocusedID, an inspector).
-// kit's components do it; a custom focusable (a key.FocusFilter on its own
-// tag) calls it beside its Tag.
-func FocusID(gtx C, tag event.Tag, id string) {
-	if f := frameOf(gtx); f != nil {
-		if f.ids == nil {
-			f.ids = map[event.Tag]string{}
-		}
-		f.ids[tag] = Path(gtx, id)
-	}
-}
-
-// TagImage names an image area: id for tests, label as its alternative
-// text. Audits treat the label as a description, not painted text (stock
-// Gio has no image role).
-func TagImage(gtx C, id, label string) {
-	TagLabel(gtx, id, label)
-	SetRole(gtx, id, RoleImage)
-	if f := frameOf(gtx); f != nil {
-		if f.images == nil {
-			f.images = map[string]bool{}
-		}
-		f.images[Path(gtx, id)] = true
-	}
-}
-
-// Role is what a control is, in the WAI-ARIA vocabulary: richer than Gio's
-// five semantic classes, so a tree node, a table row and a menu item are
-// told apart. kit's components set their roles; kittest reads them
-// (h.Role, h.ByRole) and a future screen-reader bridge will export them.
-type Role string
-
-const (
-	RoleButton    Role = "button"
-	RoleLink      Role = "link"
-	RoleCheckbox  Role = "checkbox"
-	RoleSwitch    Role = "switch"
-	RoleRadio     Role = "radio"
-	RoleTextbox   Role = "textbox"
-	RoleSlider    Role = "slider"
-	RoleCombobox  Role = "combobox"
-	RoleListbox   Role = "listbox"
-	RoleOption    Role = "option"
-	RoleList      Role = "list"
-	RoleListItem  Role = "listitem"
-	RoleTree      Role = "tree"
-	RoleTreeItem  Role = "treeitem"
-	RoleGrid      Role = "grid"
-	RoleRow       Role = "row"
-	RoleGridCell  Role = "gridcell"
-	RoleTabList   Role = "tablist"
-	RoleTab       Role = "tab"
-	RoleMenu      Role = "menu"
-	RoleMenuItem  Role = "menuitem"
-	RoleDialog    Role = "dialog"
-	RoleImage     Role = "img"
-	RoleToolbar   Role = "toolbar"
-	RoleStatus    Role = "status" // a toast, a live message
-	RoleGroup     Role = "group"
-	RoleSeparator Role = "separator"
-)
-
-// SetRole records id's role this frame (see Role).
-func SetRole(gtx C, id string, r Role) {
-	if f := frameOf(gtx); f != nil {
-		if f.roles == nil {
-			f.roles = map[string]Role{}
-		}
-		f.roles[Path(gtx, id)] = r
-	}
-}
-
-// Roles are the roles recorded in the last frame, by id path.
-func (w *Window) Roles() map[string]Role { return w.fr.roles }
-
-// FocusedID is the id of the control holding keyboard focus in the last
-// frame (as recorded by FocusID), or "". src is the window's input source.
-func (w *Window) FocusedID(src input.Source) string {
-	for tag, id := range w.fr.ids {
-		if src.Focused(tag) {
-			return id
-		}
-	}
-	return ""
-}
-
-// Images are the ids of image areas in the last frame (TagImage).
-func (w *Window) Images() map[string]bool { return w.fr.images }
-
-func trackFocus(gtx C, tag event.Tag) {
-	if f := frameOf(gtx); f != nil {
-		f.focus = append(f.focus, focusRec{tag: tag, node: f.cur})
-	}
-}
+// Notify schedules a redraw (GPUI: cx.notify). Call it after mutating state
+// mid-frame so everything drawn earlier in the frame catches up immediately.
+func Notify(gtx layout.Context) { gtx.Execute(op.InvalidateCmd{}) }
 
 // End resolves the key presses nothing claimed during the frame against the
 // dispatch tree: from the node holding focus up to the window, the nearest
 // attached keymap binding or action handler runs. Widgets that read keys
 // themselves during layout (editors) asked first, so they keep theirs.
-func (w *Window) End(gtx C) {
+func (w *Window) End(gtx layout.Context) {
 	f := &w.fr
 	f.root.Pop()
 	var filters []event.Filter
 	for _, b := range defaultKeys {
-		filters = append(filters, key.Filter{Name: b.name, Required: b.mods})
+		filters = append(filters, b.keys.filter())
 	}
 	for _, n := range f.nodes {
 		for _, km := range n.keymaps {
-			for _, b := range km.binds {
-				filters = append(filters, key.Filter{Name: b.name, Required: b.mods})
-			}
+			filters = km.appendFilters(filters)
 		}
 	}
 	for {
@@ -320,13 +233,15 @@ func (w *Window) End(gtx C) {
 	}
 }
 
-func (f *frame) dispatch(gtx C, ke key.Event) bool {
+// dispatch runs the binding or action handler for ke nearest the focus,
+// and reports whether one ran. A binding whose action is disabled is
+// skipped, so the key keeps bubbling outward.
+func (f *frame) dispatch(gtx layout.Context, ke key.Event) bool {
 	node := -1
-	var focused *Focus
-	for _, r := range f.focus {
-		if gtx.Focused(r.tag) {
-			node = r.node
-			focused, _ = r.tag.(*Focus)
+	var focused event.Tag
+	for tag, n := range f.focus {
+		if gtx.Focused(tag) {
+			node, focused = n, tag
 			break
 		}
 	}
@@ -338,18 +253,16 @@ func (f *frame) dispatch(gtx C, ke key.Event) bool {
 	}
 	var action ActionID
 	for _, b := range defaultKeys {
-		if b.name == ke.Name && b.mods == ke.Modifiers {
+		if b.keys.matches(ke) {
 			action = b.action
 		}
 	}
 	for ; node >= 0; node = f.nodes[node].parent {
 		n := &f.nodes[node]
 		for _, km := range n.keymaps {
-			for _, b := range km.binds {
-				if b.name == ke.Name && b.mods == ke.Modifiers {
-					b.Run()
-					return true
-				}
+			if b, ok := km.match(ke); ok {
+				b.Run()
+				return true
 			}
 		}
 		if action == "" {
@@ -358,149 +271,12 @@ func (f *frame) dispatch(gtx C, ke key.Event) bool {
 		for _, h := range n.handlers {
 			if h.action == action {
 				h.run()
-				if focused != nil {
-					focused.quiet = false // the keyboard is in use: show the ring
+				if r, ok := focused.(ringShower); ok {
+					r.showRing() // the keyboard is in use: show the ring
 				}
 				return true
 			}
 		}
 	}
 	return false
-}
-
-// GroupMembers maps each focus group's id to its members' ids, as laid out
-// in the last frame. kittest uses it to count a group as one Tab stop.
-func (w *Window) GroupMembers() map[string][]string { return w.fr.members }
-
-// GroupActive maps each focus group's id to its active member's id, when
-// that member was laid out in the last frame. kittest reports it as the
-// focused id, as a screen reader would.
-func (w *Window) GroupActive() map[string]string { return w.fr.active }
-
-// Focus makes an area keyboard-focusable: a Tab stop that can hold focus and
-// receive actions. Anything can own one (a canvas, a terminal, a list).
-type Focus struct {
-	quiet bool
-}
-
-// Layout lays out w as the focusable area and records it in the current
-// KeyContext, so actions resolve from here when it is focused.
-func (f *Focus) Layout(gtx C, w W) D {
-	f.track(gtx)
-	m := op.Record(gtx.Ops)
-	dims := w(gtx)
-	call := m.Stop()
-	defer clip.Rect(image.Rectangle{Max: dims.Size}).Push(gtx.Ops).Pop()
-	event.Op(gtx.Ops, f)
-	call.Add(gtx.Ops)
-	return dims
-}
-
-// ask consumes f's focus events, which also makes it focusable this frame.
-func (f *Focus) ask(gtx C) {
-	for {
-		e, ok := gtx.Event(key.FocusFilter{Target: f})
-		if !ok {
-			return
-		}
-		if fe, ok := e.(key.FocusEvent); ok && !fe.Focus {
-			f.quiet = false
-		}
-	}
-}
-
-// track is ask plus recording f in the current KeyContext. Callers that
-// place the area themselves (popups) then add event.Op(gtx.Ops, f).
-func (f *Focus) track(gtx C) {
-	f.ask(gtx)
-	trackFocus(gtx, f)
-}
-
-// Focused reports keyboard focus with a visible ring: false when the focus
-// came from a click (RequestQuiet).
-func (f *Focus) Focused(gtx C) bool { return gtx.Focused(f) && !f.quiet }
-
-// Has reports focus, ring or not.
-func (f *Focus) Has(gtx C) bool { return gtx.Focused(f) }
-
-// Request gives f keyboard focus.
-func (f *Focus) Request(gtx C) { f.quiet = false; gtx.Execute(key.FocusCmd{Tag: f}) }
-
-// RequestQuiet gives f focus without a ring until the keyboard is used.
-// Pointer clicks use it: like CSS :focus-visible, a click hides the ring
-// even when f already had keyboard focus.
-func (f *Focus) RequestQuiet(gtx C) {
-	if !gtx.Focused(f) {
-		gtx.Execute(key.FocusCmd{Tag: f})
-	}
-	f.quiet = true
-}
-
-// FocusGroup makes a composite (list, tree, table, menu, toolbar) one Tab
-// stop with an active item, which arrow keys move (WAI-ARIA "active
-// descendant"). The group's container holds Gio focus, so the active item
-// may be scrolled out of view and not laid out.
-type FocusGroup struct {
-	Active string // id of the active item
-	focus  Focus
-	id     string
-	active *Clickable
-}
-
-// Join makes c a member of the group for this frame: no Tab stop of its own,
-// clicks focus the group. When active is true, c is the active item and
-// draws the focus ring while the group is focused. Call it in the handle
-// pass, before c.Clicked.
-func (g *FocusGroup) Join(c *Clickable, active bool) {
-	c.group = g
-	if active {
-		g.active = c
-	} else if g.active == c {
-		g.active = nil
-	}
-}
-
-// Layout lays out w as the group's single focusable area. Something must
-// name that area with the same id, so tests and screen readers can name the
-// group and report its active item: kit's lists do through List; a custom
-// group wraps its content in TagArea(gtx, id, ...).
-func (g *FocusGroup) Layout(gtx C, id string, w W) D {
-	g.id = Path(gtx, id)
-	FocusID(gtx, &g.focus, id)
-	defer func() { g.active = nil }() // Join sets it again next frame
-	return g.focus.Layout(gtx, w)
-}
-
-// Focused reports keyboard focus on the group (ring visible).
-func (g *FocusGroup) Focused(gtx C) bool { return g.focus.Focused(gtx) }
-
-// Has reports focus on the group, ring or not.
-func (g *FocusGroup) Has(gtx C) bool { return g.focus.Has(gtx) }
-
-// Focus gives the group keyboard focus.
-func (g *FocusGroup) Focus(gtx C) { g.focus.Request(gtx) }
-
-// FocusHandle is the group's focus: a popup focuses it on open
-// (Popup.FocusOnOpen), and keys the group leaves unclaimed are read with
-// it as the key.Filter's Focus.
-func (g *FocusGroup) FocusHandle() *Focus { return &g.focus }
-
-// FocusQuiet gives the group focus without a ring until the keyboard is used.
-func (g *FocusGroup) FocusQuiet(gtx C) { g.focus.RequestQuiet(gtx) }
-
-// member records id as laid out in the group this frame.
-func (g *FocusGroup) member(gtx C, id string, c *Clickable) {
-	f := frameOf(gtx)
-	if f == nil || g.id == "" {
-		return
-	}
-	if f.members == nil {
-		f.members = map[string][]string{}
-		f.active = map[string]string{}
-	}
-	p := Path(gtx, id)
-	f.members[g.id] = append(f.members[g.id], p)
-	if g.active == c {
-		f.active[g.id] = p
-	}
 }

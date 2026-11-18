@@ -7,8 +7,9 @@ and pass on stock Gio (`scripts/stock-gio.sh`, a CI job). The fork is an
 optional upgrade for its Wayland fixes, and required by `kit/x/video`
 (`paint.Stream`, DMA-BUF import) and `kit/forktrace` (window event trace).
 kit no longer uses `Source.Bounds`/`FocusedTag`, the label clip or
-`semantic.Image`; those patches remain for other Gio users of the fork and
-may be dropped. Grep for `giokit patch` to find the changes.
+`semantic.Image`; those patches (0003–0005) stay for programs that use the
+fork directly, and dropping one is a breaking change for them. Grep for
+`giokit patch` to find the changes.
 
 ## The patch series (`third_party/patches`)
 
@@ -27,6 +28,13 @@ each, generated and applied by `scripts/gio-fork.sh`:
 
 - **After editing the fork:** `scripts/gio-fork.sh diff` regenerates the
   patches; `scripts/gio-fork.sh check` proves they rebuild the fork exactly.
+  `diff` writes the new series beside the old one and replaces it only when
+  every patch was generated, so a failed run leaves the patches intact. A
+  new fork file belongs in its concern's entry in the script's `series`
+  (directories are expanded). CI runs `check` and the tests of the patched
+  packages (`gio-fork` job). The fork includes upstream's
+  `gpu/internal/rendertest/refs/*.png`; `third_party/.gitignore` keeps the
+  root `*.png` rule from dropping them, which would break `check`.
 - **Bumping Gio:** `scripts/gio-fork.sh apply vX.Y.Z` rebuilds the fork from
   the new upstream plus the patches; fix any patch that no longer applies,
   then `diff` again. Patches whose concern upstream fixed are deleted from
@@ -65,6 +73,9 @@ each, generated and applied by `scripts/gio-fork.sh`:
   Wayland's axis source distinguishes wheel input from touchpads, whose
   motion is unchanged. Classic wheel clicks retain their ×10 scaling.
   `app.GiokitUpstreamWheel` restores upstream behavior for A/B testing.
+  Both settings are process-wide (every window) and atomic: safe to change
+  from any goroutine, read at each scroll flush. The environment variable is
+  read once, at package initialization.
 - **Verify:** manually: `GIOKIT_TRACE=1`, slow wheel scroll; every
   `scroll_flush dy` within a click is equal (2.25 for a raw 1.875 high-res
   wheel sub-step).
@@ -77,8 +88,8 @@ each, generated and applied by `scripts/gio-fork.sh`:
   bounds as large as its container (`(304,-121)-(1099,999722)` was typical):
   wrong for screen readers, and kittest couldn't find a label's pixels.
 - **Patch:** clip to the laid-out text size plus Gio's glyph padding.
-- **Verify:** all five gallery pages render pixel-identical with and
-  without it; `h.Contrasts()` bounds hug the text.
+- **Verify:** the gallery pages render pixel-identical with and without
+  it; `h.Contrasts()` bounds hug the text.
 - **When bumping Gio:** re-apply. Worth upstreaming.
 
 ## Area bounds and focus for overlays (`io/input/giokit_bounds.go`)
@@ -96,8 +107,10 @@ each, generated and applied by `scripts/gio-fork.sh`:
 
 - **Gap:** Gio's semantic classes had controls and editors but no image role.
   A labeled album cover looked like text to kittest's pixel contrast audit.
-- **Patch:** append `semantic.Image` and its string name. `kit.Artwork` uses it;
-  the audit treats its label as alternative text rather than painted glyphs.
+- **Patch:** append `semantic.Image` and its string name. kit no longer uses
+  it: `kit.TagImage` records `kit.RoleImage` instead, which works on stock
+  Gio, and the audit treats that label as alternative text rather than
+  painted glyphs.
 - **When bumping Gio:** re-apply if upstream still lacks an image class; keep
   the enum value stable when possible.
 
@@ -110,11 +123,32 @@ single-line editors. Each adds a test to `widget/editor_test.go`.
 **When bumping Gio:** drop what upstream merged; re-apply the rest from that
 branch.
 
+**Editors behave differently on stock Gio.** kit builds on both, and
+`widget.Editor` (so `ui.TextField`, `ui.TextArea` and every field built on
+an editor) follows whichever Gio the app links:
+
+| Key | Fork | Stock Gio v0.10.3 |
+|---|---|---|
+| Ctrl+Backspace / Ctrl+Delete (Linux, Windows) | deletes the previous / next word | nothing: Ctrl is the shortcut modifier there, and the key is swallowed by the shortcut branch (Alt+Backspace on macOS works on both) |
+| Left / Right with a selection | caret to the selection's left / right edge | selection cleared, then the caret moves one character from where it was |
+| Up / Down in a single-line editor | caret to the start / end of the text | `MoveLines` on the only line: the caret does not reach the start / end |
+
+Components that handle Up/Down themselves (NumberField steps, Combobox and
+the command palette navigate options) behave the same on both. kittest's
+stock-Gio run (`scripts/stock-gio.sh`) passes because no kit test depends
+on these keys; a test that does must be fork-only. The fork's own
+`widget/editor_test.go` cases cover the patched behaviour (`gio-fork` CI
+job).
+
 ## Debug trace hooks (`app/giokit_trace.go`)
 
 - `app.GiokitTrace`, called from `gtrace(...)` in `os_wayland.go` and
-  `window.go` (axis, frame callbacks, draw, GPU/present timing). `kit.App`
-  installs it under `GIOKIT_TRACE`. Re-apply when bumping; harmless when nil.
+  `window.go` (axis, frame callbacks, draw, GPU/present timing).
+  `kit/forktrace` installs it from its `init` under `GIOKIT_TRACE` (import
+  it for its side effect); kit itself never touches it, so it builds on
+  stock Gio. It is a plain variable read without synchronization on window
+  goroutines: set it once before the first window, never later.
+  Re-apply when bumping; harmless when nil.
 
 ## Vulkan is opt-in on desktop Linux/FreeBSD
 
@@ -137,8 +171,8 @@ branch.
 - **Gap:** an `ImageOp` is immutable. Showing video meant `paint.NewImageOp`
   per frame: a new cache key each time, so a new texture, a full upload and a
   mipmap rebuild every frame, with the old texture evicted a frame later.
-- **Patch:** `paint.Stream` (`NewStream`, `Submit(StreamFrame)`, `Size`, `Add`,
-  `Filter`, `OnFrame`). A producer on any goroutine submits RGBA frames
+- **Patch:** `paint.Stream` (`NewStream`, `Submit(StreamFrame)`, `Close`,
+  `Size`, `Add`, `ImportState`, and the `Filter` and `OnFrame` fields). A producer on any goroutine submits RGBA frames
   (latest wins; the replaced frame's `Release` runs). `Add` encodes an ordinary
   image op whose handle is the stream's `*internal/stream.Stream` and whose
   `src` is a size-only placeholder (the renderer reads `src` only for its
@@ -148,8 +182,19 @@ branch.
   upload holds the stream's lock, so `Submit` cannot release a frame mid-copy.
   If the stream is not drawn for a frame the cache frees its texture; the next
   draw re-uploads the retained current frame.
-- **Verify:** `go test ./kit/ui -run Video` (new frame reaches the screen, size
-  change, release once, hide/show), `go test ./examples/gallery -run VideoDemo`,
+- **Frame ownership:** the stream owns a frame from `Submit` until its
+  `Release`, which runs exactly once, never under the stream's lock, on the
+  goroutine that ends the need for it: the producer's (`Submit`, `Close`) or
+  a window's render goroutine (a newer frame bound, or the texture dropped).
+  Holds on DMA-BUF frames are counted, so several windows can draw one
+  stream; the frame is released when the last one lets go.
+  `Submit(StreamFrame{})` releases the current frame and keeps the stream
+  open; `Close` releases it and refuses (releases at once) later frames.
+  Tested without a GPU: `internal/stream/stream_test.go` (replace, hold,
+  two holders, close) and `gpu/stream_test.go` (two renderers, import cache
+  beyond its cap, with a fake importer).
+- **Verify:** `go test ./kit/x/video` (newest frame reaches the screen, hidden
+  and shown again, frame mapping), `go test ./examples/gallery -run VideoDemo`,
   `go test -run x -bench Video ./internal/bench` (Nov 2026, RX 6700 XT:
   0.84 ms/frame at 1080p, 2.2 ms at 2960×1848, 0.12–0.16 ms without a new
   frame; CPU time is on par with ImageOp-per-frame, the saving is GPU mipmaps
@@ -162,7 +207,8 @@ branch.
   `glEGLImageTargetTexStorageEXT` for immutable storage, then a
   `glTextureViewOES` with `SRGB8_ALPHA8` so it samples as sRGB like every Gio
   texture (Mesa has no `EGL_EXT_image_gl_colorspace`). `streamTex` imports
-  each buffer ID once (≤ 12 kept, LRU, never the bound one), **holds** the
+  each buffer ID once (≤ 12 kept, LRU, never the bound one nor the one
+  being bound), **holds** the
   bound frame (`stream.Use.Hold`/`Unhold`) because it is sampled in place,
   and releases it only after binding a newer one or when the cache drops the
   texture. A failed import sets `ImportUnsupported` and draws the last good

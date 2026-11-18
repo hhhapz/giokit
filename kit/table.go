@@ -7,23 +7,30 @@ import (
 
 // Column describes one table column. Width 0 means flexible (shares leftover space).
 type Column struct {
-	Title string
-	Width unit.Dp
-	Align layout.Direction // layout.W (default) or layout.E
+	Title string  // the header text, drawn as a caption
+	Width unit.Dp // fixed width; 0 shares the leftover space
+	// Align places each cell's content: layout.W or layout.E. The zero
+	// value, layout.NW, also means W (cells are one line, so NW and W look
+	// the same).
+	Align layout.Direction
 }
 
-// Table lays out a header and rows over the same columns, so they always line up.
+// Table lays out a header and rows over the same columns, so they always
+// line up. It is the layout primitive: it draws, but holds no selection,
+// sorting or keyboard navigation. For an interactive data grid use
+// ui.DataTable, which is built on it.
 type Table struct {
-	Cols   []Column
-	Inset  unit.Dp // horizontal padding inside each row
-	RowPad unit.Dp // vertical padding inside each row
+	Cols   []Column // left to right; header and rows use the same widths
+	Inset  unit.Dp  // horizontal padding inside each row
+	RowPad unit.Dp  // vertical padding inside each row
 }
 
-// Cells lays out one line of cells across the columns.
-func (tb Table) Cells(gtx C, cell func(gtx C, col int) D) D {
+// Cells lays out one line of cells across the columns; cell draws column
+// col's content.
+func (tb Table) Cells(gtx layout.Context, cell func(gtx layout.Context, col int) layout.Dimensions) layout.Dimensions {
 	children := make([]layout.FlexChild, len(tb.Cols))
 	for i, c := range tb.Cols {
-		f := func(gtx C) D {
+		f := func(gtx layout.Context) layout.Dimensions {
 			if c.Width > 0 {
 				px := gtx.Dp(c.Width)
 				gtx.Constraints.Min.X, gtx.Constraints.Max.X = px, px
@@ -31,10 +38,10 @@ func (tb Table) Cells(gtx C, cell func(gtx C, col int) D) D {
 				gtx.Constraints.Min.X = gtx.Constraints.Max.X
 			}
 			align := c.Align
-			if align == 0 {
+			if align == layout.NW {
 				align = layout.W
 			}
-			return align.Layout(gtx, func(gtx C) D { return cell(gtx, i) })
+			return align.Layout(gtx, func(gtx layout.Context) layout.Dimensions { return cell(gtx, i) })
 		}
 		if c.Width > 0 {
 			children[i] = layout.Rigid(f)
@@ -45,37 +52,39 @@ func (tb Table) Cells(gtx C, cell func(gtx C, col int) D) D {
 	return Row(gtx, children...)
 }
 
-func (tb Table) Header(gtx C, t *Theme) D {
+// Header lays out the column titles as captions, followed by a rule.
+func (tb Table) Header(gtx layout.Context, th *Theme) layout.Dimensions {
 	return Col(gtx,
-		Rigid(func(gtx C) D {
-			return layout.Inset{Left: tb.Inset, Right: tb.Inset, Bottom: t.Space(Space2)}.Layout(gtx, func(gtx C) D {
-				return tb.Cells(gtx, func(gtx C, i int) D { return t.Caption(gtx, tb.Cols[i].Title) })
+		Rigid(func(gtx layout.Context) layout.Dimensions {
+			return layout.Inset{Left: tb.Inset, Right: tb.Inset, Bottom: th.Space(Space2)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+				return tb.Cells(gtx, func(gtx layout.Context, i int) layout.Dimensions { return th.Caption(gtx, tb.Cols[i].Title) })
 			})
 		}),
-		Rigid(HLine(t.Border)),
+		Rigid(HLine(th.Border)),
 	)
 }
 
-// Row draws one hoverable row followed by a divider (unless last).
-// cell gets the row's hover state so controls can light up with the row.
-func (tb Table) Row(gtx C, t *Theme, h *Hover, id string, last bool, cell func(gtx C, col int, hovered bool) D) D {
+// Row draws one hoverable row with id, followed by a divider unless last
+// is set (the final row). cell gets the row's hover state so controls can
+// light up with the row.
+func (tb Table) Row(gtx layout.Context, th *Theme, h *HoverArea, id string, last bool, cell func(gtx layout.Context, col int, hovered bool) layout.Dimensions) layout.Dimensions {
 	return Col(gtx,
-		Rigid(func(gtx C) D {
-			return h.Layout(gtx, id, func(gtx C, hovered bool) D {
+		Rigid(func(gtx layout.Context) layout.Dimensions {
+			return h.Layout(gtx, id, func(gtx layout.Context, hovered bool) layout.Dimensions {
 				bg := none
 				if hovered {
-					bg = t.Hover // not Panel: rows often sit on a card, which is Panel
+					bg = th.Hover // not Panel: rows often sit on a card, which is Panel
 				}
-				return t.Styled(Surface{Bg: bg, Radius: t.Radius}).Layout(gtx, Stretch(Pad(tb.RowPad, tb.Inset, func(gtx C) D {
-					return tb.Cells(gtx, func(gtx C, i int) D { return cell(gtx, i, hovered) })
+				return th.Styled(Surface{Bg: bg, Radius: th.Radius}).Layout(gtx, Stretch(Pad(tb.RowPad, tb.Inset, func(gtx layout.Context) layout.Dimensions {
+					return tb.Cells(gtx, func(gtx layout.Context, i int) layout.Dimensions { return cell(gtx, i, hovered) })
 				})))
 			})
 		}),
-		Rigid(func(gtx C) D {
+		Rigid(func(gtx layout.Context) layout.Dimensions {
 			if last {
-				return D{}
+				return layout.Dimensions{}
 			}
-			return layout.Inset{Left: tb.Inset, Right: tb.Inset}.Layout(gtx, HLine(t.Divider))
+			return layout.Inset{Left: tb.Inset, Right: tb.Inset}.Layout(gtx, HLine(th.Divider))
 		}),
 	)
 }

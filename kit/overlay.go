@@ -10,26 +10,72 @@ import (
 	"gioui.org/op"
 	"gioui.org/op/clip"
 	"gioui.org/op/paint"
+	"gioui.org/unit"
 )
 
-// Overlays: anything that floats above the page. Popup is the shared state;
-// Popover the primitive the rest (Menu, Select, ContextArea) build on; Modal
-// the dialog host; ToastHost the notification stack.
-//
-// A floating panel is drawn with op.Defer, so it lands above everything,
-// positioned against its anchor's window position. kit learns that from
-// pointer events: the window area (kit.Window) and the anchor see the same
-// hover event in their own coordinates, and the difference is the anchor's
-// offset (stock Gio has no way to ask). It opens below its anchor and flips
-// above it, or shifts sideways, to stay inside the window; an anchor the
-// pointer has never crossed (opened from the keyboard first) opens below.
-//
-// While a panel is open, a backdrop covers the window: a press outside the
-// panel closes it and goes nowhere else (as native menus do). The backdrop's
-// id is "<id>/backdrop"; kittest's audit treats widgets under a backdrop as
-// intentionally unreachable, not occluded.
+// Floating panel placement, in dp.
+const (
+	popupMargin unit.Dp = 8 // kept between a panel and the window's edges
+	popupGap    unit.Dp = 4 // between a panel and its anchor
+	// dialogMargin is kept between a dialog and the window's edges.
+	dialogMargin unit.Dp = 24
+	// dialogSlide is how far a dialog slides up as it fades in.
+	dialogSlide unit.Dp = 12
+)
 
-// Popup is the state of a floating panel. The zero value is closed.
+// Drop shadow: shadowLayers rounded rects, each shadowStep (scaled by
+// Elevation) wider and lower than the last, fading outward.
+const (
+	shadowLayers         = 3
+	shadowStep   unit.Dp = 2
+	// shadowFade sets each layer's share of the scrim's alpha: layer i
+	// (1 innermost) gets 1/(shadowFade*(i+1)) of it.
+	shadowFade = 3
+	// shadowMaxStrength caps how far Elevation darkens the layers.
+	shadowMaxStrength = 1.6
+)
+
+// backdropBounds is a clip area large enough to cover the window wherever a
+// deferred layer's origin lies. It is smaller than noEdges because it is a
+// real clip rectangle rather than layout arithmetic.
+var backdropBounds = image.Rect(-1<<16, -1<<16, 1<<16, 1<<16)
+
+// floating is the lifecycle Popup and Dialog share: whether the panel is
+// open, focus to move into it on the next layout, a user dismissal not yet
+// reported, the backdrop's gesture, the panel's focus and its fade. Each
+// owner keeps its own input and dismissal policy.
+type floating struct {
+	open      bool
+	focusNext bool // opened since the last layout: focus the panel
+	dismissed bool // closed by the user since the owner last reported it
+	backdrop  gesture.Click
+	focus     Focus // the panel's focus; its address is an event tag
+	fade      Tween
+}
+
+// show opens the panel and asks for focus to move into it; an open panel is
+// left as it is.
+func (f *floating) show() {
+	if !f.open {
+		f.open, f.focusNext = true, true
+	}
+}
+
+// dismiss closes the panel on the user's behalf.
+func (f *floating) dismiss() { f.open, f.dismissed = false, true }
+
+// takeDismissed reports and clears a pending dismissal.
+func (f *floating) takeDismissed() bool {
+	d := f.dismissed
+	f.dismissed = false
+	return d
+}
+
+// Popup is the state of a floating panel laid out by Theme.Popover (and the
+// menus, selects and pickers built on it). The zero value is closed.
+//
+// A Popup identifies its anchor and panel areas to Gio by the addresses of
+// its fields, like Gio's own widget state: do not copy one after first use.
 type Popup struct {
 	// MatchWidth makes the panel at least as wide as its anchor (selects).
 	MatchWidth bool
@@ -37,20 +83,15 @@ type Popup struct {
 	// combobox keeps typing in its field).
 	KeepFocus bool
 
-	open      bool
-	focusNext bool // opened since the last layout: focus the panel
-	dismissed bool // closed by Escape or a press outside since DidDismiss
-	byKey     bool // ...by Escape (return focus with a ring)
-	point     image.Point
-	atPoint   bool
-	entering  bool // just opened: replay the fade-in
-	backdrop  gesture.Click
-	anchor    int         // tag: its address identifies the anchor area
-	origin    image.Point // the anchor's window position, from pointer events
-	located   bool        // origin is known
-	focus     Focus       // the panel's focus
-	focusTo   *Focus      // focused on open instead of the panel (a menu's group)
-	fade      Tween
+	floating
+	byKey    bool // the pending dismissal was by Escape (return focus with a ring)
+	point    image.Point
+	atPoint  bool
+	entering bool        // just opened: replay the fade-in
+	anchor   int         // event tag: only its address matters, naming the anchor area
+	origin   image.Point // the anchor's window position, from pointer events
+	located  bool        // origin is known
+	focusTo  *Focus      // focused on open instead of the panel (a menu's group)
 }
 
 // Opened reports whether the panel is open.
@@ -72,8 +113,9 @@ func (p *Popup) PanelFocus() *Focus { return &p.focus }
 // Show opens the panel below its anchor.
 func (p *Popup) Show() {
 	if !p.open {
-		p.open, p.focusNext, p.atPoint = true, true, false
+		p.atPoint = false
 	}
+	p.show()
 }
 
 // ShowAt opens the panel at pt, in the anchor's coordinates (context menus).
@@ -97,15 +139,18 @@ func (p *Popup) Toggle() {
 // outside it) since the last call, and whether it was by keyboard: return
 // focus to the trigger then, with a ring if by keyboard.
 func (p *Popup) DidDismiss() (dismissed, byKey bool) {
-	d, k := p.dismissed, p.byKey
-	p.dismissed, p.byKey = false, false
-	return d, k
+	k := p.byKey
+	p.byKey = false
+	return p.takeDismissed(), k
 }
 
 // update handles outside presses and focuses the panel on open. It runs
 // before anything of the popup is drawn (rule 1), and asks for events only
 // while open. Escape is an action (ActCancel) declared by Popover.
-func (p *Popup) update(gtx C) {
+//
+// A popup closes on the press, as native menus do: the press that closes it
+// goes nowhere else. Dialog, by contrast, closes on a full click.
+func (p *Popup) update(gtx layout.Context) {
 	if !p.open {
 		return
 	}
@@ -132,20 +177,36 @@ func (p *Popup) update(gtx C) {
 	}
 }
 
-func (p *Popup) close(gtx C, byKey bool) {
-	p.open, p.dismissed, p.byKey = false, true, byKey
+func (p *Popup) close(gtx layout.Context, byKey bool) {
+	p.dismiss()
+	p.byKey = byKey
 	Notify(gtx)
 }
 
 // Popover lays out anchor, and while p is open a floating panel holding
 // content below it. Open it from your handle pass (p.Show, or Toggle on a
-// trigger's click); Escape or a press outside closes it.
+// trigger's click); Escape or a press outside closes it. Popover is the
+// primitive the other floating components (menus, selects, context menus)
+// build on.
+//
+// The panel is drawn in a deferred layer, so it lands above everything,
+// positioned against its anchor's window position. kit learns that from
+// pointer events: the window area (kit.Window) and the anchor see the same
+// hover event in their own coordinates, and the difference is the anchor's
+// offset (stock Gio has no way to ask). It opens below its anchor and flips
+// above it, or shifts sideways, to stay inside the window; an anchor the
+// pointer has never crossed (opened from the keyboard first) opens below.
+//
+// While the panel is open, a backdrop covers the window: a press outside
+// the panel closes it and goes nowhere else. The backdrop's id is
+// "<id>/backdrop"; kittest's audit treats widgets under a backdrop as
+// intentionally unreachable, not occluded.
 //
 // Anchor and panel share one KeyContext nested in the opener's, so Escape
 // reaches the innermost open popup first (also with focus on its trigger or,
 // for KeepFocus, its field), and anything it does not handle bubbles on.
-func (t *Theme) Popover(gtx C, p *Popup, id string, anchor W, content W) D {
-	return KeyContext(gtx, "popover", func(gtx C) D {
+func (t *Theme) Popover(gtx layout.Context, p *Popup, id string, anchor layout.Widget, content layout.Widget) layout.Dimensions {
+	return KeyContext(gtx, "popover", func(gtx layout.Context) layout.Dimensions {
 		p.update(gtx)
 		if p.open {
 			OnAction(gtx, ActCancel, func() { p.close(gtx, true) })
@@ -161,7 +222,7 @@ func (t *Theme) Popover(gtx C, p *Popup, id string, anchor W, content W) D {
 		call.Add(gtx.Ops)
 		area.Pop()
 		if p.open {
-			t.float(gtx, p, id, dims.Size, func(gtx C) D {
+			t.float(gtx, p, id, dims.Size, func(gtx layout.Context) layout.Dimensions {
 				return t.FloatingPanel(gtx, content)
 			})
 		}
@@ -171,7 +232,7 @@ func (t *Theme) Popover(gtx C, p *Popup, id string, anchor W, content W) D {
 
 // FloatingPanel is the floating surface of menus, popovers, dialogs and
 // toasts: overlay fill, hairline border, a shadow scaled by Elevation.
-func (t *Theme) FloatingPanel(gtx C, content W) D {
+func (t *Theme) FloatingPanel(gtx layout.Context, content layout.Widget) layout.Dimensions {
 	m := op.Record(gtx.Ops)
 	dims := t.Styled(Surface{Bg: t.Overlay, Border: t.Border, Radius: t.RadiusLg()}).Layout(gtx, content)
 	call := m.Stop()
@@ -183,23 +244,24 @@ func (t *Theme) FloatingPanel(gtx C, content W) D {
 // shadow draws a drop shadow under a rounded rect of size sz: a few
 // widening, fading layers (Gio has no blur). Theme.Elevation scales its
 // reach and strength; 0 draws none.
-func (t *Theme) shadow(gtx C, sz image.Point, r int) {
+func (t *Theme) shadow(gtx layout.Context, sz image.Point, r int) {
 	if t.Elevation <= 0 {
 		return
 	}
 	c := t.Scrim
 	r = min(r, min(sz.X, sz.Y)/2)
-	for i := 3; i >= 1; i-- {
-		d := int(float32(gtx.Dp(2)*i) * t.Elevation)
+	for i := shadowLayers; i >= 1; i-- {
+		d := int(float32(gtx.Dp(shadowStep)*i) * t.Elevation)
 		rect := image.Rectangle{Max: sz}.Inset(-d).Add(image.Pt(0, d))
-		a := min(255, int(float32(int(c.A)/(3+3*i))*min(t.Elevation, 1.6)))
+		// Layer i gets 1/(shadowFade*(i+1)) of the scrim's alpha.
+		a := min(255, int(float32(int(c.A)/(shadowFade+shadowFade*i))*min(t.Elevation, shadowMaxStrength)))
 		paint.FillShape(gtx.Ops, WithAlpha(c, uint8(a)), clip.UniformRRect(rect, r+d).Op(gtx.Ops))
 	}
 }
 
 // float lays out a panel in a deferred layer above the page, placed against
 // the anchor (size anchorSz at the current origin), with the backdrop.
-func (t *Theme) float(gtx C, p *Popup, id string, anchorSz image.Point, panel W) {
+func (t *Theme) float(gtx layout.Context, p *Popup, id string, anchorSz image.Point, panel layout.Widget) {
 	// The anchor in window space: this frame's size at the position its
 	// pointer events last showed. Not yet located (opened by keyboard before
 	// the pointer ever crossed it): no edges, so the panel opens below it.
@@ -213,7 +275,7 @@ func (t *Theme) float(gtx C, p *Popup, id string, anchorSz image.Point, panel W)
 	if p.atPoint {
 		ab = image.Rectangle{Min: ab.Min.Add(p.point), Max: ab.Min.Add(p.point)}
 	}
-	margin, gap := gtx.Dp(8), gtx.Dp(4)
+	margin, gap := gtx.Dp(popupMargin), gtx.Dp(popupGap)
 	if p.atPoint {
 		gap = 0
 	}
@@ -247,10 +309,8 @@ func (t *Theme) float(gtx C, p *Popup, id string, anchorSz image.Point, panel W)
 	}
 	pos.X = max(win.Min.X+margin, min(pos.X, win.Max.X-margin-sz.X))
 	pos.Y = max(win.Min.Y+margin, min(pos.Y, win.Max.Y-margin-sz.Y))
-	// Backdrop: catches presses outside the panel. Huge, so it covers the
-	// window wherever this layer's origin is.
-	huge := image.Rect(-1<<16, -1<<16, 1<<16, 1<<16)
-	bd := clip.Rect(huge).Push(gtx.Ops)
+	// Backdrop: catches presses outside the panel.
+	bd := clip.Rect(backdropBounds).Push(gtx.Ops)
 	p.backdrop.Add(gtx.Ops)
 	Tag(gtx, Part(id, "backdrop"))
 	bd.Pop()
@@ -278,43 +338,39 @@ func (t *Theme) float(gtx C, p *Popup, id string, anchorSz image.Point, panel W)
 }
 
 // Dialog is the state of a modal dialog (th.Modal). Open it with Show from
-// your handle pass.
+// your handle pass. The zero value is closed. Like Popup, it identifies its
+// areas by address: do not copy one after first use.
 type Dialog struct {
 	// Persistent dialogs ignore Escape and backdrop clicks: only your
 	// buttons close them (unsaved-changes prompts).
 	Persistent bool
 
-	open      bool
-	focusNext bool
-	dismissed bool
-	backdrop  gesture.Click
-	focus     Focus
-	fade      Tween
+	floating
 }
 
+// Opened reports whether the dialog is open.
 func (d *Dialog) Opened() bool { return d.open }
-func (d *Dialog) Show() {
-	if !d.open {
-		d.open, d.focusNext = true, true
-	}
-}
+
+// Show opens the dialog; on its next layout it takes focus and fades in.
+// Showing an open dialog does nothing.
+func (d *Dialog) Show() { d.show() }
+
+// Hide closes the dialog. It is not a dismissal: DidDismiss stays false.
 func (d *Dialog) Hide() { d.open = false }
 
 // DidDismiss reports whether the user closed the dialog with Escape or a
 // backdrop click since the last call (your buttons call Hide themselves).
-func (d *Dialog) DidDismiss() bool {
-	v := d.dismissed
-	d.dismissed = false
-	return v
-}
+func (d *Dialog) DidDismiss() bool { return d.takeDismissed() }
 
 // Modal lays out page, and while d is open a dialog above it. The page is
 // laid out disabled meanwhile, without dimming it twice (the scrim does):
 // nothing behind the dialog takes input or focus, so Tab cycles inside the
 // dialog for free. Call it near the root, around everything the dialog
 // should cover. Escape or a click on the backdrop closes the dialog unless
-// it is Persistent.
-func (t *Theme) Modal(gtx C, d *Dialog, id string, page W, dialog W) D {
+// it is Persistent. Unlike a Popup, a dialog closes on a full click (press
+// and release) on the backdrop, so a drag that starts in the dialog and ends
+// outside it does not close it.
+func (t *Theme) Modal(gtx layout.Context, d *Dialog, id string, page layout.Widget, dialog layout.Widget) layout.Dimensions {
 	if d.open {
 		for {
 			e, ok := d.backdrop.Update(gtx.Source)
@@ -322,7 +378,7 @@ func (t *Theme) Modal(gtx C, d *Dialog, id string, page W, dialog W) D {
 				break
 			}
 			if e.Kind == gesture.KindClick && !d.Persistent {
-				d.open, d.dismissed = false, true
+				d.dismiss()
 				Notify(gtx)
 			}
 		}
@@ -336,42 +392,42 @@ func (t *Theme) Modal(gtx C, d *Dialog, id string, page W, dialog W) D {
 		gtx.Execute(key.FocusCmd{Tag: &d.focus})
 		d.fade.From(gtx, 0, t.Dur(DurNormal))
 	}
-	pgtx := gtx
-	pgtx.Source = gtx.Source.Disabled()
-	dims := disabledArea(pgtx, "", page) // inert to screen readers too
+	dims := disabledArea(gtx.Disabled(), "", page) // inert to screen readers too
 
 	m := op.Record(gtx.Ops)
 	a := d.fade.To(gtx, 1, t.Dur(DurNormal))
 	o := paint.PushOpacity(gtx.Ops, a)
 	full := image.Rectangle{Max: gtx.Constraints.Max}
 	bd := clip.Rect(full).Push(gtx.Ops)
-	paint.ColorOp{Color: t.Scrim}.Add(gtx.Ops)
-	paint.PaintOp{}.Add(gtx.Ops)
+	paint.Fill(gtx.Ops, t.Scrim)
 	d.backdrop.Add(gtx.Ops)
 	Tag(gtx, Part(id, "backdrop"))
 	bd.Pop()
-	// The card: centered, at most 480dp wide, sliding up a little as it fades in.
+	// The card: centered, at most DialogMaxWidth wide, sliding up a little
+	// as it fades in. A window smaller than the margins gives it no room,
+	// never negative constraints.
+	margin := gtx.Dp(dialogMargin)
 	cgtx := gtx
 	cgtx.Constraints = layout.Constraints{Max: image.Pt(
-		min(gtx.Constraints.Max.X-2*gtx.Dp(24), gtx.Dp(t.DialogMaxWidth)),
-		gtx.Constraints.Max.Y-2*gtx.Dp(24))}
+		max(0, min(gtx.Constraints.Max.X-2*margin, gtx.Dp(t.DialogMaxWidth))),
+		max(0, gtx.Constraints.Max.Y-2*margin))}
 	cgtx.Constraints.Min.X = cgtx.Constraints.Max.X
 	cm := op.Record(gtx.Ops)
 	// The dialog is a modal key context: Escape closes it unless Persistent,
 	// and with focus lost, keys still resolve here rather than behind it.
-	cd := KeyContext(cgtx, "dialog", func(gtx C) D {
+	cd := KeyContext(cgtx, "dialog", func(gtx layout.Context) layout.Dimensions {
 		markModal(gtx)
 		trackFocus(gtx, &d.focus)
 		if !d.Persistent {
-			OnAction(gtx, ActCancel, func() { d.open, d.dismissed = false, true })
+			OnAction(gtx, ActCancel, d.dismiss)
 		}
-		return t.FloatingPanel(gtx, func(gtx C) D {
+		return t.FloatingPanel(gtx, func(gtx layout.Context) layout.Dimensions {
 			return layout.UniformInset(t.Space(Space5)).Layout(gtx, dialog)
 		})
 	})
 	call := cm.Stop()
 	pos := full.Max.Sub(cd.Size).Div(2)
-	pos.Y -= int(float32(gtx.Dp(12)) * (1 - a))
+	pos.Y -= int(float32(gtx.Dp(dialogSlide)) * (1 - a))
 	off := op.Offset(pos).Push(gtx.Ops)
 	pa := clip.Rect(image.Rectangle{Max: cd.Size}).Push(gtx.Ops)
 	event.Op(gtx.Ops, &d.focus)

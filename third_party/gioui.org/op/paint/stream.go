@@ -18,6 +18,11 @@ import (
 //
 // Frames are latest-wins: a frame submitted before the previous one was
 // drawn replaces it, so a slow UI drops frames instead of adding latency.
+// Any number of windows may draw the same stream.
+//
+// A producer that is done calls Close, which releases the current frame
+// and refuses later ones. Submitting an empty StreamFrame also releases the
+// current frame but leaves the stream open.
 type Stream struct {
 	// Filter is the scaling filter, as for ImageOp.
 	Filter ImageFilter
@@ -31,8 +36,18 @@ type Stream struct {
 
 // StreamFrame is one frame: RGBA pixels (alpha is respected) or a DMA-BUF,
 // and a release function called once the stream has finished with it, for
-// pooling. A DMA-BUF frame is sampled in place for as long as it is on
-// screen, so it is released when the renderer moves to a newer frame.
+// pooling. The stream owns the frame's pixels or buffer from Submit until
+// Release; the producer must not modify or reuse them before then.
+//
+// Release runs exactly once per submitted frame. An Image frame is released
+// when a newer frame replaces it or the stream is closed; the renderer
+// copies it under the stream's lock, so replacement waits for the copy. A
+// DMA-BUF frame is sampled in place for as long as it is on screen, so it
+// is released only when every window drawing it has moved to a newer frame
+// or stopped drawing the stream. Release may therefore run on the
+// goroutine calling Submit or Close, or on a window's rendering goroutine.
+// It must be safe for concurrent use with the producer and should not
+// block; it is never called with the stream's lock held.
 type StreamFrame struct {
 	Image   *image.RGBA
 	DMABuf  *DMABuf
@@ -68,17 +83,28 @@ const (
 func NewStream() *Stream { return new(Stream) }
 
 // Submit replaces the current frame. It is safe to call from any goroutine.
+// After Close, Submit releases f at once and does not call OnFrame.
 func (s *Stream) Submit(f StreamFrame) {
 	var d *stream.DMABuf
 	if b := f.DMABuf; b != nil {
 		d = &stream.DMABuf{ID: b.ID, FD: b.FD, Offset: b.Offset, Pitch: b.Pitch, Fourcc: b.Fourcc,
 			Modifier: b.Modifier, Width: b.Width, Height: b.Height}
 	}
-	s.s.Submit(stream.Frame{Img: f.Image, DMA: d, Release: f.Release})
+	if !s.s.Submit(stream.Frame{Img: f.Image, DMA: d, Release: f.Release}) {
+		return
+	}
 	if s.OnFrame != nil {
 		s.OnFrame()
 	}
 }
+
+// Close ends the stream: the current frame is released, once no window
+// holds it, and later frames are released as soon as they are submitted.
+// The stream draws nothing afterwards. A window still holding a DMA-BUF
+// frame releases it when it next renders without drawing the stream. Close
+// is safe to call from any goroutine and more than once; it does not call
+// OnFrame, so invalidate the window if the stream is on screen.
+func (s *Stream) Close() { s.s.Close() }
 
 // ImportState reports whether the renderer drawing this stream imports
 // DMA-BUF frames. It stays ImportUnknown until a DMA-BUF frame is drawn.

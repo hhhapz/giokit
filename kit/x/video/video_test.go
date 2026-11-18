@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"gioui.org/f32"
+	"gioui.org/layout"
 	"gioui.org/op/paint"
 
 	"github.com/hhhapz/giokit/kit"
@@ -29,16 +30,16 @@ var (
 type videoView struct {
 	th     *kit.Theme
 	s      *paint.Stream
-	st     video.VideoState
+	st     video.State
 	fit    video.Fit
 	hidden bool
 }
 
-func (v *videoView) Frame(gtx kit.C) {
-	kit.Fill(gtx, v.th.Bg, func(gtx kit.C) kit.D {
+func (v *videoView) Frame(gtx layout.Context) {
+	kit.Fill(gtx, v.th.Bg, func(gtx layout.Context) layout.Dimensions {
 		gtx.Constraints.Min = gtx.Constraints.Max
 		if v.hidden {
-			return kit.D{Size: gtx.Constraints.Max}
+			return layout.Dimensions{Size: gtx.Constraints.Max}
 		}
 		return video.Video{ID: "screen", Stream: v.s, Fit: v.fit, Label: "Test pattern"}.Layout(gtx, v.th, &v.st)
 	})

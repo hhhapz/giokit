@@ -4,6 +4,9 @@ import (
 	"context"
 	"fmt"
 	"image"
+	"os"
+	"os/exec"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -11,6 +14,7 @@ import (
 
 	"gioui.org/gesture"
 	"gioui.org/io/event"
+	"gioui.org/io/input"
 	"gioui.org/io/key"
 	"gioui.org/io/semantic"
 	"gioui.org/layout"
@@ -28,8 +32,8 @@ import (
 type C = layout.Context
 type D = layout.Dimensions
 
-func kinds(ps []Problem) []string {
-	var out []string
+func kinds(ps []Problem) []ProblemKind {
+	var out []ProblemKind
 	for _, p := range ps {
 		out = append(out, p.Kind)
 	}
@@ -69,7 +73,7 @@ func TestCatchesLateHoverRead(t *testing.T) {
 		})
 	})
 	h.Move(image.Pt(50, 20))
-	if !slices.Contains(kinds(h.Problems()), "stale-frame") {
+	if !slices.Contains(kinds(h.Problems()), ProblemStaleFrame) {
 		t.Fatalf("late hover read not caught: %v", h.Problems())
 	}
 }
@@ -90,7 +94,7 @@ func TestCatchesDrawBeforeHandle(t *testing.T) {
 		)
 	})
 	h.ClickID("btn")
-	if n != 1 || !slices.Contains(kinds(h.Problems()), "stale-frame") {
+	if n != 1 || !slices.Contains(kinds(h.Problems()), ProblemStaleFrame) {
 		t.Fatalf("draw-before-handle not caught (n=%d): %v", n, h.Problems())
 	}
 }
@@ -100,11 +104,11 @@ func TestCatchesDrawBeforeHandle(t *testing.T) {
 func TestCatchesTinyTarget(t *testing.T) {
 	var c kit.Clickable
 	h := harness(t, func(gtx C) {
-		c.Press(gtx, "check", func(gtx C, st kit.State) D {
+		th.Press(gtx, &c, "check", func(gtx C, st kit.State) D {
 			return box(gtx, 4, 22) // what a collapsed Box left: just its glyph's width
 		})
 	})
-	if !slices.Contains(kinds(h.Audit()), "tiny-target") {
+	if !slices.Contains(kinds(h.Audit()), ProblemTinyTarget) {
 		t.Fatalf("collapsed target not caught: %v", h.Audit())
 	}
 }
@@ -112,7 +116,7 @@ func TestCatchesTinyTarget(t *testing.T) {
 func TestCatchesUnlabeledClickable(t *testing.T) {
 	var c widget.Clickable
 	h := harness(t, func(gtx C) { c.Layout(gtx, func(gtx C) D { return box(gtx, 60, 30) }) })
-	if !slices.Contains(kinds(h.Audit()), "unlabeled-clickable") {
+	if !slices.Contains(kinds(h.Audit()), ProblemUnlabeledClickable) {
 		t.Fatalf("unlabeled clickable not caught: %v", h.Audit())
 	}
 }
@@ -158,6 +162,30 @@ func TestCatchesTabUnreachable(t *testing.T) {
 	}
 }
 
+// Bug class: a custom control with no Gio semantic class (a slider, a split
+// handle) is skipped by a reachability check that only knows Gio classes.
+// Its kit role says it must be reachable.
+func TestCatchesTabUnreachableByRole(t *testing.T) {
+	var press gesture.Click // a pointer handler and nothing for the keyboard
+	h := harness(t, func(gtx C) {
+		for {
+			if _, ok := press.Update(gtx.Source); !ok {
+				break
+			}
+		}
+		layout.UniformInset(8).Layout(gtx, func(gtx C) D {
+			defer clip.Rect{Max: image.Pt(120, 24)}.Push(gtx.Ops).Pop()
+			press.Add(gtx.Ops)
+			kit.TagLabel(gtx, "volume", "Volume")
+			kit.SetRole(gtx, "volume", kit.RoleSlider)
+			return box(gtx, 120, 24)
+		})
+	})
+	if got := h.TabUnreachable(); !slices.Contains(got, "volume") {
+		t.Fatalf("pointer-only slider not reported: %v", got)
+	}
+}
+
 // Bug class: an audit counting only semantic buttons stops before later
 // buttons when focusable non-button regions are in the Tab order.
 func TestTabAuditTraversesExtraFocusStops(t *testing.T) {
@@ -177,7 +205,6 @@ func TestTabAuditTraversesExtraFocusStops(t *testing.T) {
 		}
 		children := []layout.FlexChild{kit.Rigid(func(gtx C) D { return ui.Button{ID: "first", Text: "First"}.Layout(gtx, th, &first) })}
 		for i := range tags {
-			i := i
 			children = append(children, kit.Rigid(func(gtx C) D {
 				defer clip.Rect{Max: image.Pt(12, 32)}.Push(gtx.Ops).Pop()
 				event.Op(gtx.Ops, &tags[i])
@@ -197,7 +224,7 @@ func TestTabAuditTraversesExtraFocusStops(t *testing.T) {
 func TestCatchesMissingGlyph(t *testing.T) {
 	h := harness(t, func(gtx C) { th.Text(gtx, "↻ Sync", kit.SizeText, th.Fg, kit.Regular) })
 	h.Theme = th
-	if !slices.Contains(kinds(h.Audit()), "missing-glyph") {
+	if !slices.Contains(kinds(h.Audit()), ProblemMissingGlyph) {
 		t.Fatalf("missing glyph not caught: %v", h.Audit())
 	}
 }
@@ -205,28 +232,182 @@ func TestCatchesMissingGlyph(t *testing.T) {
 func TestCatchesOcclusionAndDuplicates(t *testing.T) {
 	var a, b, c kit.Clickable
 	h := harness(t, func(gtx C) {
-		a.Press(gtx, "under", func(gtx C, _ kit.State) D { return box(gtx, 80, 40) })
-		b.Press(gtx, "over", func(gtx C, _ kit.State) D { return box(gtx, 80, 40) }) // same spot, drawn later
+		th.Press(gtx, &a, "under", func(gtx C, _ kit.State) D { return box(gtx, 80, 40) })
+		th.Press(gtx, &b, "over", func(gtx C, _ kit.State) D { return box(gtx, 80, 40) }) // same spot, drawn later
 		layout.Inset{Top: 60}.Layout(gtx, func(gtx C) D {
-			return c.Press(gtx, "over", func(gtx C, _ kit.State) D { return box(gtx, 80, 40) })
+			return th.Press(gtx, &c, "over", func(gtx C, _ kit.State) D { return box(gtx, 80, 40) })
 		})
 	})
 	got := kinds(h.Audit())
-	if !slices.Contains(got, "occluded") || !slices.Contains(got, "duplicate-id") {
+	if !slices.Contains(got, ProblemOccluded) || !slices.Contains(got, ProblemDuplicateID) {
 		t.Fatalf("want occluded + duplicate-id, got %v", h.Audit())
+	}
+}
+
+// Bug class: a control announces its selection before it handles the click
+// that changes it. The pixels are right (they are drawn after the click), so
+// only a screen reader hears the old state, until the next input. Strict
+// mode must compare semantic state, not only ids, labels and pixels.
+func TestCatchesSemanticOnlyStale(t *testing.T) {
+	var c widget.Clickable // plain Gio: no Notify on click
+	on := false
+	h := harness(t, func(gtx C) {
+		kit.Col(gtx,
+			kit.Rigid(func(gtx C) D {
+				defer clip.Rect{Max: image.Pt(60, 30)}.Push(gtx.Ops).Pop()
+				kit.TagLabel(gtx, "opt", "Option; a|b") // delimiters must not confuse the diff
+				semantic.CheckBox.Add(gtx.Ops)
+				semantic.SelectedOp(on).Add(gtx.Ops) // BUG: announced before the click below
+				return box(gtx, 60, 30)
+			}),
+			kit.Rigid(func(gtx C) D {
+				if c.Clicked(gtx) {
+					on = !on
+				}
+				return c.Layout(gtx, func(gtx C) D { kit.Tag(gtx, "btn"); return box(gtx, 60, 30) })
+			}),
+		)
+	})
+	h.ClickID("btn")
+	var stale []Problem
+	for _, p := range h.Problems() {
+		if p.Kind == ProblemStaleFrame {
+			stale = append(stale, p)
+		}
+	}
+	if !on || len(stale) == 0 {
+		t.Fatalf("selection-only stale frame not caught (on=%v): %v", on, h.Problems())
+	}
+	if msg := stale[0].Msg; !strings.Contains(msg, `"opt"`) || !strings.Contains(msg, "selected false → true") {
+		t.Fatalf("diagnostic does not name the node and field: %s", msg)
 	}
 }
 
 func TestCatchesRedrawLoop(t *testing.T) {
 	h := harness(t, func(gtx C) { kit.Notify(gtx) })
-	if !slices.Contains(kinds(h.Problems()), "no-settle") {
+	if !slices.Contains(kinds(h.Problems()), ProblemNoSettle) {
 		t.Fatalf("redraw loop not caught: %v", h.Problems())
+	}
+}
+
+// fakeTB records what a harness reports, so a test can check that a
+// failure reaches the test at all.
+type fakeTB struct {
+	errors   []string
+	cleanups []func()
+}
+
+func (*fakeTB) Helper()                     {}
+func (*fakeTB) Name() string                { return "fake" }
+func (f *fakeTB) Error(args ...any)         { f.errors = append(f.errors, fmt.Sprint(args...)) }
+func (f *fakeTB) Errorf(s string, a ...any) { f.errors = append(f.errors, fmt.Sprintf(s, a...)) }
+func (*fakeTB) Fatal(args ...any)           { panic(fmt.Sprint(args...)) }
+func (*fakeTB) Fatalf(s string, a ...any)   { panic(fmt.Sprintf(s, a...)) }
+func (*fakeTB) Skip(args ...any)            { panic(fmt.Sprint(args...)) }
+func (f *fakeTB) Cleanup(c func())          { f.cleanups = append(f.cleanups, c) }
+
+func (f *fakeTB) runCleanups() {
+	for _, c := range slices.Backward(f.cleanups) {
+		c()
+	}
+}
+
+// Bug: NewT settled the first frames before attaching the test, so a UI
+// that never settles recorded no-settle where nobody looked, and the test
+// passed. Construction failures must fail the test, and the harness must
+// still be released.
+func TestNewTReportsConstructionProblems(t *testing.T) {
+	if _, err := New(10, 10, 1, func(C) {}); err != nil {
+		NoGPU(t, err)
+	}
+	f := new(fakeTB)
+	h := NewT(f, 50, 50, func(gtx C) { kit.Notify(gtx) })
+	if len(f.errors) == 0 || !strings.Contains(f.errors[0], string(ProblemNoSettle)) {
+		t.Fatalf("construction problem not reported: errors %q, recorded %v", f.errors, h.Problems())
+	}
+	if len(f.cleanups) == 0 {
+		t.Fatal("no cleanup registered to release the harness")
+	}
+	f.runCleanups()
+}
+
+// attributionCases fail on purpose, each in a child process
+// (KITTEST_ATTRIBUTION names the case), so TestHelperAttribution can read
+// which source line the failure was reported at.
+var attributionCases = map[string]func(t *testing.T){
+	"construction": func(t *testing.T) { NewT(t, 50, 50, func(gtx C) { kit.Notify(gtx) }) },
+	"expect-text":  func(t *testing.T) { NewT(t, 50, 50, func(C) {}).ExpectText("missing") },
+	"expect-no-id": func(t *testing.T) {
+		NewT(t, 50, 50, func(gtx C) {
+			defer clip.Rect{Max: image.Pt(20, 20)}.Push(gtx.Ops).Pop()
+			kit.Tag(gtx, "here")
+		}).ExpectNoID("here")
+	},
+	"expect-clean": func(t *testing.T) {
+		var c widget.Clickable
+		NewT(t, 100, 50, func(gtx C) { c.Layout(gtx, func(gtx C) D { return box(gtx, 60, 30) }) }).ExpectClean()
+	},
+	"click-missing": func(t *testing.T) { NewT(t, 50, 50, func(C) {}).ClickID("missing") },
+	"stale-after-click": func(t *testing.T) {
+		var c widget.Clickable
+		n := 0
+		h := NewT(t, 100, 80, func(gtx C) {
+			kit.Col(gtx,
+				kit.Rigid(func(gtx C) D { return th.Text(gtx, string(rune('0'+n)), kit.SizeText, th.Fg, kit.Regular) }),
+				kit.Rigid(func(gtx C) D {
+					if c.Clicked(gtx) {
+						n++
+					}
+					return c.Layout(gtx, func(gtx C) D { kit.Tag(gtx, "btn"); return box(gtx, 60, 30) })
+				}),
+			)
+		})
+		h.ClickID("btn")
+	},
+}
+
+func TestHelperAttributionChild(t *testing.T) {
+	name := os.Getenv("KITTEST_ATTRIBUTION")
+	if name == "" {
+		t.Skip("run by TestHelperAttribution")
+	}
+	attributionCases[name](t)
+}
+
+// Bug: assertion helpers marked only an inner method as a helper, so a
+// failure pointed into kittest instead of the test's own line.
+func TestHelperAttribution(t *testing.T) {
+	if os.Getenv("KITTEST_ATTRIBUTION") != "" {
+		t.Skip()
+	}
+	if _, err := New(10, 10, 1, func(C) {}); err != nil {
+		NoGPU(t, err)
+	}
+	location := regexp.MustCompile(`(?m)^\s+(\w+\.go):\d+: `)
+	for name := range attributionCases {
+		t.Run(name, func(t *testing.T) {
+			cmd := exec.Command(os.Args[0], "-test.run=^TestHelperAttributionChild$", "-test.v")
+			cmd.Env = append(os.Environ(), "KITTEST_ATTRIBUTION="+name)
+			out, err := cmd.CombinedOutput()
+			if err == nil {
+				t.Fatalf("the case did not fail:\n%s", out)
+			}
+			found := location.FindAllStringSubmatch(string(out), -1)
+			if len(found) == 0 {
+				t.Fatalf("no failure location in:\n%s", out)
+			}
+			for _, m := range found {
+				if m[1] != "kittest_test.go" {
+					t.Fatalf("failure reported at %s, not the test's line:\n%s", m[1], out)
+				}
+			}
+		})
 	}
 }
 
 // The correct patterns pass every check.
 func TestCleanWidgetsPass(t *testing.T) {
-	var hv kit.Hover
+	var hv kit.HoverArea
 	var c kit.Clickable
 	n := 0
 	h := NewT(t, 300, 200, func(gtx C) {
@@ -280,7 +461,7 @@ func TestCatchesStackOrderLateRead(t *testing.T) {
 		)
 	})
 	h.ClickID("area")
-	if !slices.Contains(kinds(h.Problems()), "stale-frame") {
+	if !slices.Contains(kinds(h.Problems()), ProblemStaleFrame) {
 		t.Fatalf("stack-order late read not caught: %v", h.Problems())
 	}
 }
@@ -350,7 +531,7 @@ func TestEditorLabeling(t *testing.T) {
 	})
 	var unlabeled int
 	for _, p := range h.Audit() {
-		if p.Kind == "unlabeled-clickable" {
+		if p.Kind == ProblemUnlabeledClickable {
 			unlabeled++
 		}
 	}
@@ -420,7 +601,7 @@ func TestCatchesLowContrastText(t *testing.T) {
 	}
 	h.MinContrast = 4.5 // the default
 	ps := h.Audit()
-	if len(ps) != 1 || ps[0].Kind != "low-contrast" || !strings.Contains(ps[0].Msg, `"faint"`) {
+	if len(ps) != 1 || ps[0].Kind != ProblemLowContrast || !strings.Contains(ps[0].Msg, `"faint"`) {
 		t.Fatalf("want one low-contrast finding for \"faint\", got %v", ps)
 	}
 	disabled = true
@@ -464,14 +645,14 @@ func TestCatchesLeakyFocusTrap(t *testing.T) {
 			})
 		})
 	})
-	if out := h.FocusEscape("dlg", 3); out != "page" {
-		t.Fatalf("leaky dialog: FocusEscape = %q, want it to reach \"page\"", out)
+	if leak, ok := h.FocusEscape("dlg", 3); !ok || leak.To != "page" {
+		t.Fatalf("leaky dialog: FocusEscape = %v, %v, want it to reach \"page\"", leak, ok)
 	}
 	leaky = false
 	dlg.Show()
 	h.Settle()
-	if out := h.FocusEscape("dlg", 3); out != "" {
-		t.Fatalf("th.Modal: focus escaped to %q", out)
+	if leak, ok := h.FocusEscape("dlg", 3); ok {
+		t.Fatalf("th.Modal: %v", leak)
 	}
 	if h.FocusedID() == "" {
 		t.Fatal("FocusedID: nothing focused inside the dialog after tabbing")
@@ -524,8 +705,8 @@ func TestFocusGroupSurvivesVirtualizedRows(t *testing.T) {
 		choices[i] = ui.Choice{ID: fmt.Sprint(i), Label: fmt.Sprint("Item ", i)}
 	}
 	h := harness(t, func(gtx C) {
-		if id, ok := s.Update(gtx); ok {
-			sel = id
+		if e, ok := s.Update(gtx); ok {
+			sel = e.Selected
 		}
 		ui.SelectableList{ID: "list", Items: choices, Selected: sel}.Layout(gtx, th, &s)
 	})
@@ -554,7 +735,7 @@ func TestScopeSeparatesInstances(t *testing.T) {
 		if b.Clicked(gtx) {
 			bClicks++
 		}
-		card := func(c *kit.Clickable, name string) kit.W {
+		card := func(c *kit.Clickable, name string) layout.Widget {
 			return func(gtx C) D {
 				w := func(gtx C) D { return ui.Button{ID: "save", Text: "Save"}.Layout(gtx, th, c) }
 				if scoped {
@@ -565,12 +746,12 @@ func TestScopeSeparatesInstances(t *testing.T) {
 		}
 		kit.Row(gtx, kit.Rigid(card(&a, "invoice:1")), kit.Rigid(card(&b, "invoice/2")))
 	})
-	if !slices.Contains(kinds(h.Audit()), "duplicate-id") {
+	if !slices.Contains(kinds(h.Audit()), ProblemDuplicateID) {
 		t.Fatal("unscoped twins not reported as duplicates")
 	}
 	scoped = true
 	h.Settle()
-	if got := kinds(h.Audit()); slices.Contains(got, "duplicate-id") {
+	if got := kinds(h.Audit()); slices.Contains(got, ProblemDuplicateID) {
 		t.Fatalf("scoped twins still collide: %v", got)
 	}
 	if _, ok := h.Find("invoice:1/save"); !ok {
@@ -660,7 +841,7 @@ func TestTextFieldWholeTarget(t *testing.T) {
 		kit.Col(gtx,
 			kit.Rigid(kit.Fixed(200, func(gtx C) D { return ui.TextField{ID: "name", Placeholder: "Name"}.Layout(gtx, small, &e) })),
 			kit.Rigid(func(gtx C) D {
-				return tiny.Press(gtx, "tiny", func(gtx C, st kit.State) D {
+				return th.Press(gtx, &tiny, "tiny", func(gtx C, st kit.State) D {
 					semantic.Button.Add(gtx.Ops)
 					semantic.LabelOp("Tiny").Add(gtx.Ops)
 					return D{Size: image.Pt(40, 10)}
@@ -675,7 +856,7 @@ func TestTextFieldWholeTarget(t *testing.T) {
 	}
 	var tinies []string
 	for _, p := range h.Audit() {
-		if p.Kind == "tiny-target" {
+		if p.Kind == ProblemTinyTarget {
 			tinies = append(tinies, p.ID)
 		}
 	}
@@ -690,10 +871,10 @@ func TestTextFieldWholeTarget(t *testing.T) {
 func TestFocusedIDPrefersInnermost(t *testing.T) {
 	th := kit.Dark()
 	var c kit.Clickable
-	h := NewT(t, 300, 120, func(gtx kit.C) {
+	h := NewT(t, 300, 120, func(gtx C) {
 		c.Clicked(gtx)
 		gtx.Constraints.Min = image.Point{}
-		kit.Group(gtx, "group", "Actions", func(gtx kit.C) kit.D {
+		kit.Group(gtx, "group", "Actions", func(gtx C) D {
 			return ui.Button{ID: "group/save", Text: "Save"}.Layout(gtx, th, &c)
 		})
 	})
@@ -746,6 +927,32 @@ func TestPointerRefusesClippedWidget(t *testing.T) {
 	}
 }
 
+// Bug class: a key handler that captures its starting position once per
+// frame applies the same move twice when two keys arrive in one frame.
+// Key settles between keys and so never shows it; Keys delivers a batch.
+func TestKeysBatchInOneFrame(t *testing.T) {
+	var batches [][]key.Name
+	h := harness(t, func(gtx C) {
+		var batch []key.Name
+		for {
+			e, ok := gtx.Event(key.Filter{Name: key.NameDownArrow}, key.Filter{Name: key.NameUpArrow})
+			if !ok {
+				break
+			}
+			if ke, ok := e.(key.Event); ok && ke.State == key.Press {
+				batch = append(batch, ke.Name)
+			}
+		}
+		if batch != nil {
+			batches = append(batches, batch)
+		}
+	})
+	h.Keys(key.NameDownArrow, key.NameUpArrow, key.NameDownArrow)
+	if len(batches) != 1 || len(batches[0]) != 3 {
+		t.Fatalf("Keys delivered %v, want one frame of three presses", batches)
+	}
+}
+
 // The pointer helpers deliver what Gio's gestures see: a double click is
 // one click then a NumClicks-2 click, a modifier click carries its keys, a
 // right click its button.
@@ -769,6 +976,14 @@ func TestPointerVariants(t *testing.T) {
 	h.DoubleClickID("target")
 	if len(clicks) != 2 || clicks[1].NumClicks != 2 {
 		t.Fatalf("double click: %+v", clicks)
+	}
+	// Two separate clicks are never a double click, however fast the
+	// machine runs them: event times come from the harness's clock.
+	clicks = nil
+	h.ClickID("target")
+	h.ClickID("target")
+	if len(clicks) != 2 || clicks[0].NumClicks != 1 || clicks[1].NumClicks != 1 {
+		t.Fatalf("two clicks: %+v", clicks)
 	}
 	clicks = nil
 	h.ClickIDMods("target", key.ModShift)
@@ -842,5 +1057,134 @@ func TestRunTasks(t *testing.T) {
 	}
 	if _, ok := h.FindText("done"); !ok {
 		t.Fatal("the result was not drawn")
+	}
+}
+
+// Bug: RunTasks waited for the running tasks once, then settled. A done
+// callback that started follow-up work (load, then load details) left that
+// work running on return, and the test saw a half-loaded screen. RunTasks
+// drains chains of tasks; a cancelled task's done never runs.
+func TestRunTasksChainsAndCancels(t *testing.T) {
+	status := "idle"
+	h := harness(t, func(gtx C) { th.Text(gtx, status, th.Type.Body, th.Fg, kit.Regular) })
+	// Started from the test goroutine, which owns the UI here.
+	kit.Spawn(h.App(), func(context.Context) (string, error) { return "list", nil },
+		func(v string, _ error) {
+			status = v
+			kit.Spawn(h.App(), func(context.Context) (string, error) {
+				time.Sleep(20 * time.Millisecond)
+				return "details", nil
+			}, func(v string, _ error) { status = v })
+		})
+	cancelledDone := false
+	cancelled := kit.Spawn(h.App(), func(ctx context.Context) (string, error) {
+		<-ctx.Done()
+		return "", ctx.Err()
+	}, func(string, error) { cancelledDone = true })
+	cancelled.Cancel()
+	h.RunTasks()
+	if status != "details" {
+		t.Fatalf("after RunTasks: %q, want the follow-up task's result", status)
+	}
+	if cancelledDone {
+		t.Fatal("a cancelled task's done ran")
+	}
+	if n := h.App().Pending(); n != 0 {
+		t.Fatalf("%d task(s) still running after RunTasks", n)
+	}
+	if _, ok := h.FindText("details"); !ok {
+		t.Fatal("the follow-up result was not drawn")
+	}
+}
+
+// Bug: a posted callback that posted a follow-up left it queued after the
+// settle, since nothing requested a redraw. A window draws a frame for every
+// Post; the harness drew none, so RunTasks returned early and the strict
+// check's extra frame ran the follow-up and reported a stale frame.
+func TestPostedCallbacksRunInTheSettle(t *testing.T) {
+	status := "idle"
+	h := harness(t, func(gtx C) { th.Text(gtx, status, th.Type.Body, th.Fg, kit.Regular) })
+	h.App().Post(func() {
+		status = "first"
+		h.App().Post(func() { status = "follow-up" })
+	})
+	h.RunTasks()
+	if status != "follow-up" {
+		t.Fatalf("after RunTasks: %q, want the follow-up callback's result", status)
+	}
+	if n := h.App().Queued(); n != 0 {
+		t.Fatalf("%d callback(s) still queued after RunTasks", n)
+	}
+	if _, ok := h.FindText("follow-up"); !ok {
+		t.Fatal("the follow-up result was not drawn")
+	}
+	if p := h.Problems(); len(p) != 0 {
+		t.Fatalf("problems: %v", p)
+	}
+}
+
+// The tree walkers assume Router.AppendSemantics returns each node once, root
+// first, with every other node reachable through Children. Stock and forked
+// Gio must both keep that shape, or every query silently misses nodes.
+func TestSemanticTreeShape(t *testing.T) {
+	var a, b kit.Clickable
+	h := harness(t, func(gtx C) {
+		kit.Col(gtx,
+			kit.Rigid(func(gtx C) D { return ui.Button{ID: "a", Text: "A"}.Layout(gtx, th, &a) }),
+			kit.Rigid(func(gtx C) D {
+				return th.Press(gtx, &b, "b", func(gtx C, _ kit.State) D {
+					defer clip.Rect{Max: image.Pt(20, 10)}.Push(gtx.Ops).Pop()
+					kit.TagLabel(gtx, "b/inner", "Inner")
+					return box(gtx, 40, 20)
+				})
+			}),
+		)
+	})
+	all := h.router.AppendSemantics(nil)
+	walked := h.nodes()
+	if len(all) == 0 || len(walked) != len(all) {
+		t.Fatalf("walk from the root reached %d nodes, AppendSemantics returned %d", len(walked), len(all))
+	}
+	ids := map[input.SemanticID]bool{}
+	for _, n := range walked {
+		if ids[n.ID] {
+			t.Fatalf("node %d visited twice", n.ID)
+		}
+		ids[n.ID] = true
+	}
+	for _, n := range all {
+		if !ids[n.ID] {
+			t.Fatalf("node %d (%q) unreachable from the root", n.ID, n.Desc.Description)
+		}
+	}
+	tree := h.semantics()
+	inner, _ := h.node(func(d input.SemanticDesc) bool { return d.Description == "b/inner" })
+	outer, _ := h.node(func(d input.SemanticDesc) bool { return d.Description == "b" })
+	if !tree.within(inner.ID, outer.ID) || tree.within(outer.ID, inner.ID) {
+		t.Fatalf("ancestry of b/inner under b is wrong: %+v", inner)
+	}
+}
+
+// Bug: RunTasks checked its deadline only while spawned work was running, so
+// a posted callback that re-posted itself kept it settling forever.
+func TestRunTasksStopsSelfRepostingCallback(t *testing.T) {
+	h := harness(t, func(gtx C) {})
+	h.Strict = false
+	h.tasksTimeout = 50 * time.Millisecond
+	var repost func()
+	repost = func() { h.App().Post(repost) }
+	h.App().Post(repost)
+	done := make(chan any, 1)
+	go func() {
+		defer func() { done <- recover() }()
+		h.RunTasks()
+	}()
+	select {
+	case r := <-done:
+		if r == nil || !strings.Contains(fmt.Sprint(r), "queued") {
+			t.Fatalf("RunTasks returned without a fatal failure: %v", r)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("RunTasks did not stop at its deadline")
 	}
 }

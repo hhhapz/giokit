@@ -111,17 +111,17 @@ func TestVideoDemo(t *testing.T) {
 	if c.R < 200 || c.G < 200 || c.B < 200 {
 		t.Fatalf("first bar = %v, want near white", c)
 	}
-	before := g.frames
+	before := g.media.frames
 	h.Wait(200 * time.Millisecond)
-	if g.frames == before {
+	if g.media.frames == before {
 		t.Fatal("pattern did not advance")
 	}
 	h.ClickID("video-play")
-	if g.playing {
+	if g.media.playing {
 		t.Fatal("play switch did not pause")
 	}
 	h.ClickID("video-fit/Fill")
-	if got := g.video.Content(); got.Dx() != r.Dx() || got.Dy() != r.Dy() {
+	if got := g.media.video.Content(); got.Dx() != r.Dx() || got.Dy() != r.Dy() {
 		t.Fatalf("Fill content %v, want the whole %v", got, r.Size())
 	}
 	h.ExpectClean()

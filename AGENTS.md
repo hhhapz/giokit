@@ -9,13 +9,24 @@ Put detail in `docs/`, and add a pitfall here only as a one-line rule.
 
 ## Map
 
-- **`kit/`:** primitives only: theme tokens, layout, drawing, text, focus and
-  key dispatch, scrolling, layer hosts (Popover, Modal, Layer), app runner.
+- **`kit/`:** primitives only, one concern per file: tokens (`theme`, `palette`,
+  `color`, `tint`, `metrics`, `spacing`, `strings`, `tokens`), layout and drawing
+  (`flex`, `flow`, `draw`, `icon`, `widgets` text, `styledtext`, `table`, `anim`),
+  input (`clickable`, `hover`, `focus`, `dispatch`, `keymap`, `actions`, `inputs`,
+  `menu` rows), ids (`id`, `semantic`), scrolling (`scroll`, `anchoredlist`,
+  `pool`), layers (`overlay`, `root`), runner (`app`, `pacing`, `trace`).
 - **`kit/ui/`:** every component, as a props struct built only from kit's
-  exported API. **`kit/x/`:** specialised widgets (LogView, Lyrics).
-- **`kittest/`:** headless harness (input, queries, strict stale check, audit,
-  sheets, goldens). Its `kittest_test.go` recreates each historical bug and proves
-  the harness catches it. Keep that list growing.
+  exported API, one family per file (`button`, `toggles`, `fields`, `menu`,
+  `combobox`, `datefield`, `navigation`, `overlays`, `display`; collections:
+  `selection` shared by `list`, `tree`, `datatable`, plus `reorder`). `ui.go`
+  holds the value/event contract. **`kit/x/`:** specialised widgets (LogView,
+  Lyrics); `kit/x/video` draws `paint.Stream`. **`kit/fonts/`:** bundled font
+  sets. **`desktop/`:** file choosers and links (XDG portals), with a `Fake`.
+- **`kittest/`:** headless harness: `kittest.go` (lifecycle, Settle, RunTasks),
+  `input`, `query`, `assert`, `audit`, `stale` (strict check), `a11y`,
+  `contrast`, `golden`, `sheet`; `conform/` is the control contract suite. Its
+  `kittest_test.go` recreates each historical bug and proves the harness
+  catches it. Keep that list growing.
 - **`examples/hello/`:** the README's minimal app and its test (keep them in sync).
 - **`examples/gallery/`:** every component, plus its tests. `nav.go` groups
   demos into pages and pages into sidebar categories; "All components" shows
@@ -28,8 +39,9 @@ Put detail in `docs/`, and add a pitfall here only as a one-line rule.
 - **`internal/bench`:** rendering baselines (editor/terminal text, video).
 - **`media/`:** separate module (cgo, FFmpeg): video decoder for `paint.Stream`/
   `video.Video`, VA-API with zero-copy DMA-BUF import.
-- **`docs/`:** `pitfalls.md` (full postmortems), `testing.md`, `components.md`, `performance.md`,
-  `philosophy.md` (GPUI mapping), `gio-patches.md`.
+- **`docs/`:** `getting-started.md`, `components.md`, `testing.md`, `pitfalls.md`
+  (full postmortems), `performance.md`, `philosophy.md` (GPUI mapping),
+  `gio-patches.md`.
 
 ## Commands
 
@@ -63,10 +75,11 @@ Contributing:
 - **Every component change ships with a gallery test and a conformance row**
   (`kit/ui/conform_test.go`, suite in `kittest/conform`): role, label, hover,
   click, Tab, Enter/Space, ring, disabled, every preset, scale and density;
-  layer-opening controls use `conform.Composite`.
+  layer-opening controls use `conform.Composite`, focus-group collections
+  `conform.Group`.
 - **`internal/lint` ratchets:** geometry literals and English strings per file
-  may only go down (`LINT_BASELINE=1` prints counts); colours and
-  `clip.Stroke` are forbidden outside token files.
+  may only go down (`LINT_BASELINE=1` prints counts); colour literals outside
+  token files and `clip.Stroke` anywhere are forbidden.
 - **Prove new checks work.** When a bug escapes, first add a broken-widget case to
   `kittest_test.go` that fails without the fix. Then generalize the detector into
   `Audit`/strict mode if it can be detected structurally. Then add the one-line
@@ -77,3 +90,5 @@ Contributing:
   output scaling. Say so and ask the user to check them.
 - **API style:** small and explicit. No reflection, no global state beyond the
   theme you pass around. Prefer adding a token over hard-coding a color.
+- **Doc comments state contracts:** every export says what it draws, reads and
+  consumes; states give zero value, copying and goroutine ownership.

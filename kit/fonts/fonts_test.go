@@ -33,6 +33,19 @@ func TestSetsResolve(t *testing.T) {
 	}
 }
 
+// ByName must find every set All lists, under the same name and faces.
+func TestByName(t *testing.T) {
+	for _, set := range All() {
+		got, ok := ByName(set.Name)
+		if !ok || got.Name != set.Name || got.UI != set.UI || got.Mono != set.Mono || len(got.Faces) != len(set.Faces) {
+			t.Errorf("ByName(%q) = set %q, %v", set.Name, got.Name, ok)
+		}
+	}
+	if _, ok := ByName("Comic Sans"); ok {
+		t.Error("ByName found an unknown set")
+	}
+}
+
 func keys(m map[font.Typeface]map[font.Weight]bool) []font.Typeface {
 	var out []font.Typeface
 	for k := range m {

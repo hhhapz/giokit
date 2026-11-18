@@ -1,7 +1,18 @@
 // Package lint turns the structural rules in AGENTS.md into tests over the
-// source of kit/. Rules that hold everywhere are strict (zero allowed);
-// rules the code does not meet yet are ratchets: a per-file count that may
-// only go down. When a count drops, lower its baseline in the same change.
+// source of kit, kit/ui and kit/x. Rules that hold everywhere are strict
+// (zero allowed); rules the code does not meet yet are ratchets: a per-file
+// count that may only go down. When a count drops, lower its baseline in the
+// same change.
+//
+// The rules are syntactic: they read the parsed source without type
+// information, so each one documents the expression forms it sees and
+// fixtures_test.go pins down what it catches and what it misses. A ratchet
+// shows the count is not growing; it does not prove the code is free of the
+// pattern.
+//
+// Go runs tests in the package directory, so sources are found relative to
+// internal/lint ("../../kit"). Findings and baselines name files relative
+// to kit: "menu.go", "ui/combobox.go".
 package lint
 
 import (
@@ -15,33 +26,40 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"unicode"
 )
 
+// kitRoot is the kit source tree, relative to this package's directory.
+const kitRoot = "../../kit/"
+
+// kitDirs are the directories under kitRoot that the rules read.
+var kitDirs = []string{"", "ui/", "x/", "x/video/"}
+
 // tokenFiles may define colours: they are the palette and token tables.
-var tokenFiles = []string{"color.go", "theme.go", "tokens.go"}
+var tokenFiles = []string{"color.go", "palette.go", "theme.go", "tokens.go"}
 
 // dpBaseline is the number of geometry literals per file today. They move
 // into Theme metrics.
 var dpBaseline = map[string]int{
-	"draw.go": 2, "feedback.go": 1, "menu.go": 1, "overlay.go": 6, "scroll.go": 8,
-	"ui/collections.go": 2, "ui/datefield.go": 3, "ui/display.go": 6, "ui/navigation.go": 1, "ui/overlays.go": 3,
-	"widgets.go": 4, "x/logview.go": 4,
+	"menu.go":       2,
+	"ui/reorder.go": 2,
 }
 
-// englishBaseline is the number of English string literals shown or
-// announced per file today. They move into Theme strings.
+// englishBaseline is the number of English strings shown or announced per
+// file today. They move into Theme strings.
 var englishBaseline = map[string]int{}
 
+// finding is one rule violation.
 type finding struct {
-	file string
-	pos  token.Position
-	msg  string
+	pos token.Position
+	msg string
 }
 
 // rule inspects one file and reports findings.
 type rule func(fset *token.FileSet, f *ast.File) []finding
 
-// colorLiterals: components get colour only from palette tokens.
+// colorLiterals reports colour literals: components get colour only from
+// palette tokens.
 func colorLiterals(fset *token.FileSet, f *ast.File) []finding {
 	var out []finding
 	ast.Inspect(f, func(n ast.Node) bool {
@@ -53,7 +71,8 @@ func colorLiterals(fset *token.FileSet, f *ast.File) []finding {
 	return out
 }
 
-// strokes: Gio re-flattens strokes on the CPU every frame (SKILL rule 14).
+// strokes reports uses of clip.Stroke: Gio re-flattens strokes on the CPU
+// every frame (SKILL.md, "Outlines are fills").
 func strokes(fset *token.FileSet, f *ast.File) []finding {
 	var out []finding
 	ast.Inspect(f, func(n ast.Node) bool {
@@ -65,10 +84,22 @@ func strokes(fset *token.FileSet, f *ast.File) []finding {
 	return out
 }
 
-// dpLiterals: fixed sizes, radii and insets written as numbers instead of
-// theme tokens. Counted: numeric arguments of Dp/Box/Fixed/Gap/
-// UniformInset/Space, and numeric Radius/Top/Bottom/Left/Right/Gap/Pad
-// fields. Spacing uses the scale: t.Space(kit.Space2), kit.Flex{Gap: kit.Space2}.
+// geometryCalls take sizes, radii or insets as arguments.
+var geometryCalls = []string{"Dp", "Box", "Fixed", "Gap", "Pad", "UniformInset", "Space", "ControlPad", "control", "Spinner"}
+
+// geometryFields are struct fields that hold sizes, radii or insets.
+var geometryFields = []string{"Radius", "Top", "Bottom", "Left", "Right", "Gap", "Pad", "PadX", "PadY"}
+
+// dpLiterals reports fixed sizes, radii and insets written as numbers
+// instead of theme tokens. It counts arguments of geometryCalls and of icon
+// helpers (kit.IconChevronDown(gtx, 12, c)), and values of geometryFields,
+// when the value is a nonzero number or arithmetic that adds one to the
+// Space scale or to other numbers (gtx.Dp(14+8), kit.Space1-1, -4). Spacing
+// uses the scale: th.Space(kit.Space2), kit.Flex{Gap: kit.Space2}.
+//
+// It does not see numbers that reach a size through a variable or a
+// constant declared elsewhere, or arithmetic with a measured value
+// (unit.Dp(1-p) scales by an animation progress).
 func dpLiterals(fset *token.FileSet, f *ast.File) []finding {
 	var out []finding
 	add := func(n ast.Node, what string) {
@@ -78,20 +109,17 @@ func dpLiterals(fset *token.FileSet, f *ast.File) []finding {
 		switch n := n.(type) {
 		case *ast.CallExpr:
 			name := callName(n.Fun)
-			switch name {
-			case "Dp", "Box", "Fixed", "Gap", "UniformInset", "Space":
-				for _, a := range n.Args {
-					if isNumber(a) && !isZero(a) {
-						add(a, name)
-					}
+			if !slices.Contains(geometryCalls, name) && !isIconHelper(name) {
+				return true
+			}
+			for _, a := range n.Args {
+				if literalGeometry(a) {
+					add(a, name)
 				}
 			}
 		case *ast.KeyValueExpr:
-			if k, ok := n.Key.(*ast.Ident); ok && isNumber(n.Value) && !isZero(n.Value) {
-				switch k.Name {
-				case "Radius", "Top", "Bottom", "Left", "Right", "Gap", "Pad", "PadX", "PadY":
-					add(n.Value, k.Name)
-				}
+			if k, ok := n.Key.(*ast.Ident); ok && slices.Contains(geometryFields, k.Name) && literalGeometry(n.Value) {
+				add(n.Value, k.Name)
 			}
 		}
 		return true
@@ -99,12 +127,63 @@ func dpLiterals(fset *token.FileSet, f *ast.File) []finding {
 	return out
 }
 
-// english: user-visible text written into the toolkit. Counted: string
-// literals that read as words (a space, or a capitalised word), wherever
-// they are, except ids and context names (Part, Tag, KeyContext, Scope),
-// developer messages (errors, panics) and imports.
+// isIconHelper reports whether name is one of kit's IconX(gtx, size, colour)
+// helpers.
+func isIconHelper(name string) bool {
+	rest, ok := strings.CutPrefix(name, "Icon")
+	return ok && rest != "" && unicode.IsUpper(rune(rest[0]))
+}
+
+// literalGeometry reports whether e writes a size as a number: a nonzero
+// literal, or arithmetic that combines one with numbers or the Space scale.
+func literalGeometry(e ast.Expr) bool {
+	switch e := e.(type) {
+	case *ast.BasicLit:
+		return isNumber(e) && !isZero(e)
+	case *ast.ParenExpr:
+		return literalGeometry(e.X)
+	case *ast.UnaryExpr:
+		return (e.Op == token.SUB || e.Op == token.ADD) && literalGeometry(e.X)
+	case *ast.BinaryExpr:
+		return literalGeometry(e.X) && constOperand(e.Y) || literalGeometry(e.Y) && constOperand(e.X)
+	}
+	return false
+}
+
+// constOperand reports whether e is a number, a Space scale step, or
+// arithmetic on them.
+func constOperand(e ast.Expr) bool {
+	switch e := e.(type) {
+	case *ast.BasicLit:
+		return isNumber(e)
+	case *ast.ParenExpr:
+		return constOperand(e.X)
+	case *ast.UnaryExpr:
+		return constOperand(e.X)
+	case *ast.BinaryExpr:
+		return constOperand(e.X) && constOperand(e.Y)
+	}
+	return strings.HasPrefix(callName(e), "Space")
+}
+
+// english reports user-visible text written into the toolkit. Counted:
+//   - string literals that read as words (a space between letters, or a
+//     capitalised word);
+//   - literals holding typographic punctuation shown to users, such as the
+//     en dash of a range ("1–10") or an ellipsis;
+//   - English computed at run time: the String method of time.Month and
+//     time.Weekday (m.Month().String(), time.Weekday(i).String()).
+//
+// Exempt: ids and context names (Part, Tag, KeyContext, Scope, Path),
+// developer messages (errors, panics, and any literal that starts with a
+// package prefix such as "kit: "), and imports. It does not see English
+// that arrives through a variable, or other formatters (time.Time.Format
+// layouts are literals, and caught as words).
 func english(fset *token.FileSet, f *ast.File) []finding {
 	var out []finding
+	add := func(n ast.Node) {
+		out = append(out, finding{pos: fset.Position(n.Pos()), msg: "English in the toolkit: take it from the caller or Theme strings"})
+	}
 	skip := map[ast.Node]bool{}
 	ast.Inspect(f, func(n ast.Node) bool {
 		switch n := n.(type) {
@@ -116,10 +195,14 @@ func english(fset *token.FileSet, f *ast.File) []finding {
 				for _, a := range n.Args {
 					skip[a] = true
 				}
+			case "String":
+				if calendarName(n) {
+					add(n)
+				}
 			}
 		case *ast.BasicLit:
-			if !skip[n] && n.Kind == token.STRING && readsAsWords(n.Value) {
-				out = append(out, finding{pos: fset.Position(n.Pos()), msg: "English in the toolkit: take it from the caller or Theme strings"})
+			if !skip[n] && n.Kind == token.STRING && userText(n.Value) {
+				add(n)
 			}
 		}
 		return true
@@ -127,12 +210,60 @@ func english(fset *token.FileSet, f *ast.File) []finding {
 	return out
 }
 
-// readsAsWords: a space between letters, or a capitalised word.
-func readsAsWords(lit string) bool {
-	s := strings.Trim(lit, "`\"")
-	if strings.HasPrefix(s, "kit: ") { // an error message, for developers
+// calendarName reports whether call is x.String() on a time.Month or
+// time.Weekday: the receiver is a Month() or Weekday() call, or a
+// time.Month(...) or time.Weekday(...) conversion.
+func calendarName(call *ast.CallExpr) bool {
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok || len(call.Args) != 0 {
 		return false
 	}
+	recv, ok := sel.X.(*ast.CallExpr)
+	if !ok {
+		return false
+	}
+	switch fn := recv.Fun.(type) {
+	case *ast.SelectorExpr:
+		if isSel(fn, "time", "Month") || isSel(fn, "time", "Weekday") {
+			return true
+		}
+		return len(recv.Args) == 0 && (fn.Sel.Name == "Month" || fn.Sel.Name == "Weekday")
+	}
+	return false
+}
+
+// typographic is punctuation that only appears in text for people.
+const typographic = "–—…‹›«»“”‘’·•"
+
+// devPrefix matches a developer message's package prefix: "kit: ",
+// "video: ".
+func devPrefix(s string) bool {
+	pkg, _, ok := strings.Cut(s, ": ")
+	if !ok || pkg == "" {
+		return false
+	}
+	for _, r := range pkg {
+		if !(r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '/') {
+			return false
+		}
+	}
+	return true
+}
+
+// userText reports whether the source literal lit is text for people: it
+// reads as words or holds typographic punctuation, and is not a developer
+// message.
+func userText(lit string) bool {
+	s := strings.Trim(lit, "`\"")
+	if devPrefix(s) {
+		return false
+	}
+	return readsAsWords(s) || strings.ContainsAny(s, typographic)
+}
+
+// readsAsWords reports whether s reads as words: a space between letters,
+// or a capitalised word.
+func readsAsWords(s string) bool {
 	letters := 0
 	for i, r := range s {
 		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' {
@@ -154,6 +285,8 @@ func isSel(e ast.Expr, pkg, name string) bool {
 	return ok && id.Name == pkg && s.Sel.Name == name
 }
 
+// callName is the name an identifier or selector refers to: "Dp" for
+// gtx.Dp and unit.Dp.
 func callName(e ast.Expr) string {
 	switch e := e.(type) {
 	case *ast.Ident:
@@ -174,14 +307,14 @@ func isZero(e ast.Expr) bool {
 	return b != nil && (b.Value == "0" || b.Value == "0.0")
 }
 
-// parseKit parses kit/*.go, kit/ui/*.go and kit/x/*.go, tests excluded. Keys are paths
-// relative to kit: "menu.go", "ui/combobox.go".
+// parseKit parses the non-test sources in kitDirs, keyed by their path
+// relative to kitRoot.
 func parseKit(t *testing.T) (*token.FileSet, map[string]*ast.File) {
 	t.Helper()
 	fset := token.NewFileSet()
 	files := map[string]*ast.File{}
-	for _, dir := range []string{"", "ui/", "x/", "x/video/"} {
-		paths, err := filepath.Glob("../../kit/" + dir + "*.go")
+	for _, dir := range kitDirs {
+		paths, err := filepath.Glob(kitRoot + dir + "*.go")
 		if err != nil || len(paths) == 0 {
 			t.Fatalf("no kit/%s sources: %v", dir, err)
 		}
@@ -200,6 +333,7 @@ func parseKit(t *testing.T) (*token.FileSet, map[string]*ast.File) {
 }
 
 func strict(t *testing.T, r rule, skip []string) {
+	t.Helper()
 	fset, files := parseKit(t)
 	for name, f := range files {
 		if slices.Contains(skip, name) {
@@ -215,6 +349,7 @@ func strict(t *testing.T, r rule, skip []string) {
 // falls (so the baseline follows it down). LINT_BASELINE=1 prints the
 // current counts to paste in.
 func ratchet(t *testing.T, r rule, baseline map[string]int, name string, skip []string) {
+	t.Helper()
 	fset, files := parseKit(t)
 	got := map[string]int{}
 	for file, f := range files {
@@ -226,12 +361,7 @@ func ratchet(t *testing.T, r rule, baseline map[string]int, name string, skip []
 		}
 	}
 	if os.Getenv("LINT_BASELINE") != "" {
-		var lines []string
-		for file, n := range got {
-			lines = append(lines, fmt.Sprintf("\t%q: %d,", file, n))
-		}
-		sort.Strings(lines)
-		t.Logf("%s baseline:\n%s", name, strings.Join(lines, "\n"))
+		t.Logf("%s baseline:\n%s", name, baselineLines(got))
 		return
 	}
 	var changed []string
@@ -248,15 +378,19 @@ func ratchet(t *testing.T, r rule, baseline map[string]int, name string, skip []
 	}
 	if len(changed) > 0 {
 		sort.Strings(changed)
-		var lines []string
-		for file := range union(got, baseline) {
-			if got[file] > 0 {
-				lines = append(lines, fmt.Sprintf("\t%q: %d,", file, got[file]))
-			}
-		}
-		sort.Strings(lines)
-		t.Errorf("%s went down in %v: lower the baseline to\n%s", name, changed, strings.Join(lines, "\n"))
+		t.Errorf("%s went down in %v: lower the baseline to\n%s", name, changed, baselineLines(got))
 	}
+}
+
+// baselineLines formats counts as sorted map entries to paste into a
+// baseline.
+func baselineLines(counts map[string]int) string {
+	var lines []string
+	for file, n := range counts {
+		lines = append(lines, fmt.Sprintf("\t%q: %d,", file, n))
+	}
+	sort.Strings(lines)
+	return strings.Join(lines, "\n")
 }
 
 func union(a, b map[string]int) map[string]bool {
@@ -277,46 +411,12 @@ func TestGeometryRatchet(t *testing.T) {
 }
 
 // keymap.go names keys for chord parsing and display; trace.go writes
-// diagnostics; the token files name tokens and presets.
-var englishExempt = append([]string{"keymap.go", "trace.go", "metrics.go"}, tokenFiles...)
+// diagnostics; strings.go is the default English Strings; the token files
+// name tokens and presets.
+var englishExempt = append([]string{"keymap.go", "trace.go", "strings.go"}, tokenFiles...)
 
 func TestEnglishRatchet(t *testing.T) {
 	ratchet(t, english, englishBaseline, "English strings", englishExempt)
-}
-
-// Each rule must catch the bug it exists for.
-func TestRulesCatch(t *testing.T) {
-	src := `package kit
-func bad(gtx C, t *Theme, id string) {
-	_ = color.NRGBA{R: 1}
-	_ = clip.Stroke{}
-	_ = Surface{Radius: 4}
-	_ = gtx.Dp(22)
-	t.Text(gtx, "No log lines yet", 0, t.Fg, 0)
-	semantic.LabelOp("Decrease " + id).Add(gtx.Ops)
-	label := "Name"
-	label += " (asc)"
-	Tag(gtx, Part(id, "Sort Key")) // ids: fine
-	panic("kit: Bad state")       // developer message: fine
-	_ = t.Space(8)       // off the scale
-	_ = Flex{Gap: 6}     // off the scale
-	_ = t.Space(Space2)  // the scale: fine
-	_ = Flex{Pad: Space4} // fine
-	_ = gtx.Dp(0)        // zero: fine
-}`
-	fset := token.NewFileSet()
-	f, err := parser.ParseFile(fset, "bad.go", src, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for name, c := range map[string]struct {
-		r    rule
-		want int
-	}{"colour": {colorLiterals, 1}, "stroke": {strokes, 1}, "geometry": {dpLiterals, 4}, "english": {english, 4}} {
-		if got := len(c.r(fset, f)); got != c.want {
-			t.Errorf("%s rule found %d, want %d: %v", name, got, c.want, c.r(fset, f))
-		}
-	}
 }
 
 // coverageExempt are kit/ui components without a conformance row, and why.
@@ -325,20 +425,22 @@ var coverageExempt = map[string]string{
 	"Artwork": "display", "Badge": "display", "Banner": "display", "DialogContent": "display",
 	"EmptyState": "display", "FieldError": "display", "Form": "layout of other controls",
 	"Kbd": "display", "Stat": "display", "ToastHost": "host; its close buttons are IconButtons",
-	"Tooltip": "display; hover-only",
+	"Tooltip": "no input of its own: it shows on its Content's hover or focus (TestTooltipKeyboard)",
 	// interactive, covered by gallery tests until their contract exists
 	"Combobox":       "its trigger is an editor: typing opens the list",
 	"ContextMenu":    "opens on a right click",
 	"CommandPalette": "a modal",
 	"Split":          "a drag control",
-	"ReorderList":    "its buttons are IconButtons; the drag handle needs a drag contract",
 }
 
 // Every kit/ui component (an exported type with a Layout method) has a
 // gallery demo, and a conformance row unless coverageExempt says why.
 func TestComponentCoverage(t *testing.T) {
 	fset := token.NewFileSet()
-	paths, _ := filepath.Glob("../../kit/ui/*.go")
+	paths, err := filepath.Glob(kitRoot + "ui/*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
 	var comps []string
 	for _, p := range paths {
 		if strings.HasSuffix(p, "_test.go") {
@@ -360,15 +462,21 @@ func TestComponentCoverage(t *testing.T) {
 	}
 	read := func(glob string) string {
 		var b strings.Builder
-		ps, _ := filepath.Glob(glob)
+		ps, err := filepath.Glob(glob)
+		if err != nil {
+			t.Fatal(err)
+		}
 		for _, p := range ps {
-			src, _ := os.ReadFile(p)
+			src, err := os.ReadFile(p)
+			if err != nil {
+				t.Fatal(err)
+			}
 			b.Write(src)
 		}
 		return b.String()
 	}
 	gallery := read("../../examples/gallery/*.go")
-	conform := read("../../kit/ui/conform_test.go")
+	conform := read(kitRoot + "ui/conform_test.go")
 	for _, c := range comps {
 		if !strings.Contains(gallery, "ui."+c+"{") {
 			t.Errorf("ui.%s has no gallery demo (examples/gallery)", c)

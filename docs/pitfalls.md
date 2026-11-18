@@ -44,7 +44,7 @@ correct because screenshots looked fine. Static screenshots never exercise input
   `TestCatchesTinyTarget`.
 
 ## 5. "Right-aligned" buttons sitting next to the title
-- **Cause:** `layout.Flexed(1, func(gtx) D { return D{} })`. A zero-size flexed
+- **Cause:** `layout.Flexed(1, func(gtx layout.Context) layout.Dimensions { return layout.Dimensions{} })`. A zero-size flexed
   child doesn't claim the space.
 - **Rule:** use `kit.Flexed(1, kit.Grow)`.
 - **Detection:** visual only. Render and look.
@@ -69,8 +69,9 @@ correct because screenshots looked fine. Static screenshots never exercise input
 - **Cause:** Gio's `pointerQueue.Frame` sets `semantic.valid = gestures != 0` for
   every area with a handler. A hover-only handler (no click or scroll) wipes that
   area's semantic description.
-- **Rule:** `kit.Hover` puts the id on a nested, handler-free clip area. Do the
-  same in any custom hover-only widget.
+- **Rule:** `kit.HoverArea` puts the id on a nested, handler-free clip area.
+  `kit.TagArea(gtx, id, w)` does the same for any region whose handler is
+  not polled for pointer events (focus groups, keyboard-only canvases).
 - **Detection:** `Find` fails. Run `h.Dump`.
 
 ## 9. Semantic quirks that break naive queries
@@ -90,8 +91,8 @@ correct because screenshots looked fine. Static screenshots never exercise input
 
 ## 11. Redraw loops
 - **Cause:** calling `Notify` unconditionally every frame burns CPU forever.
-- **Detection:** Settle reports no-settle after 10 frames. Test:
-  `TestCatchesRedrawLoop`.
+- **Detection:** Settle reports no-settle after 120 frames (2s of virtual
+  time). Test: `TestCatchesRedrawLoop`.
 
 ## 12. Background work racing the UI
 - **Cause:** an early version guarded state with a mutex and drew from snapshots,
@@ -198,7 +199,7 @@ correct because screenshots looked fine. Static screenshots never exercise input
   gestures, and a disabled handler asks for none. The field's id sat on a
   handler-free area, so it survived.
 - **Rule:** a disabled component tags a nested, handler-free area
-  (`disabledArea`), as `kit.Hover` already does.
+  (`disabledArea`), as `kit.HoverArea` already does.
 - **Detection:** `TestDisabledFormTakesNoInput` (`h.Disabled(id)` fails on
   a missing id).
 
@@ -212,11 +213,24 @@ correct because screenshots looked fine. Static screenshots never exercise input
   event. Read `app/window.go` when adding an input helper.
 - **Detection:** `TestTextFieldNativeKeys`.
 
+## 25. A posted follow-up looked like a stale frame (harness bug)
+- **Symptom:** a `Post` callback that posted another callback made strict
+  mode report a stale frame, and `RunTasks` returned before the follow-up
+  ran.
+- **Cause:** a window draws a frame for every `Post`; the harness settled
+  only while the router asked for a redraw, so the follow-up stayed queued
+  until the strict check's extra frame ran it.
+- **Rule:** the harness keeps settling while `App.Queued()` is above 0, and
+  `RunTasks` waits for an empty queue as well as finished work.
+- **Detection:** `TestPostedCallbacksRunInTheSettle`.
+
 ## Process lessons
 - **Screenshots aren't tests.** Drive real input (`kittest`) and assert on the
   model, the semantics and the pixels.
 - **Debug Gio from its source.** When behavior is surprising, read
-  `$(go env GOMODCACHE)/gioui.org@…`. Two bugs above were found only there.
+  `third_party/gioui.org` (the fork this repo builds with) or
+  `$(go env GOMODCACHE)/gioui.org@…` for stock Gio. Several bugs above were
+  found only there.
 - **Break it on purpose.** After fixing a bug, re-introduce it and confirm the test
   fails. Otherwise you don't know the test works.
 - **Separate draw from handle in tests too.** `Settle` never synthesizes input, so

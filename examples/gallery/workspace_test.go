@@ -19,19 +19,19 @@ func TestWorkspaceInteractions(t *testing.T) {
 	h.ExpectTextIn("work/icons", "Review icons")
 	h.Hover("work/spec")
 	h.ClickID("work/spec")
-	if g.workSel != "spec" {
-		t.Fatalf("selected %q", g.workSel)
+	if g.workspace.selected != "spec" {
+		t.Fatalf("selected %q", g.workspace.selected)
 	}
 	h.Key(key.NameDownArrow, 0)
-	if g.workSel != "icons" {
-		t.Fatalf("arrow selected %q", g.workSel)
+	if g.workspace.selected != "icons" {
+		t.Fatalf("arrow selected %q", g.workspace.selected)
 	}
 	h.ClickID("folders/project/toggle")
 	h.ExpectNoID("folders/design")
 	h.ClickID("folders/project/toggle")
 	h.ClickID("folders/design")
-	if g.folderSel != "design" {
-		t.Fatalf("folder selected %q", g.folderSel)
+	if g.workspace.folderSel != "design" {
+		t.Fatalf("folder selected %q", g.workspace.folderSel)
 	}
 	h.ClickID("folders/project")
 	h.Key(key.NameLeftArrow, 0)
@@ -39,61 +39,61 @@ func TestWorkspaceInteractions(t *testing.T) {
 	h.Key(key.NameRightArrow, 0)
 	h.ExpectID("folders/design")
 	h.ClickID("work:priority/plus")
-	if g.priority.Value != 4 {
-		t.Fatalf("priority %v", g.priority.Value)
+	if g.workspace.priority.Value() != 4 {
+		t.Fatalf("priority %v", g.workspace.priority.Value())
 	}
 	for i := 0; i < 5; i++ {
 		h.ClickID("work:priority/plus")
 	}
-	if g.priority.Value != 5 {
-		t.Fatalf("maximum priority %v", g.priority.Value)
+	if g.workspace.priority.Value() != 5 {
+		t.Fatalf("maximum priority %v", g.workspace.priority.Value())
 	}
 	h.ClickID("work:priority")
 	h.Key(key.NameDownArrow, 0)
-	if g.priority.Value != 4 {
-		t.Fatalf("keyboard priority %v", g.priority.Value)
+	if g.workspace.priority.Value() != 4 {
+		t.Fatalf("keyboard priority %v", g.workspace.priority.Value())
 	}
 	h.Chord("Shortcut+A")
 	h.Type("bad")
-	if g.priority.Error == "" {
+	if g.workspace.priority.Valid() {
 		t.Fatal("invalid number accepted")
 	}
 	h.ClickID("work:priority/plus")
-	if g.priority.Error != "" {
-		t.Fatalf("step did not clear error: %q", g.priority.Error)
+	if !g.workspace.priority.Valid() {
+		t.Fatalf("step did not clear error: %q", g.workspace.priority.Error(g.th))
 	}
-	h.ClickID("worktable/sort/1")
-	if g.workTable.SortColumn != 1 || g.workTable.Descending {
+	h.ClickID("worktable/sort/status")
+	if g.workspace.table.SortColumn != 1 || g.workspace.table.Descending {
 		t.Fatal("table did not sort ascending")
 	}
-	h.ClickID("worktable/sort/1")
-	if !g.workTable.Descending {
+	h.ClickID("worktable/sort/status")
+	if !g.workspace.table.Descending {
 		t.Fatal("table did not reverse sort")
 	}
 	h.ClickID("worktable/icons")
-	if g.workSel != "icons" {
-		t.Fatalf("table row %q", g.workSel)
+	if g.workspace.selected != "icons" {
+		t.Fatalf("table row %q", g.workspace.selected)
 	}
 	h.ClickID("work:secret")
 	h.Type("hidden")
-	if g.secret.Text() != "hidden" {
-		t.Fatalf("password text %q", g.secret.Text())
+	if g.workspace.secret.Text() != "hidden" {
+		t.Fatalf("password text %q", g.workspace.secret.Text())
 	}
 	for _, text := range h.Texts() {
 		if text == "hidden" {
 			t.Fatal("password rendered in clear text")
 		}
 	}
-	g.workName.SetText("")
+	g.workspace.name.SetText("")
 	h.Settle()
 	h.ClickID("work:save")
 	h.ExpectText("Required")
-	g.workName.SetText("Review iconography")
+	g.workspace.name.SetText("Review iconography")
 	h.Settle()
 	h.ClickID("work:save")
 	h.ExpectText("Review iconography")
-	if g.records[1].Name != "Review iconography" {
-		t.Fatalf("saved name %q", g.records[1].Name)
+	if g.workspace.records[1].Name != "Review iconography" {
+		t.Fatalf("saved name %q", g.workspace.records[1].Name)
 	}
 	h.ExpectClean()
 	h.ExpectTabReachable()
@@ -159,12 +159,12 @@ func TestSelectableListOneTabStop(t *testing.T) {
 		t.Fatalf("click focused %q, want the list on its active row", got)
 	}
 	h.Key(key.NameEnd, 0)
-	if g.workSel != "release" {
-		t.Fatalf("End selected %q", g.workSel)
+	if g.workspace.selected != "release" {
+		t.Fatalf("End selected %q", g.workspace.selected)
 	}
 	h.Key(key.NameHome, 0)
-	if g.workSel != "spec" {
-		t.Fatalf("Home selected %q", g.workSel)
+	if g.workspace.selected != "spec" {
+		t.Fatalf("Home selected %q", g.workspace.selected)
 	}
 	h.Tab(false)
 	if got := h.FocusedID(); got == "work" || got == "" || isRow(h, got) {
@@ -187,8 +187,8 @@ func TestSelectableListOneTabStop(t *testing.T) {
 	quiet := crop(h.Image(), r)
 	h.Key(key.NameUpArrow, 0)
 	h.Key(key.NameDownArrow, 0)
-	if g.workSel != "icons" {
-		t.Fatalf("selected %q", g.workSel)
+	if g.workspace.selected != "icons" {
+		t.Fatalf("selected %q", g.workspace.selected)
 	}
 	if bytes.Equal(quiet, crop(h.Image(), r)) {
 		t.Fatal("arrow keys after a click did not show the focus ring")
@@ -233,8 +233,8 @@ func TestTreeAndTableKeyboard(t *testing.T) {
 	for i, s := range steps {
 		h.Key(s.key, 0)
 		_, shown := h.Find("folders/design")
-		if g.folderSel != s.selected || shown != s.design {
-			t.Fatalf("step %d (%s): selected %q, design shown %v", i, s.key, g.folderSel, shown)
+		if g.workspace.folderSel != s.selected || shown != s.design {
+			t.Fatalf("step %d (%s): selected %q, design shown %v", i, s.key, g.workspace.folderSel, shown)
 		}
 	}
 	h.Tab(false)
@@ -244,12 +244,12 @@ func TestTreeAndTableKeyboard(t *testing.T) {
 
 	h.ClickID("worktable/icons")
 	h.Key(key.NameDownArrow, 0)
-	if g.workSel != "tests" {
-		t.Fatalf("table Down selected %q", g.workSel)
+	if g.workspace.selected != "tests" {
+		t.Fatalf("table Down selected %q", g.workspace.selected)
 	}
 	h.Key(key.NameHome, 0)
-	if g.workSel != "spec" {
-		t.Fatalf("table Home selected %q", g.workSel)
+	if g.workspace.selected != "spec" {
+		t.Fatalf("table Home selected %q", g.workspace.selected)
 	}
 	h.ExpectTabReachable()
 	h.ExpectClean()

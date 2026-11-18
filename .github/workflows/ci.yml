@@ -5,9 +5,23 @@ on:
     branches: [main, master]
   pull_request:
 
+env:
+  # Use exactly the Go that setup-go installed; never let a go directive
+  # download a newer toolchain and hide a minimum-version break.
+  GOTOOLCHAIN: local
+
 jobs:
+  # The root module on the minimum Go in go.mod and on the latest release.
   linux:
     runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - go: minimum
+            version-file: go.mod
+          - go: stable
+            version: stable
     env:
       # Mesa llvmpipe gives EGL surfaceless without a GPU. Fail, never skip,
       # if the headless context cannot be created.
@@ -17,7 +31,8 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version-file: go.mod
+          go-version: ${{ matrix.version }}
+          go-version-file: ${{ matrix.version-file }}
       - name: Gio build deps and Mesa
         run: |
           sudo apt-get update
@@ -26,14 +41,14 @@ jobs:
             libxkbcommon-x11-dev libgles2-mesa-dev libegl1-mesa-dev \
             libffi-dev libxcursor-dev libvulkan-dev libegl-mesa0 mesa-utils
       - name: gofmt
-        run: test -z "$(gofmt -l kit kittest examples desktop internal)" || { gofmt -l kit kittest examples desktop internal; exit 1; }
+        run: test -z "$(gofmt -l kit kittest examples desktop internal media)" || { gofmt -l kit kittest examples desktop internal media; exit 1; }
       - run: go vet ./...
       - name: Test (final frame per test and contact sheets saved)
         run: KITTEST_SHOTS=${{ runner.temp }}/shots go test ./...
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: shots
+          name: shots-${{ matrix.go }}
           path: ${{ runner.temp }}/shots
           if-no-files-found: ignore
 
@@ -58,6 +73,60 @@ jobs:
             libxkbcommon-x11-dev libgles2-mesa-dev libegl1-mesa-dev \
             libffi-dev libxcursor-dev libegl-mesa0 mesa-utils
       - run: ./scripts/stock-gio.sh
+
+  # third_party/gioui.org is a nested module, outside the root's ./...:
+  # prove the patch series rebuilds it exactly, and run the tests of the
+  # packages the patches touch.
+  gio-fork:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Gio build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            gcc pkg-config patch libwayland-dev libx11-dev libx11-xcb-dev \
+            libxkbcommon-x11-dev libgles2-mesa-dev libegl1-mesa-dev \
+            libffi-dev libxcursor-dev
+      - name: Patch series reproduces the fork
+        run: ./scripts/gio-fork.sh check
+      - name: Test patched packages
+        working-directory: third_party/gioui.org
+        # TestIndexPositionRunes fails on unpatched upstream v0.10.3 too.
+        run: go test -skip '^TestIndexPositionRunes$' ./app/ ./gpu/ ./internal/stream/ ./io/input/ ./widget/
+
+  # media is a separate module (cgo, FFmpeg), outside the root's ./...
+  # Tests that need a codec, a GPU context or VA-API/DMA-BUF export skip
+  # themselves when the runner lacks them; with Mesa the software decode
+  # and stream tests run.
+  media:
+    runs-on: ubuntu-24.04
+    env:
+      LIBGL_ALWAYS_SOFTWARE: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: media/go.mod
+      - name: Gio and FFmpeg build deps, Mesa
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            gcc pkg-config libwayland-dev libx11-dev libx11-xcb-dev \
+            libxkbcommon-x11-dev libgles2-mesa-dev libegl1-mesa-dev \
+            libffi-dev libxcursor-dev libegl-mesa0 mesa-utils \
+            libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libva-dev
+      - working-directory: media
+        run: go vet ./...
+      - working-directory: media
+        shell: bash # -o pipefail: a failing test fails the step through tee
+        run: go test -v ./... 2>&1 | tee ${{ runner.temp }}/media-test.log
+      - name: Report skipped media tests
+        if: always()
+        run: grep -- '--- SKIP' ${{ runner.temp }}/media-test.log || true
 
   cross:
     runs-on: ubuntu-24.04

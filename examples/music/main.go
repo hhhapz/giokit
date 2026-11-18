@@ -7,9 +7,12 @@ import (
 	"fmt"
 	"image"
 	"image/color"
+	"log"
 	"os"
+	"slices"
 	"time"
 
+	"gioui.org/layout"
 	"gioui.org/op"
 	"gioui.org/unit"
 
@@ -83,15 +86,20 @@ func newMusic() *music {
 	return m
 }
 
+// cover draws placeholder album art: a diagonal gradient from a to b with
+// a disc tinted toward b in the middle.
 func cover(a, b color.NRGBA) image.Image {
-	const size = 160
+	const (
+		size       = 160 // the image's width and height, px
+		discRadius = 46  // the centre disc's radius, px
+	)
 	im := image.NewNRGBA(image.Rect(0, 0, size, size))
 	for y := 0; y < size; y++ {
 		for x := 0; x < size; x++ {
 			p := float32(x+y) / (2 * size)
 			c := kit.LerpColor(a, b, p)
-			dx, dy := float32(x-80), float32(y-80)
-			if dx*dx+dy*dy < 46*46 {
+			dx, dy := float32(x-size/2), float32(y-size/2)
+			if dx*dx+dy*dy < discRadius*discRadius {
 				c = kit.LerpColor(c, b, 0.45)
 			}
 			im.SetNRGBA(x, y, c)
@@ -124,7 +132,7 @@ func (m *music) step(direction int) {
 	}
 }
 
-func (m *music) handle(gtx kit.C) {
+func (m *music) handle(gtx layout.Context) {
 	if from, to, ok := m.queue.Update(gtx); ok && ui.Move(m.queueItems, from, to) {
 		m.status = fmt.Sprintf("Queue moved from %d to %d", from+1, to+1)
 	}
@@ -148,7 +156,9 @@ func (m *music) handle(gtx kit.C) {
 			m.th = kit.Dark()
 		}
 	}
-	for _, c := range m.queueItems {
+	// Range over a copy: "remove" shortens m.queueItems mid-loop, and ranging
+	// the live slice would skip the item after the removed one.
+	for _, c := range slices.Clone(m.queueItems) {
 		if m.selectTrack.Get(c.ID).Clicked(gtx) {
 			m.choose(c.ID)
 		}
@@ -158,17 +168,15 @@ func (m *music) handle(gtx kit.C) {
 				m.choose(c.ID)
 				m.playing = true
 			case "remove":
-				for i := range m.queueItems {
-					if m.queueItems[i].ID == c.ID {
-						m.queueItems = append(m.queueItems[:i], m.queueItems[i+1:]...)
-						break
-					}
-				}
+				m.queueItems = slices.DeleteFunc(m.queueItems, func(q ui.Choice) bool { return q.ID == c.ID })
 				if m.selected == c.ID && len(m.queueItems) > 0 {
 					m.choose(m.queueItems[0].ID)
 				}
 			}
 		}
+	}
+	if m.seek.update(gtx) {
+		m.position = time.Duration(float32(m.current().duration) * m.seek.Value)
 	}
 	if m.playing && !m.lastTick.IsZero() {
 		delta := gtx.Now.Sub(m.lastTick)
@@ -183,27 +191,22 @@ func (m *music) handle(gtx kit.C) {
 	m.lastTick = gtx.Now
 }
 
-func (m *music) Frame(gtx kit.C) {
+func (m *music) Frame(gtx layout.Context) {
 	m.handle(gtx)
-	seek := m.seek.Value
 	m.layout(gtx)
-	if m.seek.Value != seek {
-		m.position = time.Duration(float32(m.current().duration) * m.seek.Value)
-		kit.Notify(gtx)
-	}
 	if m.playing {
 		gtx.Execute(op.InvalidateCmd{At: gtx.Now.Add(100 * time.Millisecond)})
 	}
 }
 
-func (m *music) layout(gtx kit.C) kit.D {
+func (m *music) layout(gtx layout.Context) layout.Dimensions {
 	th := m.th
-	return kit.Fill(gtx, th.Bg, func(gtx kit.C) kit.D {
+	return kit.Fill(gtx, th.Bg, func(gtx layout.Context) layout.Dimensions {
 		gtx.Constraints.Min = gtx.Constraints.Max
 		return kit.Col(gtx,
-			kit.Rigid(func(gtx kit.C) kit.D { return m.header(gtx) }),
+			kit.Rigid(func(gtx layout.Context) layout.Dimensions { return m.header(gtx) }),
 			kit.Rigid(kit.HLine(th.Border)),
-			kit.Flexed(1, func(gtx kit.C) kit.D {
+			kit.Flexed(1, func(gtx layout.Context) layout.Dimensions {
 				if gtx.Constraints.Max.X < gtx.Dp(780) {
 					return m.compact(gtx)
 				}
@@ -219,51 +222,59 @@ func (m *music) layout(gtx kit.C) kit.D {
 	})
 }
 
-func (m *music) header(gtx kit.C) kit.D {
+func (m *music) header(gtx layout.Context) layout.Dimensions {
 	th := m.th
-	return kit.Pad(10, 20, func(gtx kit.C) kit.D {
+	return kit.Pad(10, 20, func(gtx layout.Context) layout.Dimensions {
 		return kit.Row(gtx,
-			kit.Rigid(func(gtx kit.C) kit.D { return th.Text(gtx, "Music Lab", th.Type.Title, th.Fg, kit.Bold) }),
+			kit.Rigid(func(gtx layout.Context) layout.Dimensions {
+				return th.Text(gtx, "Music Lab", th.Type.Title, th.Fg, kit.Bold)
+			}),
 			kit.Rigid(kit.Gap(12, 0)),
-			kit.Rigid(func(gtx kit.C) kit.D { return ui.Badge{Status: kit.StatusInfo, Text: "UI prototype"}.Layout(gtx, th) }),
+			kit.Rigid(func(gtx layout.Context) layout.Dimensions {
+				return ui.Badge{Status: kit.StatusInfo, Text: "UI prototype"}.Layout(gtx, th)
+			}),
 			kit.Flexed(1, kit.Grow),
-			kit.Rigid(func(gtx kit.C) kit.D {
+			kit.Rigid(func(gtx layout.Context) layout.Dimensions {
 				return ui.Button{ID: "music:theme", Text: "Switch theme", Style: ui.Ghost}.Layout(gtx, th, &m.theme)
 			}),
 		)
 	})(gtx)
 }
 
-func (m *music) hero(gtx kit.C) kit.D {
+func (m *music) hero(gtx layout.Context) layout.Dimensions {
 	th, cur := m.th, m.current()
-	return kit.Pad(20, 24, func(gtx kit.C) kit.D {
+	return kit.Pad(20, 24, func(gtx layout.Context) layout.Dimensions {
 		gtx.Constraints.Min = gtx.Constraints.Max
 		return kit.Col(gtx,
-			kit.Rigid(func(gtx kit.C) kit.D { return th.Caption(gtx, "Now playing") }),
+			kit.Rigid(func(gtx layout.Context) layout.Dimensions { return th.Caption(gtx, "Now playing") }),
 			kit.Rigid(kit.Gap(0, 14)),
-			kit.Rigid(func(gtx kit.C) kit.D {
+			kit.Rigid(func(gtx layout.Context) layout.Dimensions {
 				return kit.Row(gtx,
-					kit.Rigid(func(gtx kit.C) kit.D {
+					kit.Rigid(func(gtx layout.Context) layout.Dimensions {
 						return ui.Artwork{ID: "music:art", Label: cur.album + " album art", Size: 132}.Layout(gtx, th, &cur.art)
 					}),
 					kit.Rigid(kit.Gap(18, 0)),
-					kit.Flexed(1, func(gtx kit.C) kit.D {
+					kit.Flexed(1, func(gtx layout.Context) layout.Dimensions {
 						return kit.Col(gtx,
-							kit.Rigid(func(gtx kit.C) kit.D { return th.Heading(gtx, cur.title) }),
+							kit.Rigid(func(gtx layout.Context) layout.Dimensions { return th.Heading(gtx, cur.title) }),
 							kit.Rigid(kit.Gap(0, 5)),
-							kit.Rigid(func(gtx kit.C) kit.D { return th.Text(gtx, cur.artist, th.Type.Text, th.Muted, kit.Regular) }),
+							kit.Rigid(func(gtx layout.Context) layout.Dimensions {
+								return th.Text(gtx, cur.artist, th.Type.Text, th.Muted, kit.Regular)
+							}),
 							kit.Rigid(kit.Gap(0, 5)),
-							kit.Rigid(func(gtx kit.C) kit.D { return th.Text(gtx, cur.album, th.Type.Small, th.Dim, kit.Regular) }),
+							kit.Rigid(func(gtx layout.Context) layout.Dimensions {
+								return th.Text(gtx, cur.album, th.Type.Small, th.Dim, kit.Regular)
+							}),
 						)
 					}),
 				)
 			}),
 			kit.Rigid(kit.Gap(0, 24)),
-			kit.Rigid(func(gtx kit.C) kit.D {
+			kit.Rigid(func(gtx layout.Context) layout.Dimensions {
 				return kit.Row(gtx,
-					kit.Rigid(func(gtx kit.C) kit.D { return th.Caption(gtx, "Follow-along lyrics") }),
+					kit.Rigid(func(gtx layout.Context) layout.Dimensions { return th.Caption(gtx, "Follow-along lyrics") }),
 					kit.Flexed(1, kit.Grow),
-					kit.Rigid(func(gtx kit.C) kit.D {
+					kit.Rigid(func(gtx layout.Context) layout.Dimensions {
 						label := "Follow"
 						if m.lyrics.Follow {
 							label = "Following"
@@ -273,8 +284,8 @@ func (m *music) hero(gtx kit.C) kit.D {
 				)
 			}),
 			kit.Rigid(kit.Gap(0, 8)),
-			kit.Flexed(1, func(gtx kit.C) kit.D {
-				return kit.Surface{Bg: th.Panel, Radius: th.Radius}.Layout(gtx, func(gtx kit.C) kit.D {
+			kit.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+				return kit.Surface{Bg: th.Panel, Radius: th.Radius}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 					gtx.Constraints.Min = gtx.Constraints.Max
 					return x.Lyrics{ID: "music:lyrics", Lines: demoLyrics, At: m.position}.Layout(gtx, th, &m.lyrics)
 				})
@@ -283,14 +294,14 @@ func (m *music) hero(gtx kit.C) kit.D {
 	})(gtx)
 }
 
-func (m *music) queuePane(gtx kit.C) kit.D {
+func (m *music) queuePane(gtx layout.Context) layout.Dimensions {
 	th := m.th
-	return kit.Pad(16, 14, func(gtx kit.C) kit.D {
+	return kit.Pad(16, 14, func(gtx layout.Context) layout.Dimensions {
 		gtx.Constraints.Min = gtx.Constraints.Max
 		return kit.Col(gtx,
-			kit.Rigid(func(gtx kit.C) kit.D { return th.Heading(gtx, "Up next") }),
+			kit.Rigid(func(gtx layout.Context) layout.Dimensions { return th.Heading(gtx, "Up next") }),
 			kit.Rigid(kit.Gap(0, 4)),
-			kit.Rigid(func(gtx kit.C) kit.D {
+			kit.Rigid(func(gtx layout.Context) layout.Dimensions {
 				hint := m.status
 				if hint == "" {
 					hint = "Drag a handle or use the arrow buttons to reorder"
@@ -298,14 +309,14 @@ func (m *music) queuePane(gtx kit.C) kit.D {
 				return th.Text(gtx, hint, th.Type.Small, th.Muted, kit.Regular)
 			}),
 			kit.Rigid(kit.Gap(0, 10)),
-			kit.Flexed(1, func(gtx kit.C) kit.D {
+			kit.Flexed(1, func(gtx layout.Context) layout.Dimensions {
 				return ui.ReorderList{ID: "music:queue", Items: m.queueItems, Item: m.queueItem}.Layout(gtx, th, &m.queue)
 			}),
 		)
 	})(gtx)
 }
 
-func (m *music) queueItem(gtx kit.C, c ui.Choice) kit.D {
+func (m *music) queueItem(gtx layout.Context, c ui.Choice) layout.Dimensions {
 	th := m.th
 	var tr *track
 	for i := range m.tracks {
@@ -315,23 +326,23 @@ func (m *music) queueItem(gtx kit.C, c ui.Choice) kit.D {
 		}
 	}
 	if tr == nil {
-		return kit.D{}
+		return layout.Dimensions{}
 	}
-	return ui.ContextMenu{ID: "music:menu:" + c.ID, Items: []ui.MenuItem{{ID: "play", Label: "Play this track"}, {ID: "remove", Label: "Remove from queue"}}, Content: func(gtx kit.C) kit.D {
-		return m.selectTrack.Get(c.ID).Press(gtx, "music:track:"+c.ID, func(gtx kit.C, st kit.State) kit.D {
+	return ui.ContextMenu{ID: "music:menu:" + c.ID, Items: []ui.MenuItem{{ID: "play", Label: "Play this track"}, {ID: "remove", Label: "Remove from queue"}}, Content: func(gtx layout.Context) layout.Dimensions {
+		return th.Press(gtx, m.selectTrack.Get(c.ID), "music:track:"+c.ID, func(gtx layout.Context, st kit.State) layout.Dimensions {
 			bg := th.Panel
 			if c.ID == m.selected {
 				bg = th.AccentBg
 			} else if st.Hovered {
 				bg = th.Surface
 			}
-			return kit.Surface{Bg: bg, Radius: th.Radius}.Layout(gtx, kit.Pad(5, 8, func(gtx kit.C) kit.D {
+			return kit.Surface{Bg: bg, Radius: th.Radius}.Layout(gtx, kit.Pad(5, 8, func(gtx layout.Context) layout.Dimensions {
 				return kit.Row(gtx,
-					kit.Rigid(func(gtx kit.C) kit.D {
+					kit.Rigid(func(gtx layout.Context) layout.Dimensions {
 						return ui.Artwork{ID: "music:cover:" + c.ID, Label: tr.album + " cover", Size: 38}.Layout(gtx, th, &tr.art)
 					}),
 					kit.Rigid(kit.Gap(8, 0)),
-					kit.Flexed(1, func(gtx kit.C) kit.D {
+					kit.Flexed(1, func(gtx layout.Context) layout.Dimensions {
 						return th.StyledText(gtx,
 							kit.TextSpan{Text: tr.title + "\n", Strong: true},
 							kit.TextSpan{Text: tr.artist, Size: th.Type.Small, Muted: true},
@@ -343,7 +354,7 @@ func (m *music) queueItem(gtx kit.C, c ui.Choice) kit.D {
 	}}.Layout(gtx, th, m.context.Get(c.ID))
 }
 
-func (m *music) compact(gtx kit.C) kit.D {
+func (m *music) compact(gtx layout.Context) layout.Dimensions {
 	th := m.th
 	return kit.Col(gtx,
 		kit.Flexed(1, m.hero),
@@ -352,18 +363,18 @@ func (m *music) compact(gtx kit.C) kit.D {
 	)
 }
 
-func (m *music) transport(gtx kit.C) kit.D {
+func (m *music) transport(gtx layout.Context) layout.Dimensions {
 	th := m.th
 	cur := m.current()
-	return kit.Pad(10, 18, func(gtx kit.C) kit.D {
+	return kit.Pad(10, 18, func(gtx layout.Context) layout.Dimensions {
 		return kit.Col(gtx,
-			kit.Rigid(func(gtx kit.C) kit.D {
+			kit.Rigid(func(gtx layout.Context) layout.Dimensions {
 				return kit.Row(gtx,
-					kit.Rigid(func(gtx kit.C) kit.D {
+					kit.Rigid(func(gtx layout.Context) layout.Dimensions {
 						return ui.IconButton{ID: "music:previous", Icon: kit.IconChevronLeft, Label: "Previous track"}.Layout(gtx, th, &m.prev)
 					}),
 					kit.Rigid(kit.Gap(8, 0)),
-					kit.Rigid(func(gtx kit.C) kit.D {
+					kit.Rigid(func(gtx layout.Context) layout.Dimensions {
 						label := "Play"
 						if m.playing {
 							label = "Pause"
@@ -371,13 +382,13 @@ func (m *music) transport(gtx kit.C) kit.D {
 						return ui.Button{ID: "music:play", Text: label, Style: ui.Solid}.Layout(gtx, th, &m.play)
 					}),
 					kit.Rigid(kit.Gap(8, 0)),
-					kit.Rigid(func(gtx kit.C) kit.D {
+					kit.Rigid(func(gtx layout.Context) layout.Dimensions {
 						return ui.IconButton{ID: "music:next", Icon: kit.IconChevronRight, Label: "Next track"}.Layout(gtx, th, &m.next)
 					}),
 					kit.Rigid(kit.Gap(16, 0)),
-					kit.Flexed(1, func(gtx kit.C) kit.D { return m.seek.layout(gtx, th, "music:seek", "Seek") }),
+					kit.Flexed(1, func(gtx layout.Context) layout.Dimensions { return m.seek.layout(gtx, th, "music:seek", "Seek") }),
 					kit.Rigid(kit.Gap(10, 0)),
-					kit.Rigid(func(gtx kit.C) kit.D {
+					kit.Rigid(func(gtx layout.Context) layout.Dimensions {
 						return th.Text(gtx, clock(m.position)+" / "+clock(cur.duration), th.Type.Small, th.Muted, kit.Regular)
 					}),
 				)
@@ -386,7 +397,11 @@ func (m *music) transport(gtx kit.C) kit.D {
 	})(gtx)
 }
 
-func clock(d time.Duration) string { s := int(d.Seconds()); return fmt.Sprintf("%d:%02d", s/60, s%60) }
+// clock formats d as minutes and seconds: "3:07".
+func clock(d time.Duration) string {
+	s := int(d.Seconds())
+	return fmt.Sprintf("%d:%02d", s/60, s%60)
+}
 
 func main() {
 	shot := flag.String("shot", "", "render offscreen to a PNG and exit")
@@ -395,30 +410,51 @@ func main() {
 	flag.Parse()
 	m := newMusic()
 	if *shot != "" {
-		h, err := kittest.New(*width, *height, 2, m.Frame)
-		if err == nil {
-			defer h.Release()
-			err = h.Save(*shot)
-		}
-		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
+		if err := renderShot(m, *shot, *width, *height); err != nil {
+			fmt.Fprintln(os.Stderr, "music:", err)
 			os.Exit(1)
 		}
 		return
 	}
-	kit.NewApp("giokit-music", "Music Lab", unit.Dp(*width), unit.Dp(*height)).Run(m.Frame)
+	a := kit.NewApp("giokit-music", "Music Lab", unit.Dp(*width), unit.Dp(*height))
+	go func() {
+		if err := a.Run(m.Frame); err != nil {
+			log.Fatal(err)
+		}
+		os.Exit(0)
+	}()
+	kit.Main()
 }
 
-// slider pairs a ui.Slider's value with its state, for sliders that keep
-// their own value.
+// renderShot renders one settled frame of m offscreen, at 2 pixels per dp,
+// to a PNG at path. The harness is released before it returns, so the
+// caller may exit on error.
+func renderShot(m *music, path string, width, height int) error {
+	h, err := kittest.New(width, height, 2, m.Frame)
+	if err != nil {
+		return err
+	}
+	defer h.Release()
+	return h.Save(path)
+}
+
+// slider is a ui.Slider that keeps its own value: update applies input in
+// the handle pass, layout draws the value.
 type slider struct {
 	Value float32
 	state ui.SliderState
 }
 
-func (s *slider) layout(gtx kit.C, th *kit.Theme, id, label string) kit.D {
-	if v, ok := s.state.Update(gtx); ok {
+// update applies this frame's input to Value and reports whether it
+// changed.
+func (s *slider) update(gtx layout.Context) bool {
+	v, ok := s.state.Update(gtx)
+	if ok {
 		s.Value = v
 	}
+	return ok
+}
+
+func (s *slider) layout(gtx layout.Context, th *kit.Theme, id, label string) layout.Dimensions {
 	return ui.Slider{ID: id, Label: label, Value: s.Value}.Layout(gtx, th, &s.state)
 }

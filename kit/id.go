@@ -1,21 +1,10 @@
 package kit
 
-import "strings"
+import (
+	"strings"
 
-// Ids are paths. A component gets a local id from its caller; the parts it
-// creates inside (a field, an option, a row) are Part(id, name), and Scope
-// prefixes everything laid out within it. Tag emits the full path:
-//
-//	kit.Scope(gtx, "invoice:42", func(gtx C) D {
-//		return ui.Button{ID: "pay", Text: "Pay", Style: ui.Solid}.Layout(gtx, th, &v.pay) // id "invoice:42/pay"
-//	})
-//
-// "/" separates levels; ":" is free for "kind:record" names. Part and Scope
-// escape their segments, so record ids may contain anything.
-//
-// Ids name things for tests and automation only. They never key state (that
-// is the caller's struct or a Pool keyed by the local id), so moving a widget
-// into a scope does not lose its state, and they are never the spoken label.
+	"gioui.org/layout"
+)
 
 // Part is the id of a named part inside the component with id, one segment
 // per name: Part("lang", "opt", "3") is "lang/opt/3".
@@ -44,6 +33,7 @@ func EscapeID(s string) string {
 	return b.String()
 }
 
+// writeSegment writes s to b, escaped as EscapeID does.
 func writeSegment(b *strings.Builder, s string) {
 	for i := 0; i < len(s); i++ {
 		switch s[i] {
@@ -59,7 +49,23 @@ func writeSegment(b *strings.Builder, s string) {
 
 // Scope lays out w with name appended to the id path, so ids inside need not
 // know their context and two instances of a composite never collide.
-func Scope(gtx C, name string, w W) D {
+//
+// Ids are paths. A component gets a local id from its caller; the parts it
+// creates inside (a field, an option, a row) are Part(id, name), and Scope
+// prefixes everything laid out within it. Tag emits the full path:
+//
+//	kit.Scope(gtx, "invoice:42", func(gtx layout.Context) layout.Dimensions {
+//		return ui.Button{ID: "pay", Text: "Pay", Style: ui.Solid}.Layout(gtx, th, &v.pay) // id "invoice:42/pay"
+//	})
+//
+// "/" separates levels; ":" is free for "kind:record" names. Part and Scope
+// escape their segments, so record ids may contain anything.
+//
+// Ids name things for tests and automation only. They never key state (that
+// is the caller's struct or a Pool keyed by the local id), so moving a widget
+// into a scope does not lose its state, and they are never the spoken label.
+// Without a kit.Window frame, Scope adds nothing.
+func Scope(gtx layout.Context, name string, w layout.Widget) layout.Dimensions {
 	f := frameOf(gtx)
 	if f == nil {
 		return w(gtx)
@@ -76,7 +82,7 @@ func Scope(gtx C, name string, w W) D {
 
 // Path is the full id for a local id at this point of the layout: the
 // current Scope, then id. Empty ids stay empty.
-func Path(gtx C, id string) string {
+func Path(gtx layout.Context, id string) string {
 	if id == "" {
 		return ""
 	}

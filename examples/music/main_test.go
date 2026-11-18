@@ -72,3 +72,55 @@ func TestActiveLyricBoundary(t *testing.T) {
 }
 
 func activeAt(at time.Duration) int { return x.ActiveLyric(demoLyrics, at) }
+
+// Seeking applies in the handle pass: the position follows the slider in
+// the same frame. The transport controls announce what they do.
+func TestMusicSeekAndLabels(t *testing.T) {
+	m := newMusic()
+	h := kittest.NewT(t, 1120, 740, m.Frame)
+	h.Theme = m.th
+	h.ClickID("music:seek")
+	want := time.Duration(float32(m.current().duration) * m.seek.Value)
+	if m.seek.Value < 0.4 || m.seek.Value > 0.6 || m.position != want {
+		t.Fatalf("seek to the middle: value %v, position %v, want %v", m.seek.Value, m.position, want)
+	}
+	labels := map[string]string{}
+	var walk func([]kittest.A11yNode)
+	walk = func(nodes []kittest.A11yNode) {
+		for _, n := range nodes {
+			labels[n.ID] = n.Label
+			walk(n.Children)
+		}
+	}
+	walk(h.A11yTree())
+	for id, want := range map[string]string{
+		"music:previous": "Previous track",
+		"music:next":     "Next track",
+		"music:seek":     "Seek",
+	} {
+		if got := labels[id]; got != want {
+			t.Errorf("%s: label %q, want %q", id, got, want)
+		}
+	}
+}
+
+// Removing a track from its context menu takes it out of the queue, keeps
+// the rest in order, and moves the selection off it.
+func TestMusicRemoveFromQueue(t *testing.T) {
+	m := newMusic()
+	h := kittest.NewT(t, 1120, 740, m.Frame)
+	h.Theme = m.th
+	before := len(m.queueItems)
+	removed := m.queueItems[1].ID
+	next := m.queueItems[2].ID
+	h.ClickID("music:track:" + removed)
+	h.RightClickID("music:track:" + removed)
+	h.ClickID("music:menu:" + removed + "/remove")
+	if len(m.queueItems) != before-1 || m.queueItems[1].ID != next {
+		t.Fatalf("queue after removing %q: %+v", removed, m.queueItems)
+	}
+	if m.selected == removed {
+		t.Fatalf("the removed track %q is still selected", removed)
+	}
+	h.ExpectClean()
+}

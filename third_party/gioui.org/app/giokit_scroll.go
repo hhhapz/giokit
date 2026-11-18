@@ -58,7 +58,9 @@ func abs(v float32) float32 {
 
 // GiokitUpstreamWheel restores upstream's wheel scaling (scale every frame
 // with a discrete step) when set: for A/B testing the patch in one build
-// (examples/scrolltest, key U).
+// (examples/scrolltest, key U). It is process-wide, applies to every
+// window, and may be changed at any time from any goroutine; each Wayland
+// scroll frame reads it when the frame is flushed.
 var GiokitUpstreamWheel atomic.Bool
 
 const defaultWheelMiniStepScale = 1.2
@@ -76,14 +78,19 @@ var wheelMiniStepScale = func() *atomic.Uint32 {
 }()
 
 // GiokitWheelMiniStepScale returns the multiplier for high-resolution Wayland
-// wheel sub-steps. It defaults to 1.2 and can be set with the
-// GIOKIT_WHEEL_MINI_STEP_SCALE environment variable or the setter below.
+// wheel sub-steps. The setting is process-wide and applies to every window.
+// It defaults to 1.2; the GIOKIT_WHEEL_MINI_STEP_SCALE environment variable,
+// read once when the package is initialized, overrides the default (an
+// invalid value is ignored), and SetGiokitWheelMiniStepScale overrides both.
 func GiokitWheelMiniStepScale() float32 {
 	return math.Float32frombits(wheelMiniStepScale.Load())
 }
 
-// SetGiokitWheelMiniStepScale changes the multiplier at runtime. It affects
-// Wayland wheel input only; classic wheel clicks and touchpads are unchanged.
+// SetGiokitWheelMiniStepScale changes the multiplier for every window. It is
+// safe to call at any time from any goroutine and takes effect from the next
+// scroll frame. It affects Wayland wheel input only; classic wheel clicks and
+// touchpads are unchanged. A scale that is not finite and positive is
+// rejected with an error and leaves the setting as it was.
 func SetGiokitWheelMiniStepScale(scale float32) error {
 	if err := validateWheelMiniStepScale(scale); err != nil {
 		return err

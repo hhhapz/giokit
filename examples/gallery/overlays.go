@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"slices"
 	"time"
 
 	"gioui.org/layout"
@@ -10,8 +11,9 @@ import (
 	"github.com/hhhapz/giokit/kit/ui"
 )
 
-// overlaysState: menus, selects, a context menu, a popover, a modal dialog
-// and toasts. The dialog and toasts are hosted at the window root (main.go).
+// overlaysState holds the overlay demos' state: menus, selects, a context
+// menu, a popover, a modal dialog and toasts. The dialog and toasts are
+// hosted at the window root (main.go).
 type overlaysState struct {
 	fileMenu  ui.MenuState
 	moreMenu  ui.MenuState
@@ -33,7 +35,7 @@ type overlaysState struct {
 	cancelDel kit.Clickable
 	confirm   kit.Clickable
 	toasts    ui.Toasts
-	toastBtns [3]kit.Clickable
+	toastBtns [len(demoToasts)]kit.Clickable
 	due       ui.DateFieldState
 	dueDate   time.Time
 	prof      ui.ComboboxState
@@ -66,70 +68,85 @@ var (
 		"Australia/Sydney", "Pacific/Auckland", "America/Sao_Paulo", "America/New_York",
 		"America/Chicago", "America/Denver", "America/Los_Angeles", "Pacific/Honolulu",
 	}
-	toastKinds = []kit.Status{kit.StatusInfo, kit.StatusGood, kit.StatusBad}
-	profNames  = []string{"Kathryn Hare", "Karen Yeats", "Lila Kari", "Ian Goulden", "Jeffrey Shallit", "Kevin Purbhoo", "Alfred Menezes"}
+	profNames = []string{"Kathryn Hare", "Karen Yeats", "Lila Kari", "Ian Goulden", "Jeffrey Shallit", "Kevin Purbhoo", "Alfred Menezes"}
 )
 
+// demoToast is a toast the Dialogs demo pushes from a button.
+type demoToast struct {
+	id     string // the button's id
+	button string // the button's label
+	status kit.Status
+	title  string
+	body   string // "" for a title-only toast
+}
+
+// demoToasts are the Dialogs demo's toast buttons, in display order.
+var demoToasts = [...]demoToast{
+	{id: "toast:info", button: "Info toast", status: kit.StatusInfo, title: "Update available", body: "Version 0.3 is ready to install."},
+	{id: "toast:good", button: "Success toast", status: kit.StatusGood, title: "Saved"},
+	{id: "toast:bad", button: "Error toast", status: kit.StatusBad, title: "Build failed", body: "3 errors in kit/theme.go."},
+}
+
 func (g *gallery) initOverlays() {
-	g.sizeI, g.zoneI = 1, 0
-	g.dueDate = time.Date(2026, 11, 20, 0, 0, 0, 0, time.Local)
+	g.overlays.sizeI, g.overlays.zoneI = 1, 0
+	g.overlays.dueDate = time.Date(2026, 11, 20, 0, 0, 0, 0, time.Local)
 }
 
 func (g *gallery) handleOverlays(gtx C) {
-	if id, ok := g.fileMenu.Update(gtx); ok {
+	if id, ok := g.overlays.fileMenu.Update(gtx); ok {
 		if id == "delete" {
-			g.dialog.Show()
+			g.overlays.dialog.Show()
 		} else {
 			g.status = "File → " + id
 		}
 	}
-	if id, ok := g.moreMenu.Update(gtx); ok {
+	if id, ok := g.overlays.moreMenu.Update(gtx); ok {
 		g.status = "More → " + id
 	}
-	if id, ok := g.ctxMenu.Update(gtx); ok {
+	if id, ok := g.overlays.ctxMenu.Update(gtx); ok {
 		g.status = "Context → " + id
 	}
-	if i, ok := g.sizeSel.Update(gtx); ok {
-		g.sizeI = i
+	if id, ok := g.overlays.sizeSel.Update(gtx); ok {
+		g.overlays.sizeI = slices.Index(sizeOptions, id)
 	}
-	if i, ok := g.zone.Update(gtx); ok {
-		g.zoneI = i
+	if id, ok := g.overlays.zone.Update(gtx); ok {
+		g.overlays.zoneI = slices.Index(zoneNames, id)
 	}
-	if d, ok := g.due.Update(gtx); ok {
-		g.dueDate = d
+	if d, ok := g.overlays.due.Update(gtx); ok {
+		g.overlays.dueDate = d
 	}
-	if g.filterBtn.Clicked(gtx) {
-		g.filters.Toggle()
+	g.overlays.tagsOpen.Update(gtx)
+	if g.overlays.filterBtn.Clicked(gtx) {
+		g.overlays.filters.Toggle()
 	}
-	if g.onlyOpen.Clicked(gtx) {
-		g.openOnly = !g.openOnly
+	if g.overlays.onlyOpen.Clicked(gtx) {
+		g.overlays.openOnly = !g.overlays.openOnly
 	}
-	if g.mine.Clicked(gtx) {
-		g.mineOnly = !g.mineOnly
+	if g.overlays.mine.Clicked(gtx) {
+		g.overlays.mineOnly = !g.overlays.mineOnly
 	}
-	if g.apply.Clicked(gtx) {
-		g.filters.Hide()
-		g.filterBtn.FocusQuiet(gtx)
-		g.status = fmt.Sprintf("Filters: open only %v, mine %v", g.openOnly, g.mineOnly)
+	if g.overlays.apply.Clicked(gtx) {
+		g.overlays.filters.Hide()
+		g.overlays.filterBtn.FocusQuiet(gtx)
+		g.status = fmt.Sprintf("Filters: open only %v, mine %v", g.overlays.openOnly, g.overlays.mineOnly)
 	}
-	if g.delBtn.Clicked(gtx) {
-		g.dialog.Show()
+	if g.overlays.delBtn.Clicked(gtx) {
+		g.overlays.dialog.Show()
 	}
-	if g.cancelDel.Clicked(gtx) {
-		g.dialog.Hide()
+	if g.overlays.cancelDel.Clicked(gtx) {
+		g.overlays.dialog.Hide()
 	}
-	if g.confirm.Clicked(gtx) {
-		g.dialog.Hide()
-		g.toasts.Push(kit.StatusGood, "Project deleted", "giokit and its 3 environments are gone.")
+	if g.overlays.confirm.Clicked(gtx) {
+		g.overlays.dialog.Hide()
+		g.overlays.toasts.Push(kit.StatusGood, "Project deleted", "giokit and its 3 environments are gone.")
 	}
-	if g.dialog.DidDismiss() {
+	if g.overlays.dialog.DidDismiss() {
 		g.status = "Delete cancelled"
 	}
-	for i := range g.toastBtns {
-		if g.toastBtns[i].Clicked(gtx) {
-			titles := []string{"Update available", "Saved", "Build failed"}
-			bodies := []string{"Version 0.3 is ready to install.", "", "3 errors in kit/theme.go."}
-			g.toasts.Push(toastKinds[i], titles[i], bodies[i])
+	for i := range g.overlays.toastBtns {
+		if g.overlays.toastBtns[i].Clicked(gtx) {
+			t := demoToasts[i]
+			g.overlays.toasts.Push(t.status, t.title, t.body)
 		}
 	}
 }
@@ -139,36 +156,36 @@ func (g *gallery) handleOverlays(gtx C) {
 func (g *gallery) moreMenuButton(gtx C) D {
 	th := g.th
 	return ui.Menu{ID: "more", Items: moreItems, Trigger: func(gtx C) D {
-		return ui.IconButton{ID: "more:btn", Icon: kit.IconMenu, Label: "more:btn", Active: true}.Layout(gtx, th, &g.moreMenu.Trigger)
-	}}.Layout(gtx, th, &g.moreMenu)
+		return ui.IconButton{ID: "more:btn", Icon: kit.IconMenu, Label: "More actions", Active: true}.Layout(gtx, th, &g.overlays.moreMenu.Trigger)
+	}}.Layout(gtx, th, &g.overlays.moreMenu)
 }
 
 func (g *gallery) demoMenu(gtx C) D {
 	th := g.th
 	return ui.Menu{ID: "file", Items: fileItems, Trigger: func(gtx C) D {
-		return ui.Button{ID: "file:btn", Text: "File", Icon: kit.IconChevronDown}.Layout(gtx, th, &g.fileMenu.Trigger)
-	}}.Layout(gtx, th, &g.fileMenu)
+		return ui.Button{ID: "file:btn", Text: "File", Icon: kit.IconChevronDown}.Layout(gtx, th, &g.overlays.fileMenu.Trigger)
+	}}.Layout(gtx, th, &g.overlays.fileMenu)
 }
 
 func (g *gallery) demoPopover(gtx C) D {
 	th := g.th
-	return th.Popover(gtx, &g.filters, "filters", func(gtx C) D {
-		return ui.Button{ID: "filters:btn", Text: "Filters"}.Layout(gtx, th, &g.filterBtn)
+	return th.Popover(gtx, &g.overlays.filters, "filters", func(gtx C) D {
+		return ui.Button{ID: "filters:btn", Text: "Filters"}.Layout(gtx, th, &g.overlays.filterBtn)
 	}, func(gtx C) D {
 		return layout.UniformInset(12).Layout(gtx, func(gtx C) D {
 			return kit.Col(gtx,
 				kit.Rigid(func(gtx C) D { return th.Caption(gtx, "Show") }),
 				kit.Rigid(kit.Gap(0, 10)),
 				kit.Rigid(func(gtx C) D {
-					return ui.Switch{ID: "filters:open-only", Label: "Open items only", On: g.openOnly}.Layout(gtx, th, &g.onlyOpen)
+					return ui.Switch{ID: "filters:open-only", Label: "Open items only", On: g.overlays.openOnly}.Layout(gtx, th, &g.overlays.onlyOpen)
 				}),
 				kit.Rigid(kit.Gap(0, 10)),
 				kit.Rigid(func(gtx C) D {
-					return ui.Checkbox{ID: "filters:mine", Label: "Assigned to me", Checked: g.mineOnly}.Layout(gtx, th, &g.mine)
+					return ui.Checkbox{ID: "filters:mine", Label: "Assigned to me", Checked: g.overlays.mineOnly}.Layout(gtx, th, &g.overlays.mine)
 				}),
 				kit.Rigid(kit.Gap(0, 14)),
 				kit.Rigid(func(gtx C) D {
-					return ui.Button{ID: "filters:apply", Text: "Apply", Style: ui.Solid}.Layout(gtx, th, &g.apply)
+					return ui.Button{ID: "filters:apply", Text: "Apply", Style: ui.Solid}.Layout(gtx, th, &g.overlays.apply)
 				}),
 			)
 		})
@@ -179,37 +196,36 @@ func (g *gallery) demoSelect(gtx C) D {
 	th := g.th
 	return kit.Row(gtx,
 		kit.Rigid(kit.Fixed(200, func(gtx C) D {
-			return ui.Select{ID: "size", Options: sizeOptions, Selected: g.sizeI}.Layout(gtx, th, &g.sizeSel)
+			return ui.Select{ID: "size", Options: choices(sizeOptions), Selected: sizeOptions[g.overlays.sizeI]}.Layout(gtx, th, &g.overlays.sizeSel)
 		})),
 		kit.Rigid(kit.Gap(10, 0)),
 		kit.Rigid(kit.Fixed(240, func(gtx C) D {
-			return ui.Select{ID: "zone", Options: zoneNames, Selected: g.zoneI}.Layout(gtx, th, &g.zone)
+			return ui.Select{ID: "zone", Options: choices(zoneNames), Selected: zoneNames[g.overlays.zoneI]}.Layout(gtx, th, &g.overlays.zone)
 		})),
 	)
 }
 
 func (g *gallery) demoDate(gtx C) D {
 	return kit.Fixed(220, func(gtx C) D {
-		return ui.DateField{ID: "due", Value: g.dueDate, Placeholder: "Pick a date"}.Layout(gtx, g.th, &g.due)
+		return ui.DateField{ID: "due", Value: g.overlays.dueDate, Placeholder: "Pick a date"}.Layout(gtx, g.th, &g.overlays.due)
 	})(gtx)
 }
 
 func (g *gallery) demoCombobox(gtx C) D {
 	return kit.Fixed(280, func(gtx C) D {
-		return ui.Combobox{ID: "prof", Placeholder: "Professor (type to search)", Options: profNames}.Layout(gtx, g.th, &g.prof)
+		return ui.Combobox{ID: "prof", Placeholder: "Professor (type to search)", Options: choices(profNames)}.Layout(gtx, g.th, &g.overlays.prof)
 	})(gtx)
 }
 
 func (g *gallery) demoDisclosure(gtx C) D {
 	th := g.th
-	g.tagsOpen.Update(gtx)
-	return ui.Disclosure{ID: "tags", Title: "Known professors", Trailing: fmt.Sprint(len(profNames)), Open: g.tagsOpen.Open, Body: func(gtx C) D {
-		var chips []kit.W
+	return ui.Disclosure{ID: "tags", Title: "Known professors", Trailing: fmt.Sprint(len(profNames)), Open: g.overlays.tagsOpen.Open, Body: func(gtx C) D {
+		var chips []layout.Widget
 		for _, n := range profNames {
 			chips = append(chips, func(gtx C) D { return th.Pill(gtx, n, th.Muted, th.Surface) })
 		}
 		return kit.Flow(gtx, 6, 6, chips...)
-	}}.Layout(gtx, th, &g.tagsOpen.Clickable)
+	}}.Layout(gtx, th, &g.overlays.tagsOpen.Clickable)
 }
 
 func (g *gallery) demoContextMenu(gtx C) D {
@@ -224,21 +240,20 @@ func (g *gallery) demoContextMenu(gtx C) D {
 				})
 			})
 		})
-	}}.Layout(gtx, th, &g.ctxMenu)
+	}}.Layout(gtx, th, &g.overlays.ctxMenu)
 }
 
 func (g *gallery) demoDialogs(gtx C) D {
 	th := g.th
-	return kit.Flex{Gap: kit.Space2p5, Align: layout.Middle}.Layout(gtx, th,
-		kit.Rigid(func(gtx C) D {
-			return ui.Button{ID: "dialog:open", Text: "Delete project…", Style: ui.Danger}.Layout(gtx, th, &g.delBtn)
-		}),
-		kit.Rigid(func(gtx C) D { return ui.Button{ID: "toast:info", Text: "Info toast"}.Layout(gtx, th, &g.toastBtns[0]) }),
-		kit.Rigid(func(gtx C) D {
-			return ui.Button{ID: "toast:good", Text: "Success toast"}.Layout(gtx, th, &g.toastBtns[1])
-		}),
-		kit.Rigid(func(gtx C) D { return ui.Button{ID: "toast:bad", Text: "Error toast"}.Layout(gtx, th, &g.toastBtns[2]) }),
-	)
+	btns := []layout.FlexChild{kit.Rigid(func(gtx C) D {
+		return ui.Button{ID: "dialog:open", Text: "Delete project…", Style: ui.Danger}.Layout(gtx, th, &g.overlays.delBtn)
+	})}
+	for i, t := range demoToasts {
+		btns = append(btns, kit.Rigid(func(gtx C) D {
+			return ui.Button{ID: t.id, Text: t.button}.Layout(gtx, th, &g.overlays.toastBtns[i])
+		}))
+	}
+	return kit.Flex{Gap: kit.Space2p5, Align: layout.Middle}.Layout(gtx, th, btns...)
 }
 
 // deleteDialog is the content of the confirm dialog hosted at the root.
@@ -246,7 +261,9 @@ func (g *gallery) deleteDialog(gtx C) D {
 	th := g.th
 	return ui.DialogContent{Title: "Delete project?", Body: func(gtx C) D {
 		return th.Paragraph(gtx, "This removes giokit and its 3 environments. It can't be undone.", th.Muted)
-	}, Actions: []kit.W{func(gtx C) D { return ui.Button{ID: "dialog:cancel", Text: "Cancel"}.Layout(gtx, th, &g.cancelDel) }, func(gtx C) D {
-		return ui.Button{ID: "dialog:delete", Text: "Delete", Style: ui.Danger}.Layout(gtx, th, &g.confirm)
+	}, Actions: []layout.Widget{func(gtx C) D {
+		return ui.Button{ID: "dialog:cancel", Text: "Cancel"}.Layout(gtx, th, &g.overlays.cancelDel)
+	}, func(gtx C) D {
+		return ui.Button{ID: "dialog:delete", Text: "Delete", Style: ui.Danger}.Layout(gtx, th, &g.overlays.confirm)
 	}}}.Layout(gtx, th)
 }

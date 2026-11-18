@@ -30,7 +30,7 @@ retained between frames except the state you keep.
 A frame has two halves, in this order:
 
 1. **Handle input.** Read clicks and events for this frame:
-   `if v.save.Clicked(gtx) {...}`, `if i, ok := v.lang.Update(gtx); ok {...}`.
+   `if v.save.Clicked(gtx) {...}`, `if id, ok := v.lang.Update(gtx); ok {...}`.
    Change your state.
 2. **Draw.** Lay out components from that state.
 
@@ -44,24 +44,33 @@ goroutine. Component state (a `kit.Clickable`, a `ui.SelectState`) lives
 there too, one per control, so it persists across frames. For a list of
 rows, keep it in a `kit.Pool[T]` keyed by row id. Background work goes
 through `kit.Spawn(app, work, done)` or `app.Post(f)`; `done` and `f` run on
-the UI goroutine.
+the UI goroutine. `Spawn` returns a `*kit.Task`: `Cancel` it when the result
+is no longer wanted.
+
+`App.Run` runs the window on its goroutine and returns the window's error
+when it closes; start it on a goroutine and hand the main goroutine to
+`kit.Main()`, as `examples/hello` does.
 
 ## Components
 
 A component is a struct of props laid out with the theme and its state:
 
 ```go
+langs := []ui.Choice{{ID: "en", Label: "English"}, {ID: "fr", Label: "Français"}}
 ui.Select{ID: "lang", Options: langs, Selected: v.lang}.Layout(gtx, th, &v.langState)
 ```
 
-Props are values you pass every frame (the selected index lives in your
-state, not the component's). Events come from the state's `Update` in the
-handle half. Every interactive component takes an `ID`: tests address it by
-id, and sub-parts are `ID/part` (`lang/field`, `lang/2`). The spoken label is
-the visible text, or a `Label` you pass for icon-only controls.
+Props are values you pass every frame (the selected option's ID lives in
+your state, not the component's). Items are `ui.Choice{ID, Label}`: the ID
+is stable and is what events report; the label is shown and spoken. Events
+come from the state's `Update` in the handle half. Every interactive
+component takes an `ID`: tests address it by id, and sub-parts are
+`ID/part` (`lang/field`, `lang/en`). The spoken label is the visible text,
+or a `Label` you pass for icon-only controls.
 
 Layout uses `kit.Flex` (rows and columns with gaps, padding, a surface) and
-the spacing scale `kit.Space1`…`kit.Space12` (4dp steps). Colours come from
+the spacing scale `kit.Space0p5`…`kit.Space12` (4dp steps, with half
+steps). Colours come from
 the theme (`th.Fg`, `th.Panel`, `th.Accent`…); sizes from `th.Metrics`.
 
 ## Themes
@@ -91,4 +100,5 @@ h.ExpectClean()
 `kittest` drives real pointer and keyboard input through Gio's router and
 renders offscreen (EGL, no display needed). `ExpectClean` runs the audits:
 stale frames, controls without labels, tiny or occluded targets, low
-contrast, missing glyphs. More in [testing.md](testing.md).
+contrast, missing glyphs. For background work, pass `h.App()` to
+`kit.Spawn` and call `h.RunTasks()`. More in [testing.md](testing.md).

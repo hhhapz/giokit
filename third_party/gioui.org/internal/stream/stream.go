@@ -50,32 +50,90 @@ const (
 // Stream holds the newest frame. The renderer uploads (or imports) it into
 // a texture it keeps per stream, and only when Seq has moved on.
 //
-// Imported frames are sampled for as long as they are on screen, so the
+// Imported frames are sampled for as long as they are on screen, so a
 // renderer holds the frame it has bound: such a frame is released when the
-// renderer lets go of it, not when a newer frame replaces it.
+// last renderer holding it lets go, not when a newer frame replaces it.
+// Several renderers (one per window) may draw the same stream; holds are
+// counted, and each Hold must be balanced by one Unhold of the same
+// sequence number.
+//
+// A frame's Release function runs exactly once, without the stream's lock
+// held, on the goroutine that ends the stream's need for the frame: the
+// producer's in Submit or Close, or a renderer's in Use or Unhold. It must
+// therefore be safe to call from any goroutine and should not block.
+//
+// The zero Stream is empty and ready to use.
 type Stream struct {
-	mu   sync.Mutex
-	cur  Frame
-	seq  uint64
-	size image.Point
-	held map[uint64]Frame // frames bound by a renderer, by sequence number
+	mu     sync.Mutex
+	cur    Frame
+	seq    uint64
+	size   image.Point
+	held   map[uint64]*heldFrame // frames bound by renderers, by sequence number
+	closed bool
 
 	importState atomic.Int32
 }
 
+// heldFrame is a frame bound by one or more renderers.
+type heldFrame struct {
+	frame   Frame
+	holders int
+}
+
 // Submit makes f the current frame and releases the previous one unless a
 // renderer holds it. It waits for an upload in progress, so a released
-// frame is never mid-copy.
-func (s *Stream) Submit(f Frame) {
+// frame is never mid-copy. Submitting an empty Frame releases the current
+// frame and leaves the stream drawing nothing.
+//
+// After Close, Submit releases f immediately and reports false; otherwise
+// it reports true.
+func (s *Stream) Submit(f Frame) bool {
 	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		release(f)
+		return false
+	}
+	old := s.replace(f)
+	s.mu.Unlock()
+	release(old)
+	return true
+}
+
+// Close empties the stream for good: the current frame is released (once
+// no renderer holds it) and later frames are refused. Frames still held are
+// released when their renderers Unhold them, which happens at the latest
+// when a renderer drops the stream's texture after a frame that does not
+// draw it. Close may be called more than once and from any goroutine.
+func (s *Stream) Close() {
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return
+	}
+	s.closed = true
+	old := s.replace(Frame{})
+	s.mu.Unlock()
+	release(old)
+}
+
+// replace makes f the current frame and returns the previous one if it
+// must be released now, or the empty Frame if a renderer holds it. s.mu
+// must be held.
+func (s *Stream) replace(f Frame) Frame {
 	old, oldSeq := s.cur, s.seq
 	s.cur = f
 	s.seq++
 	s.size = f.size()
-	_, held := s.held[oldSeq]
-	s.mu.Unlock()
-	if !held && old.Release != nil {
-		old.Release()
+	if _, held := s.held[oldSeq]; held {
+		return Frame{}
+	}
+	return old
+}
+
+func release(f Frame) {
+	if f.Release != nil {
+		f.Release()
 	}
 }
 
@@ -93,44 +151,57 @@ func (s *Stream) ImportState() int { return int(s.importState.Load()) }
 func (s *Stream) SetImportState(v int) { s.importState.Store(int32(v)) }
 
 // Use calls fn with the current frame and its sequence number, holding the
-// stream so the frame cannot be released during fn. Inside fn, the
-// renderer may Hold the current frame and Unhold one it held before.
+// stream's lock so the frame cannot be released during fn. Inside fn, the
+// renderer may Hold the current frame and Unhold one it held before. Frames
+// whose last hold ends in fn are released after the lock is dropped.
 func (s *Stream) Use(fn func(u *Use)) {
 	s.mu.Lock()
 	u := Use{s: s, Frame: s.cur, Seq: s.seq}
 	fn(&u)
 	s.mu.Unlock()
-	for _, r := range u.release {
-		r()
+	for _, f := range u.release {
+		release(f)
 	}
 }
 
-// Use is the renderer's view of the stream during Stream.Use.
+// Use is the renderer's view of the stream during Stream.Use. It is valid
+// only inside the function passed to Use.
 type Use struct {
 	Frame   Frame
 	Seq     uint64
 	s       *Stream
-	release []func()
+	release []Frame
 }
 
-// Hold keeps the current frame from being released until Unhold.
+// Hold keeps the current frame from being released until a matching
+// Unhold. Each renderer holds a given frame at most once.
 func (u *Use) Hold() {
 	if u.s.held == nil {
-		u.s.held = make(map[uint64]Frame)
+		u.s.held = make(map[uint64]*heldFrame)
 	}
-	u.s.held[u.Seq] = u.Frame
+	h := u.s.held[u.Seq]
+	if h == nil {
+		h = &heldFrame{frame: u.Frame}
+		u.s.held[u.Seq] = h
+	}
+	h.holders++
 }
 
-// Unhold lets go of a frame held earlier; it is released (after Use returns)
-// unless it is still the current frame.
+// Unhold ends one hold of the frame with sequence number seq. When its last
+// hold ends, the frame is released (after Use returns) unless it is still
+// the current frame. Unholding a frame that is not held does nothing.
 func (u *Use) Unhold(seq uint64) {
-	f, ok := u.s.held[seq]
+	h, ok := u.s.held[seq]
 	if !ok {
 		return
 	}
+	h.holders--
+	if h.holders > 0 {
+		return
+	}
 	delete(u.s.held, seq)
-	if seq != u.s.seq && f.Release != nil {
-		u.release = append(u.release, f.Release)
+	if seq != u.s.seq {
+		u.release = append(u.release, h.frame)
 	}
 }
 

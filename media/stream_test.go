@@ -93,8 +93,12 @@ func dump(t *testing.T, path string, img image.Image) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer f.Close()
-	png.Encode(f, img)
+	if err := png.Encode(f, img); err != nil {
+		t.Error(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Error(err)
+	}
 }
 
 // flatDiff is the mean per-channel difference over pixels at least 3 pixels

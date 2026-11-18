@@ -3,13 +3,15 @@ package kit
 import (
 	"image"
 
+	"gioui.org/layout"
 	"gioui.org/op"
 	"gioui.org/op/clip"
 )
 
 // Group names a region: id for tests, label for screen readers, sized to
-// what w draws.
-func Group(gtx C, id, label string, w W) D {
+// what w draws. It records no role: a caller whose region is a semantic
+// group, toolbar or status sets that role on id with SetRole.
+func Group(gtx layout.Context, id, label string, w layout.Widget) layout.Dimensions {
 	m := op.Record(gtx.Ops)
 	dims := w(gtx)
 	call := m.Stop()

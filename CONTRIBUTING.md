@@ -18,7 +18,11 @@ the same ones the agent guide (`AGENTS.md`) enforces.
   exported API. If you need something private, export a primitive.
 - **Every component ships with a gallery demo and test and a conformance
   row** (`kit/ui/conform_test.go`). Controls that open a layer use
-  `conform.Composite`.
+  `conform.Composite`; focus-group collections use `conform.Group`.
+- **Document the contract:** every exported identifier has a doc comment
+  saying what it draws, what it reads and which events it consumes; state
+  types say their zero value, whether they may be copied, and that the UI
+  goroutine owns them.
 - **No hard-coded colours, sizes or English:** colours from the palette,
   sizes from `th.Metrics` and the `kit.SpaceN` scale, text from
   `th.Strings`. `internal/lint` enforces this (its baselines may only go

@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"gioui.org/layout"
+	"gioui.org/unit"
 
 	"github.com/hhhapz/giokit/kit"
 	"github.com/hhhapz/giokit/kit/ui"
@@ -34,10 +35,69 @@ type category struct {
 	pages []page
 }
 
-var categories = []category{
+// catalog is the gallery's table of contents: its categories, their pages
+// in sidebar order, and the sidebar's rows. It is built once and never
+// changed; a gallery reads it through its catalog field.
+type catalog struct {
+	categories []category
+	pages      []page
+	rows       []navRow
+}
+
+// navRow is one sidebar row: a category header or a page.
+type navRow struct {
+	header string
+	page   int // index into pages, when header == ""
+}
+
+func newCatalog(categories []category) *catalog {
+	c := &catalog{categories: categories}
+	for _, cat := range categories {
+		c.rows = append(c.rows, navRow{header: cat.title})
+		for _, p := range cat.pages {
+			c.rows = append(c.rows, navRow{page: len(c.pages)})
+			c.pages = append(c.pages, p)
+		}
+	}
+	return c
+}
+
+// rowOfPage is the sidebar row index of pages[i].
+func (c *catalog) rowOfPage(i int) int {
+	for r, row := range c.rows {
+		if row.header == "" && row.page == i {
+			return r
+		}
+	}
+	return 0
+}
+
+// page returns the page with the given id.
+func (c *catalog) page(id string) (page, bool) {
+	for _, p := range c.pages {
+		if p.id == id {
+			return p, true
+		}
+	}
+	return page{}, false
+}
+
+// pageIDs lists every page id in sidebar order.
+func (c *catalog) pageIDs() []string {
+	ids := make([]string, len(c.pages))
+	for i, p := range c.pages {
+		ids[i] = p.id
+	}
+	return ids
+}
+
+// demoCatalog is every demo, grouped into pages and categories. Page
+// layouts reach the catalog through gallery.catalog, not this variable, so
+// that the "all" page can list it without an initialization cycle.
+var demoCatalog = newCatalog([]category{
 	{"Getting started", []page{
-		{id: "overview", title: "Overview", layout: (*gallery).overview},
-		{id: "all", title: "All components"}, // layout set in init: it lists pages
+		{id: "overview", title: "Overview", layout: (*gallery).overviewPage},
+		{id: "all", title: "All components", layout: (*gallery).allPage},
 	}},
 	{"Inputs", []page{
 		{id: "buttons", title: "Buttons", demos: []demo{
@@ -71,8 +131,8 @@ var categories = []category{
 		}},
 	}},
 	{"Data display", []page{
-		{id: "collections", title: "Lists, trees, tables", layout: (*gallery).workspace},
-		{id: "logs", title: "Logs", layout: (*gallery).logs},
+		{id: "collections", title: "Lists, trees, tables", layout: (*gallery).workspacePage},
+		{id: "logs", title: "Logs", layout: (*gallery).logsPage},
 		{id: "video", title: "Video", demos: []demo{
 			{"Video stream", (*gallery).demoVideo},
 		}},
@@ -102,99 +162,65 @@ var categories = []category{
 			{"Shortcuts", (*gallery).demoKeyboard},
 		}},
 	}},
-}
-
-// pages is every page in sidebar order.
-var pages []page
-
-func init() {
-	categories[0].pages[1].layout = (*gallery).allPage
-	for _, c := range categories {
-		pages = append(pages, c.pages...)
-	}
-}
-
-// navRow is one sidebar row: a category header or a page.
-type navRow struct {
-	header string
-	page   int // index into pages, when header == ""
-}
-
-var navRows = func() []navRow {
-	var out []navRow
-	i := 0
-	for _, c := range categories {
-		out = append(out, navRow{header: c.title})
-		for range c.pages {
-			out = append(out, navRow{page: i})
-			i++
-		}
-	}
-	return out
-}()
-
-// rowOfPage is the sidebar list index of pages[i].
-func rowOfPage(i int) int {
-	for r, row := range navRows {
-		if row.header == "" && row.page == i {
-			return r
-		}
-	}
-	return 0
-}
+})
 
 func (g *gallery) sidebar(gtx C) D {
 	th := g.th
-	ids := make([]string, len(pages))
-	for i, p := range pages {
-		ids[i] = p.id
+	cat := g.catalog
+	nav := keyNav{
+		ID:      "sidebar",
+		IDs:     cat.pageIDs(),
+		Current: &g.page,
+		Reveal:  func(i int) { g.side.ScrollIntoView(cat.rowOfPage(i)) },
 	}
 	return kit.Fill(gtx, th.Panel, func(gtx C) D {
 		gtx.Constraints.Min = gtx.Constraints.Max
-		return kit.Pad(8, 10, func(gtx C) D {
-			return navKeys(gtx, &g.navGroup, func(i int) { g.side.ScrollIntoView(rowOfPage(i)) }, "sidebar", ids, g.page,
-				func(id string) { g.page = id }, func(gtx C) D {
-					return th.List(gtx, &g.side, "sidebar", len(navRows), func(gtx C, r int) D {
-						row := navRows[r]
-						if row.header != "" {
-							top := unitDp(14)
-							if r == 0 {
-								top = 2
-							}
-							return layout.Inset{Top: top, Bottom: 4, Left: 10}.Layout(gtx, func(gtx C) D {
-								return th.Caption(gtx, row.header)
-							})
+		return kit.Pad(th.Space(kit.Space2), th.Space(kit.Space2p5), func(gtx C) D {
+			return nav.Layout(gtx, &g.navGroup, func(gtx C) D {
+				return th.List(gtx, &g.side, "sidebar", len(cat.rows), func(gtx C, r int) D {
+					row := cat.rows[r]
+					if row.header != "" {
+						top := th.Space(kit.Space3p5)
+						if r == 0 {
+							top = th.Space(kit.Space0p5)
 						}
-						p := pages[row.page]
-						trail, tc := "", th.Dim
-						if p.id == "overview" {
-							trail, tc = fmt.Sprint(g.openCount()), th.Warn
-						}
-						return layout.Inset{Bottom: 1}.Layout(gtx, func(gtx C) D {
-							return ui.NavItem{ID: "nav:" + p.id, Label: p.title, Trailing: trail, TrailColor: tc, Active: g.page == p.id}.Layout(gtx, th, g.nav.Get(p.id))
+						return layout.Inset{Top: top, Bottom: th.Space(kit.Space1), Left: th.Space(kit.Space2p5)}.Layout(gtx, func(gtx C) D {
+							return th.Caption(gtx, row.header)
 						})
+					}
+					p := cat.pages[row.page]
+					trail, tc := "", th.Dim
+					if p.id == "overview" {
+						trail, tc = fmt.Sprint(g.openCount()), th.Warn
+					}
+					return layout.Inset{Bottom: navItemGap}.Layout(gtx, func(gtx C) D {
+						return ui.NavItem{ID: "nav:" + p.id, Label: p.title, Trailing: trail, TrailColor: tc, Active: g.page == p.id}.Layout(gtx, th, g.nav.Get(p.id))
 					})
 				})
+			})
 		})(gtx)
 	})
 }
 
+// navItemGap separates sidebar rows: a hairline, below the spacing scale.
+const navItemGap unit.Dp = 1
+
 // currentPage lays out the selected page.
 func (g *gallery) currentPage(gtx C) D {
-	for _, p := range pages {
-		if p.id == g.page {
-			if p.layout != nil {
-				return p.layout(g, gtx)
-			}
-			return g.demoPage(gtx, p)
-		}
+	p, ok := g.catalog.page(g.page)
+	switch {
+	case !ok:
+		return D{}
+	case p.layout != nil:
+		return p.layout(g, gtx)
+	default:
+		return g.demoPage(gtx, p)
 	}
-	return D{}
 }
 
 // demoPage lays out a page's demos as cards in a scrolling column.
 func (g *gallery) demoPage(gtx C, p page) D {
-	var actions kit.W
+	var actions layout.Widget
 	if p.actions != nil {
 		actions = func(gtx C) D { return p.actions(g, gtx) }
 	}
@@ -216,7 +242,7 @@ func (g *gallery) allPage(gtx C) D {
 		d     demo
 	}
 	var all []entry
-	for _, p := range pages {
+	for _, p := range g.catalog.pages {
 		for _, d := range p.demos {
 			title := d.title
 			if !strings.EqualFold(title, p.title) {

@@ -9,6 +9,7 @@ import (
 
 	"gioui.org/io/key"
 
+	"github.com/hhhapz/giokit/kit"
 	"github.com/hhhapz/giokit/kit/ui"
 	"github.com/hhhapz/giokit/kittest"
 )
@@ -34,13 +35,13 @@ func TestMenuMouse(t *testing.T) {
 		t.Error("Save should be disabled")
 	}
 	h.ClickID("file/save")
-	if !g.fileMenu.Opened() {
+	if !g.overlays.fileMenu.Opened() {
 		t.Fatal("clicking a disabled item closed the menu")
 	}
 	h.Hover("file/new")
 	h.ClickID("file/new")
-	if g.fileMenu.Opened() || g.status != "File → new" {
-		t.Fatalf("pick: open %v, status %q", g.fileMenu.Opened(), g.status)
+	if g.overlays.fileMenu.Opened() || g.status != "File → new" {
+		t.Fatalf("pick: open %v, status %q", g.overlays.fileMenu.Opened(), g.status)
 	}
 	h.ExpectNoID("file/new")
 	if f := h.FocusedID(); f != "file:btn" {
@@ -49,8 +50,8 @@ func TestMenuMouse(t *testing.T) {
 	// A press outside closes it, and goes nowhere else.
 	h.ClickID("file:btn")
 	h.ClickID("more:btn")
-	if g.fileMenu.Opened() || g.moreMenu.Opened() {
-		t.Fatalf("outside press: file menu open %v, other menu open %v (the press leaked through)", g.fileMenu.Opened(), g.moreMenu.Opened())
+	if g.overlays.fileMenu.Opened() || g.overlays.moreMenu.Opened() {
+		t.Fatalf("outside press: file menu open %v, other menu open %v (the press leaked through)", g.overlays.fileMenu.Opened(), g.overlays.moreMenu.Opened())
 	}
 }
 
@@ -60,11 +61,11 @@ func TestMenuKeyboard(t *testing.T) {
 	g, h := overlaysPage(t, "menus")
 	h.ClickID("file:btn")
 	h.Key(key.NameEscape, 0)
-	if g.fileMenu.Opened() || h.FocusedID() != "file:btn" {
-		t.Fatalf("Escape: open %v, focus %q", g.fileMenu.Opened(), h.FocusedID())
+	if g.overlays.fileMenu.Opened() || h.FocusedID() != "file:btn" {
+		t.Fatalf("Escape: open %v, focus %q", g.overlays.fileMenu.Opened(), h.FocusedID())
 	}
 	h.Key(key.NameReturn, 0)
-	if !g.fileMenu.Opened() {
+	if !g.overlays.fileMenu.Opened() {
 		t.Fatal("Enter on the trigger did not open the menu")
 	}
 	h.Key(key.NameDownArrow, 0)
@@ -77,18 +78,18 @@ func TestMenuKeyboard(t *testing.T) {
 		t.Fatalf("Down ×3: focus %q, want file:delete (Save is disabled)", f)
 	}
 	h.Key(key.NameReturn, 0)
-	if !g.dialog.Opened() {
+	if !g.overlays.dialog.Opened() {
 		t.Fatal("Enter on Delete… did not open the dialog")
 	}
 	h.Key(key.NameEscape, 0) // closes the dialog
-	if g.dialog.Opened() {
+	if g.overlays.dialog.Opened() {
 		t.Fatal("Escape did not close the dialog")
 	}
 	h.ClickID("file:btn")
 	h.Key(key.NameDownArrow, 0)
 	h.Tab(false)
-	if g.fileMenu.Opened() || h.FocusedID() != "file:btn" {
-		t.Fatalf("Tab in the menu: open %v, focus %q", g.fileMenu.Opened(), h.FocusedID())
+	if g.overlays.fileMenu.Opened() || h.FocusedID() != "file:btn" {
+		t.Fatalf("Tab in the menu: open %v, focus %q", g.overlays.fileMenu.Opened(), h.FocusedID())
 	}
 }
 
@@ -125,7 +126,7 @@ func TestPopupFlipsAtBottom(t *testing.T) {
 func TestSelect(t *testing.T) {
 	g, h := overlaysPage(t, "pickers")
 	h.ClickID("size/field")
-	if f := h.FocusedID(); f != "size/1" {
+	if f := h.FocusedID(); f != "size/Medium" {
 		t.Errorf("open: focus %q, want the selected option size:1", f)
 	}
 	if w, f := h.ExpectID("size").Dx(), h.ExpectID("size/field").Dx(); w < f {
@@ -134,21 +135,21 @@ func TestSelect(t *testing.T) {
 	h.ExpectClean()
 	h.Key(key.NameDownArrow, 0)
 	h.Key(key.NameReturn, 0)
-	if g.sizeI != 2 || g.sizeSel.Opened() {
-		t.Fatalf("keyboard pick: index %d, open %v", g.sizeI, g.sizeSel.Opened())
+	if g.overlays.sizeI != 2 || g.overlays.sizeSel.Opened() {
+		t.Fatalf("keyboard pick: index %d, open %v", g.overlays.sizeI, g.overlays.sizeSel.Opened())
 	}
 	h.ExpectTextIn("size/field", "Large")
 	h.ClickID("size/field")
-	h.ClickID("size/0")
-	if g.sizeI != 0 {
-		t.Fatalf("mouse pick: index %d", g.sizeI)
+	h.ClickID("size/Small")
+	if g.overlays.sizeI != 0 {
+		t.Fatalf("mouse pick: index %d", g.overlays.sizeI)
 	}
 	h.ClickID("zone/field")
 	h.ExpectID("zone/list")
 	h.ScrollID("zone/list", 600)
-	h.ClickID("zone/19")
-	if g.zoneI != 19 {
-		t.Fatalf("picked zone %d, want 19", g.zoneI)
+	h.ClickID(kit.Part("zone", "Pacific/Honolulu"))
+	if g.overlays.zoneI != 19 {
+		t.Fatalf("picked zone %d, want 19", g.overlays.zoneI)
 	}
 }
 
@@ -158,11 +159,11 @@ func TestContextMenu(t *testing.T) {
 	area := h.ExpectID("ctx/area")
 	at := area.Min.Add(image.Pt(60, 20))
 	h.Click(at)
-	if g.ctxMenu.Opened() {
+	if g.overlays.ctxMenu.Opened() {
 		t.Fatal("left click opened the context menu")
 	}
 	h.RightClick(at)
-	if !g.ctxMenu.Opened() {
+	if !g.overlays.ctxMenu.Opened() {
 		t.Fatal("right-click did not open the context menu")
 	}
 	if r := h.ExpectID("ctx"); abs(r.Min.X-at.X) > 2 || abs(r.Min.Y-at.Y) > 2 {
@@ -170,8 +171,8 @@ func TestContextMenu(t *testing.T) {
 	}
 	h.ExpectClean()
 	h.ClickID("ctx/rename")
-	if g.status != "Context → rename" || g.ctxMenu.Opened() {
-		t.Fatalf("pick: status %q, open %v", g.status, g.ctxMenu.Opened())
+	if g.status != "Context → rename" || g.overlays.ctxMenu.Opened() {
+		t.Fatalf("pick: status %q, open %v", g.status, g.overlays.ctxMenu.Opened())
 	}
 }
 
@@ -183,12 +184,12 @@ func TestPopoverForm(t *testing.T) {
 	h.ClickID("filters:btn")
 	h.ClickID("filters:open-only")
 	h.ClickID("filters:mine")
-	if !g.filters.Opened() || !g.openOnly || !g.mineOnly {
-		t.Fatalf("popover form: open %v, openOnly %v, mine %v", g.filters.Opened(), g.openOnly, g.mineOnly)
+	if !g.overlays.filters.Opened() || !g.overlays.openOnly || !g.overlays.mineOnly {
+		t.Fatalf("popover form: open %v, openOnly %v, mine %v", g.overlays.filters.Opened(), g.overlays.openOnly, g.overlays.mineOnly)
 	}
 	h.ExpectClean()
 	h.ClickID("filters:apply")
-	if g.filters.Opened() {
+	if g.overlays.filters.Opened() {
 		t.Fatal("Apply did not close the popover")
 	}
 }
@@ -198,7 +199,7 @@ func TestPopoverForm(t *testing.T) {
 func TestDialogModal(t *testing.T) {
 	g, h := overlaysPage(t, "overlays")
 	h.ClickID("dialog:open")
-	if !g.dialog.Opened() {
+	if !g.overlays.dialog.Opened() {
 		t.Fatal("dialog did not open")
 	}
 	h.ExpectClean()
@@ -212,13 +213,13 @@ func TestDialogModal(t *testing.T) {
 	}
 	h.ClickID("dialog:open")
 	h.Click(image.Pt(10, 10)) // the backdrop
-	if g.dialog.Opened() {
+	if g.overlays.dialog.Opened() {
 		t.Fatal("backdrop click did not close the dialog")
 	}
 	h.ClickID("dialog:open")
 	h.ClickID("dialog:delete")
-	if g.dialog.Opened() || g.toasts.Len() != 1 {
-		t.Fatalf("Delete: dialog open %v, toasts %d", g.dialog.Opened(), g.toasts.Len())
+	if g.overlays.dialog.Opened() || g.overlays.toasts.Len() != 1 {
+		t.Fatalf("Delete: dialog open %v, toasts %d", g.overlays.dialog.Opened(), g.overlays.toasts.Len())
 	}
 }
 
@@ -228,24 +229,24 @@ func TestToasts(t *testing.T) {
 	g, h := overlaysPage(t, "overlays")
 	h.ClickID("toast:info")
 	h.ClickID("toast:bad")
-	if g.toasts.Len() != 2 {
-		t.Fatalf("toasts: %d", g.toasts.Len())
+	if g.overlays.toasts.Len() != 2 {
+		t.Fatalf("toasts: %d", g.overlays.toasts.Len())
 	}
-	a, b := h.ExpectID("toast:1"), h.ExpectID("toast:2")
+	a, b := h.ExpectID("toasts/1"), h.ExpectID("toasts/2")
 	if b.Min.Y < a.Max.Y || b.Max.X > h.Size.X {
 		t.Errorf("toasts not stacked newest-last at the bottom right: %v, %v", a, b)
 	}
 	h.ExpectText("Build failed")
 	h.ExpectClean()
-	h.ClickID("toast:1/close")
-	if g.toasts.Len() != 1 {
-		t.Fatalf("close button: %d left", g.toasts.Len())
+	h.ClickID("toasts/1/dismiss")
+	if g.overlays.toasts.Len() != 1 {
+		t.Fatalf("close button: %d left", g.overlays.toasts.Len())
 	}
 	h.Wait(ui.ToastDuration)
-	if g.toasts.Len() != 0 {
-		t.Fatalf("after ToastDuration: %d left", g.toasts.Len())
+	if g.overlays.toasts.Len() != 0 {
+		t.Fatalf("after ToastDuration: %d left", g.overlays.toasts.Len())
 	}
-	h.ExpectNoID("toast:2")
+	h.ExpectNoID("toasts/2")
 }
 
 // TestOverlaySheet renders every overlay open, for review
@@ -299,14 +300,14 @@ func TestDateField(t *testing.T) {
 	}
 	h.ExpectText("December 2026")
 	h.Key(key.NameReturn, 0)
-	if g.due.Opened() || !g.dueDate.Equal(time.Date(2026, 12, 5, 0, 0, 0, 0, time.Local)) {
-		t.Fatalf("Enter: open %v, date %v", g.due.Opened(), g.dueDate)
+	if g.overlays.due.Opened() || !g.overlays.dueDate.Equal(time.Date(2026, 12, 5, 0, 0, 0, 0, time.Local)) {
+		t.Fatalf("Enter: open %v, date %v", g.overlays.due.Opened(), g.overlays.dueDate)
 	}
 	h.ClickID("due/field")
 	h.ClickID("due/prev")
 	h.ClickID("due/2026-11-03")
-	if !g.dueDate.Equal(time.Date(2026, 11, 3, 0, 0, 0, 0, time.Local)) {
-		t.Fatalf("click: date %v", g.dueDate)
+	if !g.overlays.dueDate.Equal(time.Date(2026, 11, 3, 0, 0, 0, 0, time.Local)) {
+		t.Fatalf("click: date %v", g.overlays.dueDate)
 	}
 	h.ExpectTextIn("due/field", "Tue, Nov 3, 2026")
 }
@@ -337,8 +338,8 @@ func TestDateFieldYearsAndMonths(t *testing.T) {
 	h.ClickID("due/1950-03")
 	h.ExpectText("March 1950")
 	h.ClickID("due/1950-03-14")
-	if g.due.Opened() || !g.dueDate.Equal(time.Date(1950, 3, 14, 0, 0, 0, 0, time.Local)) {
-		t.Fatalf("birthday: open %v, date %v", g.due.Opened(), g.dueDate)
+	if g.overlays.due.Opened() || !g.overlays.dueDate.Equal(time.Date(1950, 3, 14, 0, 0, 0, 0, time.Local)) {
+		t.Fatalf("birthday: open %v, date %v", g.overlays.due.Opened(), g.overlays.dueDate)
 	}
 
 	// Keyboard: reopen on March 1950, zoom out, move, pick with Enter.
@@ -374,34 +375,34 @@ func TestCombobox(t *testing.T) {
 	g, h := overlaysPage(t, "text")
 	h.ClickID("prof")
 	h.Type("ka")
-	if !g.prof.Opened() {
+	if !g.overlays.prof.Opened() {
 		t.Fatal("typing a match did not open the suggestions")
 	}
 	if f := h.FocusedID(); f != "prof" {
 		t.Errorf("focus moved to %q, want the field", f)
 	}
-	h.ExpectID("prof/opt/0") // Kathryn Hare
-	h.ExpectID("prof/opt/2") // Lila Kari
+	h.ExpectID("prof/opt/Kathryn Hare")
+	h.ExpectID("prof/opt/Lila Kari")
 	h.ExpectClean()
 	h.Key(key.NameDownArrow, 0)
 	h.Key(key.NameDownArrow, 0)
 	h.Key(key.NameReturn, 0)
-	if got := g.prof.Editor.Text(); got != "Karen Yeats" || g.prof.Opened() {
-		t.Fatalf("Down Down Enter: %q (open %v)", got, g.prof.Opened())
+	if got := g.overlays.prof.Editor.Text(); got != "Karen Yeats" || g.overlays.prof.Opened() {
+		t.Fatalf("Down Down Enter: %q (open %v)", got, g.overlays.prof.Opened())
 	}
-	g.prof.Editor.SetText("")
+	g.overlays.prof.Editor.SetText("")
 	h.Type("menez")
-	h.ClickID("prof/opt/0")
-	if got := g.prof.Editor.Text(); got != "Alfred Menezes" {
+	h.ClickID("prof/opt/Alfred Menezes")
+	if got := g.overlays.prof.Editor.Text(); got != "Alfred Menezes" {
 		t.Fatalf("click: %q", got)
 	}
-	g.prof.Editor.SetText("")
+	g.overlays.prof.Editor.SetText("")
 	h.Type("i")
 	h.Key(key.NameEscape, 0)
-	if g.prof.Opened() {
+	if g.overlays.prof.Opened() {
 		t.Fatal("Escape did not close the suggestions")
 	}
-	if g.prof.Editor.Text() != "i" {
+	if g.overlays.prof.Editor.Text() != "i" {
 		t.Error("Escape changed the text")
 	}
 }
@@ -414,7 +415,7 @@ func TestDisclosureFlow(t *testing.T) {
 		t.Fatal("closed disclosure shows its body")
 	}
 	h.ClickID("tags")
-	if !g.tagsOpen.Open {
+	if !g.overlays.tagsOpen.Open {
 		t.Fatal("click did not open")
 	}
 	header := h.ExpectID("tags")
@@ -427,7 +428,7 @@ func TestDisclosureFlow(t *testing.T) {
 		h.Tab(false)
 	}
 	h.Key(key.NameSpace, 0)
-	if g.tagsOpen.Open {
+	if g.overlays.tagsOpen.Open {
 		t.Fatal("Space on the focused header did not close it")
 	}
 	h.ExpectClean()

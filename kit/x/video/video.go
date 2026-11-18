@@ -8,6 +8,7 @@ import (
 	"math"
 
 	"gioui.org/f32"
+	"gioui.org/layout"
 	"gioui.org/op"
 	"gioui.org/op/clip"
 	"gioui.org/op/paint"
@@ -34,22 +35,30 @@ const (
 //
 // Before the first frame it draws nothing. To redraw on new frames, set
 // the stream's OnFrame to invalidate the window (kit.App.Invalidate).
+//
+// Video only reads the stream; its producer owns it. When the source ends,
+// the producer calls Stream.Close, which releases the retained frame and
+// refuses later ones; Video then draws nothing. Close does not call
+// OnFrame, so invalidate the window yourself if the video is on screen.
 type Video struct {
-	ID     string
-	Stream *paint.Stream
-	Fit    Fit
-	Label  string // what the video shows, for screen readers; default th.Strings.Video
+	ID     string        // the image area's id
+	Stream *paint.Stream // the frames; nil draws nothing
+	Fit    Fit           // how a frame fills the area; FitContain is the zero value
+	Label  string        // what the video shows, for screen readers; default th.Strings.Video
 }
 
-// VideoState records where the last layout put the frame.
-type VideoState struct {
+// State records where the last layout put the frame, for mapping pointer
+// positions and overlays. The zero value maps nothing until the first
+// layout with a frame. It holds no resources and may be copied.
+type State struct {
 	dst   rectF       // frame's rectangle in widget pixels (may exceed the widget)
 	frame image.Point // frame size in pixels
 	size  image.Point // widget size
 }
 
-// Layout draws the stream's current frame.
-func (v Video) Layout(gtx C, th *kit.Theme, st *VideoState) D {
+// Layout draws the stream's current frame, filling the constraints, and
+// records its placement in st. A nil Stream draws nothing.
+func (v Video) Layout(gtx layout.Context, th *kit.Theme, st *State) layout.Dimensions {
 	size := gtx.Constraints.Max
 	st.size = size
 	defer clip.Rect{Max: size}.Push(gtx.Ops).Pop()
@@ -60,13 +69,13 @@ func (v Video) Layout(gtx C, th *kit.Theme, st *VideoState) D {
 	kit.TagImage(gtx, v.ID, label)
 	if v.Stream == nil {
 		st.frame, st.dst = image.Point{}, rectF{}
-		return D{Size: size}
+		return layout.Dimensions{Size: size}
 	}
 	fs := v.Stream.Size()
 	st.frame = fs
 	if fs.X <= 0 || fs.Y <= 0 || size.X <= 0 || size.Y <= 0 {
 		st.dst = rectF{}
-		return D{Size: size}
+		return layout.Dimensions{Size: size}
 	}
 	st.dst = place(v.Fit, fs, size)
 	scale := f32.Pt(st.dst.Dx()/float32(fs.X), st.dst.Dy()/float32(fs.Y))
@@ -75,7 +84,7 @@ func (v Video) Layout(gtx C, th *kit.Theme, st *VideoState) D {
 	defer clip.Rect{Max: fs}.Push(gtx.Ops).Pop()
 	v.Stream.Add(gtx.Ops)
 	paint.PaintOp{}.Add(gtx.Ops)
-	return D{Size: size}
+	return layout.Dimensions{Size: size}
 }
 
 // place returns the frame's rectangle within an area of the given size.
@@ -100,11 +109,11 @@ func place(fit Fit, frame, area image.Point) rectF {
 }
 
 // Frame is the frame size at the last layout; zero before the first frame.
-func (st *VideoState) Frame() image.Point { return st.frame }
+func (st *State) Frame() image.Point { return st.frame }
 
 // Content is where the frame was drawn, in the widget's pixel coordinates.
 // It extends past the widget for FitCover and an oversized FitNone.
-func (st *VideoState) Content() image.Rectangle {
+func (st *State) Content() image.Rectangle {
 	r := func(v float32) int { return int(math.Round(float64(v))) }
 	return image.Rect(r(st.dst.Min.X), r(st.dst.Min.Y), r(st.dst.Max.X), r(st.dst.Max.Y))
 }
@@ -112,7 +121,7 @@ func (st *VideoState) Content() image.Rectangle {
 // ToFrame converts a point in the widget (pixels, as pointer events report
 // it) to frame pixels. ok is false outside the visible frame, such as in
 // FitContain's bars.
-func (st *VideoState) ToFrame(p f32.Point) (f32.Point, bool) {
+func (st *State) ToFrame(p f32.Point) (f32.Point, bool) {
 	if st.dst.Empty() {
 		return f32.Point{}, false
 	}
@@ -127,7 +136,7 @@ func (st *VideoState) ToFrame(p f32.Point) (f32.Point, bool) {
 
 // FromFrame converts frame pixels to widget pixels: where to draw an overlay
 // that should sit on a spot in the video.
-func (st *VideoState) FromFrame(q f32.Point) f32.Point {
+func (st *State) FromFrame(q f32.Point) f32.Point {
 	if st.frame.X == 0 || st.frame.Y == 0 {
 		return f32.Point{}
 	}
@@ -143,8 +152,3 @@ type rectF struct{ Min, Max f32.Point }
 func (r rectF) Dx() float32 { return r.Max.X - r.Min.X }
 func (r rectF) Dy() float32 { return r.Max.Y - r.Min.Y }
 func (r rectF) Empty() bool { return r.Dx() <= 0 || r.Dy() <= 0 }
-
-type (
-	C = kit.C
-	D = kit.D
-)

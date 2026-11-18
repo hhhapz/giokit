@@ -41,7 +41,7 @@ func benchLayout(b *testing.B, page string) {
 // BenchmarkLayout is the layout half of BenchmarkFrame (which also renders
 // and routes input through kittest), page by page.
 func BenchmarkLayout(b *testing.B) {
-	for _, p := range pages {
+	for _, p := range demoCatalog.pages {
 		b.Run(p.id, func(b *testing.B) { benchLayout(b, p.id) })
 	}
 }

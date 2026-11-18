@@ -2,7 +2,20 @@ package x
 
 import (
 	"testing"
+	"time"
 )
+
+func TestActiveLyric(t *testing.T) {
+	lines := []LyricLine{{At: time.Second}, {At: 2 * time.Second}, {At: 2 * time.Second}, {At: 5 * time.Second}}
+	for at, want := range map[time.Duration]int{0: -1, time.Second: 0, 1999 * time.Millisecond: 0, 2 * time.Second: 2, time.Hour: 3} {
+		if got := ActiveLyric(lines, at); got != want {
+			t.Errorf("ActiveLyric(%v) = %d, want %d", at, got, want)
+		}
+	}
+	if got := ActiveLyric(nil, time.Second); got != -1 {
+		t.Errorf("ActiveLyric(nil) = %d", got)
+	}
+}
 
 func TestLogBufferRingAndFilter(t *testing.T) {
 	b := LogBuffer{Cap: 5}

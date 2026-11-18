@@ -25,9 +25,11 @@ few percent of it.
 
 - **Visible items, not total items.** Lists (`th.List`, every collection)
   lay out only the rows on screen. A component that walks all its data each
-  frame is the exception, and says so: `ui.DataTable` sorts and
-  `ui.SelectableList` copies ids every frame (fine to a few thousand rows;
-  beyond that keep a sorted model yourself), `x.LogView` filters
+  frame is the exception, and says so: `ui.DataTable` sorts and the
+  selectable collections copy row ids every frame, into reused buffers
+  (a sorted 10,000-row table costs about 6 ms a frame,
+  `BenchmarkDataTableSorted`; beyond that keep a sorted model yourself),
+  `x.LogView` filters
   incrementally (only new lines are scanned).
 - **Allocations** are mostly closures and flex-child slices built during
   layout: roughly one or two per component per frame, all short-lived. They

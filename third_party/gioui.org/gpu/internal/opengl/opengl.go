@@ -1262,7 +1262,7 @@ func (t *texture) Release() {
 	}
 	t.backend.glstate.deleteTexture(t.backend.funcs, t.obj)
 	if t.dmabufImage != nil {
-		if t.dmabufBase.V != 0 {
+		if !t.dmabufBase.Equal(gl.Texture{}) {
 			t.backend.glstate.deleteTexture(t.backend.funcs, t.dmabufBase)
 		}
 		releaseDMABufImage(t.dmabufImage)

@@ -1,12 +1,8 @@
 package kit
 
 import (
-	"image"
-	"strconv"
-
 	"gioui.org/io/semantic"
 	"gioui.org/layout"
-	"gioui.org/op"
 	"gioui.org/unit"
 )
 
@@ -19,58 +15,90 @@ type MenuRow struct {
 	Danger      bool   // destructive: drawn in the bad colour
 	Checked     bool   // a check mark: the selected option
 	Highlighted bool   // lit without focus: a combobox's keyboard choice
-	Content     W      // optional: drawn instead of the label text (Label is still spoken)
-	Role        Role   // RoleMenuItem by default; RoleOption in selects and pickers
+	// Content, if set, is drawn instead of the label text (Label is still
+	// spoken). It may run more than once per frame: MenuRowWidth measures it
+	// with input disabled and its operations discarded. It must only draw:
+	// state it changes stays changed, so it must not read events or count
+	// its calls.
+	Content layout.Widget
+	Role    Role // RoleMenuItem by default; RoleOption in selects and pickers
+}
+
+// menuRowGeometry is a MenuRow's spacing at a theme's density, control size
+// and icon size. MenuRow draws with it and MenuRowWidth adds it up, so the
+// two always agree.
+type menuRowGeometry struct {
+	// Text sits a little high in its line box, so a row has one step more
+	// padding below than above to look centred.
+	padTop, padBottom unit.Dp
+	padX              unit.Dp // each side
+	icon              unit.Dp // leading icon and check mark
+	iconGap           unit.Dp // after the leading icon
+	hintGap           unit.Dp // before the hint
+	checkGap          unit.Dp // before the check mark
+}
+
+func (t *Theme) menuRowGeometry() menuRowGeometry {
+	return menuRowGeometry{
+		padTop:    t.control(5),
+		padBottom: t.control(6),
+		padX:      t.Space(Space2),
+		icon:      t.IconSize,
+		iconGap:   t.Space(Space2),
+		hintGap:   t.Space(Space4),
+		checkGap:  t.Space(Space3),
+	}
 }
 
 // MenuRow lays out r as a pressable row (lit on hover, focus or
 // Highlighted) filling the width. Ids and clicks are c's, as for a button.
-func (t *Theme) MenuRow(gtx C, c *Clickable, id string, r MenuRow) D {
-	icon, label, hint, danger, checked, hi := r.Icon, r.Label, r.Hint, r.Danger, r.Checked, r.Highlighted
-	return t.Press(gtx, c, id, func(gtx C, st State) D {
+func (t *Theme) MenuRow(gtx layout.Context, c *Clickable, id string, r MenuRow) layout.Dimensions {
+	g := t.menuRowGeometry()
+	return t.Press(gtx, c, id, func(gtx layout.Context, st State) layout.Dimensions {
 		semantic.Button.Add(gtx.Ops)
-		semantic.LabelOp(label).Add(gtx.Ops)
+		semantic.LabelOp(r.Label).Add(gtx.Ops)
 		role := r.Role
 		if role == "" {
 			role = RoleMenuItem
 		}
 		SetRole(gtx, id, role)
 		fg := t.Fg
-		if danger {
+		if r.Danger {
 			fg = t.Bad
 		}
 		lit := st.Hover
-		if st.Focused || st.Pressed || hi {
+		if st.Focused || st.Pressed || r.Highlighted {
 			lit = 1
 		}
 		s := t.Styled(Surface{Bg: t.Highlight(lit), Radius: t.RadiusSm()})
 		gtx.Constraints.Min.X = gtx.Constraints.Max.X
-		return s.Layout(gtx, func(gtx C) D {
-			return layout.Inset{Top: t.control(5), Bottom: t.control(6), Left: t.Space(Space2), Right: t.Space(Space2)}.Layout(gtx, func(gtx C) D {
+		inset := layout.Inset{Top: g.padTop, Bottom: g.padBottom, Left: g.padX, Right: g.padX}
+		return s.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+			return inset.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 				return Row(gtx,
-					Rigid(func(gtx C) D {
-						if icon == nil {
-							return D{}
+					Rigid(func(gtx layout.Context) layout.Dimensions {
+						if r.Icon == nil {
+							return layout.Dimensions{}
 						}
-						return layout.Inset{Right: t.Space(Space2)}.Layout(gtx, func(gtx C) D { return icon(gtx, t.IconSize, fg) })
+						return layout.Inset{Right: g.iconGap}.Layout(gtx, func(gtx layout.Context) layout.Dimensions { return r.Icon(gtx, g.icon, fg) })
 					}),
-					Flexed(1, func(gtx C) D {
+					Flexed(1, func(gtx layout.Context) layout.Dimensions {
 						if r.Content != nil {
 							return r.Content(gtx)
 						}
-						return t.Text(gtx, label, t.Type.Body, fg, Regular)
+						return t.Text(gtx, r.Label, t.Type.Body, fg, Regular)
 					}),
-					Rigid(func(gtx C) D {
-						if hint == "" {
-							return D{}
+					Rigid(func(gtx layout.Context) layout.Dimensions {
+						if r.Hint == "" {
+							return layout.Dimensions{}
 						}
-						return layout.Inset{Left: t.Space(Space4)}.Layout(gtx, func(gtx C) D { return t.Text(gtx, hint, t.Type.Small, t.Dim, Regular) })
+						return layout.Inset{Left: g.hintGap}.Layout(gtx, func(gtx layout.Context) layout.Dimensions { return t.Text(gtx, r.Hint, t.Type.Small, t.Dim, Regular) })
 					}),
-					Rigid(func(gtx C) D {
-						if !checked {
-							return D{}
+					Rigid(func(gtx layout.Context) layout.Dimensions {
+						if !r.Checked {
+							return layout.Dimensions{}
 						}
-						return layout.Inset{Left: t.Space(Space3)}.Layout(gtx, func(gtx C) D { return IconCheck(gtx, t.IconSize, t.Accent) })
+						return layout.Inset{Left: g.checkGap}.Layout(gtx, func(gtx layout.Context) layout.Dimensions { return IconCheck(gtx, g.icon, t.Accent) })
 					}),
 				)
 			})
@@ -78,61 +106,33 @@ func (t *Theme) MenuRow(gtx C, c *Clickable, id string, r MenuRow) D {
 	})
 }
 
-// MenuRowWidth is the width r needs, to size a popup to its widest row.
-func (t *Theme) MenuRowWidth(gtx C, r MenuRow) int {
-	icon, label, hint, checked := r.Icon != nil, r.Label, r.Hint, r.Checked
-	text := func(s string, size unit.Sp) int {
-		if s == "" {
-			return 0
-		}
-		m := op.Record(gtx.Ops) // measured, then dropped
-		g := gtx
-		g.Constraints = layout.Constraints{Max: image.Pt(1<<20, 1<<20)}
-		d := t.Text(g, s, size, t.Fg, Regular)
-		m.Stop()
-		return d.Size.X
-	}
-	contentW := text(label, t.Type.Body)
+// MenuRowWidth is the width in pixels r needs, to size a popup to its widest
+// row. It measures r.Content, if set, by running it (see MenuRow.Content).
+func (t *Theme) MenuRowWidth(gtx layout.Context, r MenuRow) int {
+	g := t.menuRowGeometry()
+	var content layout.Dimensions
 	if r.Content != nil {
-		m := op.Record(gtx.Ops) // measured, then dropped
-		g := gtx
-		g.Constraints = layout.Constraints{Max: image.Pt(1<<20, 1<<20)}
-		contentW = r.Content(g).Size.X
-		m.Stop()
+		content = measure(gtx, r.Content)
+	} else {
+		content = t.measureText(gtx, r.Label, t.Type.Body)
 	}
-	w := gtx.Dp(t.Space(Space2))*2 + contentW
-	if icon {
-		w += gtx.Dp(14 + 8)
+	w := 2*gtx.Dp(g.padX) + content.Size.X
+	if r.Icon != nil {
+		w += gtx.Dp(g.icon) + gtx.Dp(g.iconGap)
 	}
-	if hint != "" {
-		w += gtx.Dp(16) + text(hint, t.Type.Small)
+	if r.Hint != "" {
+		w += gtx.Dp(g.hintGap) + t.measureText(gtx, r.Hint, t.Type.Small).Size.X
 	}
-	if checked {
-		w += gtx.Dp(12 + 14)
+	if r.Checked {
+		w += gtx.Dp(g.checkGap) + gtx.Dp(g.icon)
 	}
 	return w
 }
 
-// Field draws field chrome around w: full width, the control padding for
-// the theme's control size, surface and border, a hover tint from
-// st.Hover, and the focus ring while st.Focused. Field-like triggers
-// (select, date) are built on it; TextField draws the same chrome.
-func (t *Theme) Field(gtx C, st State, w W) D { return t.SizedField(gtx, ControlDefault, st, w) }
-
-// SizedField is Field at a control size (ControlDefault: the theme's), for
-// components with a per-instance Size.
-func (t *Theme) SizedField(gtx C, size ControlSize, st State, w W) D {
-	s := t.Styled(Surface{Bg: t.StateColor(t.Surface, State{Hover: st.Hover}), Border: t.Border, Radius: t.Radius})
-	if st.Focused {
-		s.Focus = t.Focus
+// measureText is the size of s as one line of UI text.
+func (t *Theme) measureText(gtx layout.Context, s string, size unit.Sp) layout.Dimensions {
+	if s == "" {
+		return layout.Dimensions{}
 	}
-	// Full width, natural height: a caller's minimum height (a window's)
-	// would stretch the field and leave its popup no room.
-	gtx.Constraints.Min = image.Pt(gtx.Constraints.Max.X, 0)
-	return s.Layout(gtx, func(gtx C) D {
-		v := t.ControlPad(size, 7)
-		return layout.Inset{Top: v, Bottom: v, Left: t.Space(Space2p5), Right: t.Space(Space2)}.Layout(gtx, w)
-	})
+	return measure(gtx, func(gtx layout.Context) layout.Dimensions { return t.Text(gtx, s, size, t.Fg, Regular) })
 }
-
-func itoa(i int) string { return strconv.Itoa(i) }

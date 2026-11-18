@@ -1,10 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"image"
 	"image/color"
 	"io"
-	"strings"
+	"slices"
 
 	"gioui.org/font"
 	"gioui.org/io/clipboard"
@@ -29,12 +30,11 @@ type themeState struct {
 	motionOn bool
 	custom   kit.Clickable
 	hue      slider
-	lastHue  float32
 	darkSeed kit.Clickable
 	seedDark bool
 	copyBt   kit.Clickable
-	themeLst kit.List
-	knobs    []*knob
+	list     kit.List
+	knobs    themeKnobs
 
 	prevSave, prevSolid kit.Clickable
 	prevName            widget.Editor
@@ -47,59 +47,135 @@ type themeState struct {
 // knob is one theme setting shown as a labelled segmented control.
 type knob struct {
 	id, label string
-	names     []string
+	options   []knobOption
+	sel       int // index into options
 	tabs      ui.TabsState
-	sel       int
 }
 
-func (k *knob) is(name string) bool { return k.names[k.sel] == name }
+// knobOption is one choice of a knob: its tab label and the theme setting
+// it applies.
+type knobOption struct {
+	label string
+	apply func(t *kit.Theme)
+}
 
-// knob values, in the order of each knob's names.
-var (
-	cornerVals    = []unit.Dp{0, 3, 6, 10, 999}
-	strokeVals    = []unit.Dp{1, 1.5, 2}
-	ringVals      = []unit.Dp{1.5, 2, 3}
-	textVals      = []float32{0.9, 1, 1.15, 1.3}
-	headingVals   = []font.Weight{font.Medium, font.SemiBold, font.Bold}
-	elevationVals = []float32{0, 1, 2}
-	controlVals   = []kit.ControlSize{kit.ControlSmall, kit.ControlMedium, kit.ControlLarge}
-)
+func (k *knob) selected() knobOption { return k.options[k.sel] }
 
-func (g *gallery) knob(id string) *knob {
-	for _, k := range g.knobs {
-		if k.id == id {
-			return k
-		}
+func (k *knob) labels() []string {
+	out := make([]string, len(k.options))
+	for i, o := range k.options {
+		out[i] = o.label
 	}
-	panic("no knob " + id)
+	return out
 }
 
-var densityNames = []string{"Compact", "Regular", "Comfortable"}
-var densityVals = []float32{0.75, 1, 1.25}
+// themeKnobs are the Theme page's knobs. The Overview shows a few of them
+// too.
+type themeKnobs struct {
+	corners, stroke, ring         knob
+	fonts, text, heading          knob
+	elevation, contrast, controls knob
+}
+
+// all lists every knob, in display order. Each sets its own theme fields;
+// applyTheme sets the palette before applying them, so the contrast knob
+// adjusts the chosen palette.
+func (k *themeKnobs) all() []*knob {
+	return []*knob{&k.corners, &k.stroke, &k.ring, &k.fonts, &k.text, &k.heading, &k.elevation, &k.contrast, &k.controls}
+}
+
+func newThemeKnobs() themeKnobs {
+	radius := func(label string, r unit.Dp) knobOption {
+		return knobOption{label: label, apply: func(t *kit.Theme) { t.Radius = r }}
+	}
+	stroke := func(label string, w unit.Dp) knobOption {
+		return knobOption{label: label, apply: func(t *kit.Theme) { t.Stroke = w }}
+	}
+	ring := func(label string, w unit.Dp) knobOption {
+		return knobOption{label: label, apply: func(t *kit.Theme) { t.Ring = w }}
+	}
+	textScale := func(label string, f float32) knobOption {
+		return knobOption{label: label, apply: func(t *kit.Theme) { t.Type = kit.DefaultType().Scaled(f) }}
+	}
+	heading := func(label string, w font.Weight) knobOption {
+		return knobOption{label: label, apply: func(t *kit.Theme) { t.HeadingWeight = w }}
+	}
+	elevation := func(label string, e float32) knobOption {
+		return knobOption{label: label, apply: func(t *kit.Theme) { t.Elevation = e }}
+	}
+	controls := func(label string, c kit.ControlSize) knobOption {
+		return knobOption{label: label, apply: func(t *kit.Theme) { t.Controls = c }}
+	}
+	var fontOptions []knobOption
+	for _, set := range fonts.All() {
+		fontOptions = append(fontOptions, knobOption{label: set.Name, apply: func(t *kit.Theme) {
+			if t.Fonts != set.Name {
+				t.UseFonts(set) // a new shaper only when the font set changes
+			}
+		}})
+	}
+	return themeKnobs{
+		corners: knob{id: "corners", label: "Corners", sel: 2, options: []knobOption{
+			radius("Sharp", 0), radius("Subtle", 3), radius("Default", 6), radius("Round", 10), radius("Pill", 999),
+		}},
+		stroke: knob{id: "stroke", label: "Borders", sel: 0, options: []knobOption{
+			stroke("Hairline", 1), stroke("Medium", 1.5), stroke("Bold", 2),
+		}},
+		ring: knob{id: "ring", label: "Focus ring", sel: 1, options: []knobOption{
+			ring("Thin", 1.5), ring("Default", 2), ring("Thick", 3),
+		}},
+		fonts: knob{id: "fonts", label: "Font", sel: 0, options: fontOptions},
+		text: knob{id: "text", label: "Text size", sel: 1, options: []knobOption{
+			textScale("90%", 0.9), textScale("100%", 1), textScale("115%", 1.15), textScale("130%", 1.3),
+		}},
+		heading: knob{id: "heading", label: "Headings", sel: 2, options: []knobOption{
+			heading("Medium", font.Medium), heading("Semibold", font.SemiBold), heading("Bold", font.Bold),
+		}},
+		elevation: knob{id: "elevation", label: "Shadows", sel: 1, options: []knobOption{
+			elevation("Flat", 0), elevation("Soft", 1), elevation("Strong", 2),
+		}},
+		contrast: knob{id: "contrast", label: "Contrast", sel: 0, options: []knobOption{
+			{label: "Standard", apply: func(*kit.Theme) {}},
+			{label: "High", apply: func(t *kit.Theme) { t.Palette = t.Palette.WithContrast(t.Dark, 1) }},
+		}},
+		controls: knob{id: "controls", label: "Controls", sel: 1, options: []knobOption{
+			controls("Small", kit.ControlSmall), controls("Medium", kit.ControlMedium), controls("Large", kit.ControlLarge),
+		}},
+	}
+}
+
+// previewOptions are the theme preview's select options.
+var previewOptions = []string{"Private", "Team", "Public"}
+
+// densityOption is one choice of the Theme page's density tabs.
+type densityOption struct {
+	label   string  // the tab's label and id
+	density float32 // Theme.Density
+}
+
+// densities are the density tabs, in display order.
+var densities = []densityOption{
+	{label: "Compact", density: 0.75},
+	{label: "Regular", density: 1},
+	{label: "Comfortable", density: 1.25},
+}
+
+// densityChoices are the density tabs' items.
+func densityChoices() []ui.Choice {
+	items := make([]ui.Choice, len(densities))
+	for i, d := range densities {
+		items[i] = ui.Choice{ID: d.label, Label: d.label}
+	}
+	return items
+}
 
 func (g *gallery) initTheme() {
-	g.presets = kit.Presets()
-	g.th = g.presets[0]
-	g.dens, g.motionOn, g.seedDark = 1, true, true
-	g.hue.Value, g.lastHue = 0.6, 0.6
-	g.themeLst.Axis = layout.Vertical
-	var fontNames []string
-	for _, f := range fonts.All() {
-		fontNames = append(fontNames, f.Name)
-	}
-	add := func(id, label string, sel int, names ...string) {
-		k := &knob{id: id, label: label, names: names, sel: sel}
-		g.knobs = append(g.knobs, k)
-	}
-	add("corners", "Corners", 2, "Sharp", "Subtle", "Default", "Round", "Pill")
-	add("stroke", "Borders", 0, "Hairline", "Medium", "Bold")
-	add("ring", "Focus ring", 1, "Thin", "Default", "Thick")
-	add("fonts", "Font", 0, fontNames...)
-	add("text", "Text size", 1, "90%", "100%", "115%", "130%")
-	add("heading", "Headings", 2, "Medium", "Semibold", "Bold")
-	add("elevation", "Shadows", 1, "Flat", "Soft", "Strong")
-	add("contrast", "Contrast", 0, "Standard", "High")
-	add("controls", "Controls", 1, "Small", "Medium", "Large")
+	g.theme.presets = kit.Presets()
+	g.th = g.theme.presets[0]
+	g.theme.dens, g.theme.motionOn, g.theme.seedDark = 1, true, true
+	g.theme.hue.Value = 0.6
+	g.theme.list.Axis = layout.Vertical
+	g.theme.knobs = newThemeKnobs()
 }
 
 // applyTheme rebuilds g.th from the chosen palette plus density and motion.
@@ -107,96 +183,84 @@ func (g *gallery) initTheme() {
 func (g *gallery) applyTheme() {
 	base := g.th
 	var p kit.Palette
-	name, dark := "Custom", g.seedDark
-	if g.preset >= 0 {
-		pr := g.presets[g.preset]
+	name, dark := "Custom", g.theme.seedDark
+	if g.theme.preset >= 0 {
+		pr := g.theme.presets[g.theme.preset]
 		p, name, dark = pr.Palette, pr.Name, pr.Dark
 	} else {
 		p = kit.GeneratePalette(g.customSeed())
 	}
 	g.th = base.Derive(func(t *kit.Theme) {
 		t.Palette, t.Name, t.Dark = p, name, dark
-		t.Density = densityVals[g.dens]
+		t.Density = densities[g.theme.dens].density
 		t.Motion = 0
-		if g.motionOn {
+		if g.theme.motionOn {
 			t.Motion = 1
 		}
-		if g.knobs == nil {
-			return
+		for _, k := range g.theme.knobs.all() {
+			k.selected().apply(t)
 		}
-		if g.knob("contrast").is("High") {
-			t.Palette = t.Palette.WithContrast(dark, 1)
-		}
-		t.Radius = cornerVals[g.knob("corners").sel]
-		t.Stroke = strokeVals[g.knob("stroke").sel]
-		t.Ring = ringVals[g.knob("ring").sel]
-		t.Type = kit.DefaultType.Scaled(textVals[g.knob("text").sel])
-		t.HeadingWeight = headingVals[g.knob("heading").sel]
-		t.Elevation = elevationVals[g.knob("elevation").sel]
-		t.Controls = controlVals[g.knob("controls").sel]
 	})
-	if g.knobs == nil {
-		return
-	}
-	if set := fonts.All()[g.knob("fonts").sel]; g.th.Fonts != set.Name {
-		g.th.UseFonts(set) // a new shaper only when the font set changes
-	}
 }
 
 func (g *gallery) customSeed() kit.Seed {
-	h := float64(g.hue.Value) * 360
-	return kit.Seed{Name: "Custom", Dark: g.seedDark,
+	h := float64(g.theme.hue.Value) * 360
+	return kit.Seed{Name: "Custom", Dark: g.theme.seedDark,
 		Accent:  kit.OKLCH{L: 0.65, C: 0.16, H: h}.RGB(),
 		Neutral: kit.OKLCH{L: 0.5, C: 0.03, H: h}.RGB()}
 }
 
 func (g *gallery) nextTheme() {
-	g.preset = (g.preset + 1) % len(g.presets)
+	g.theme.preset = (g.theme.preset + 1) % len(g.theme.presets)
 	g.applyTheme()
 }
 
 func (g *gallery) handleTheme(gtx C) {
 	changed := false
-	for i := range g.presets {
-		if g.presetBt.Get(g.presets[i].Name).Clicked(gtx) {
-			g.preset, changed = i, true
+	for i := range g.theme.presets {
+		if g.theme.presetBt.Get(g.theme.presets[i].Name).Clicked(gtx) {
+			g.theme.preset, changed = i, true
 		}
 	}
-	if i, ok := g.density.Update(gtx); ok {
-		g.dens, changed = i, true
+	if id, ok := g.theme.density.Update(gtx); ok {
+		g.theme.dens = slices.IndexFunc(densities, func(d densityOption) bool { return d.label == id })
+		changed = true
 	}
-	if g.motion.Clicked(gtx) {
-		g.motionOn, changed = !g.motionOn, true
+	if g.theme.motion.Clicked(gtx) {
+		g.theme.motionOn, changed = !g.theme.motionOn, true
 	}
-	if g.custom.Clicked(gtx) {
-		g.preset, changed = -1, true
+	if g.theme.custom.Clicked(gtx) {
+		g.theme.preset, changed = -1, true
 	}
-	if g.darkSeed.Clicked(gtx) {
-		g.seedDark, changed = !g.seedDark, true
-		if g.preset != -1 {
-			g.preset = -1
+	if g.theme.darkSeed.Clicked(gtx) {
+		g.theme.seedDark, changed = !g.theme.seedDark, true
+		if g.theme.preset != -1 {
+			g.theme.preset = -1
 		}
 	}
-	// The slider handles its input during layout; compare with last frame.
-	if g.hue.Value != g.lastHue {
-		g.lastHue, g.preset, changed = g.hue.Value, -1, true
+	if g.theme.hue.update(gtx) {
+		g.theme.preset, changed = -1, true
 	}
-	for _, k := range g.knobs {
-		if i, ok := k.tabs.Update(gtx); ok && i != k.sel {
-			k.sel, changed = i, true
+	for _, k := range g.theme.knobs.all() {
+		if id, ok := k.tabs.Update(gtx); ok && id != k.selected().label {
+			k.sel, changed = slices.IndexFunc(k.options, func(o knobOption) bool { return o.label == id }), true
 		}
 	}
-	g.prevSave.Clicked(gtx)
-	g.prevSolid.Clicked(gtx)
-	if i, ok := g.prevSel.Update(gtx); ok {
-		g.prevSelI = i
+	g.theme.prevSave.Clicked(gtx)
+	g.theme.prevSolid.Clicked(gtx)
+	if id, ok := g.theme.prevSel.Update(gtx); ok {
+		g.theme.prevSelI = slices.Index(previewOptions, id)
 	}
-	if g.prevCheck.Clicked(gtx) {
-		g.prevChecked = !g.prevChecked
+	if g.theme.prevCheck.Clicked(gtx) {
+		g.theme.prevChecked = !g.theme.prevChecked
 	}
-	if g.copyBt.Clicked(gtx) {
-		gtx.Execute(clipboard.WriteCmd{Type: "application/text", Data: io.NopCloser(strings.NewReader(string(g.th.Tokens())))})
-		g.status = "Theme tokens (DTCG JSON) copied to the clipboard"
+	if g.theme.copyBt.Clicked(gtx) {
+		if b, err := g.th.Tokens(); err != nil {
+			g.status = err.Error()
+		} else {
+			gtx.Execute(clipboard.WriteCmd{Type: "application/text", Data: io.NopCloser(bytes.NewReader(b))})
+			g.status = "Theme tokens (DTCG JSON) copied to the clipboard"
+		}
 	}
 	if changed {
 		g.applyTheme()
@@ -230,15 +294,14 @@ func (g *gallery) themePage(gtx C) D {
 		func(gtx C) D { return g.section(gtx, "Preview", g.themePreview) },
 		func(gtx C) D {
 			return g.section(gtx, "Presets", func(gtx C) D {
-				var ws []kit.W
-				for i, p := range g.presets {
-					i, p := i, p
+				var ws []layout.Widget
+				for i, p := range g.theme.presets {
 					ws = append(ws, func(gtx C) D {
-						return ui.Radio{ID: "preset:" + p.Name, Label: p.Name, Selected: g.preset == i}.Layout(gtx, th, g.presetBt.Get(p.Name))
+						return ui.Radio{ID: "preset:" + p.Name, Label: p.Name, Selected: g.theme.preset == i}.Layout(gtx, th, g.theme.presetBt.Get(p.Name))
 					})
 				}
 				ws = append(ws, func(gtx C) D {
-					return ui.Radio{ID: "preset:custom", Label: "Custom", Selected: g.preset == -1}.Layout(gtx, th, &g.custom)
+					return ui.Radio{ID: "preset:custom", Label: "Custom", Selected: g.theme.preset == -1}.Layout(gtx, th, &g.theme.custom)
 				})
 				return wrapRows(gtx, 4, ws)
 			})
@@ -254,10 +317,10 @@ func (g *gallery) themePage(gtx C) D {
 						return kit.Row(gtx,
 							kit.Rigid(func(gtx C) D { return th.Text(gtx, "Hue", th.Type.Body, th.Muted, kit.Regular) }),
 							kit.Rigid(kit.Gap(12, 0)),
-							kit.Flexed(1, func(gtx C) D { return g.hue.layout(gtx, th, "slider:hue", "Hue") }),
+							kit.Flexed(1, func(gtx C) D { return g.theme.hue.layout(gtx, th, "slider:hue", "Hue") }),
 							kit.Rigid(kit.Gap(16, 0)),
 							kit.Rigid(func(gtx C) D {
-								return ui.Switch{ID: "switch:dark", Label: "Dark", On: g.seedDark}.Layout(gtx, th, &g.darkSeed)
+								return ui.Switch{ID: "switch:dark", Label: "Dark", On: g.theme.seedDark}.Layout(gtx, th, &g.theme.darkSeed)
 							}),
 						)
 					}),
@@ -265,24 +328,30 @@ func (g *gallery) themePage(gtx C) D {
 			})
 		},
 		func(gtx C) D {
-			return g.section(gtx, "Shape", func(gtx C) D { return g.knobRows(gtx, "corners", "stroke", "ring") })
+			return g.section(gtx, "Shape", func(gtx C) D {
+				return g.knobRows(gtx, &g.theme.knobs.corners, &g.theme.knobs.stroke, &g.theme.knobs.ring)
+			})
 		},
 		func(gtx C) D {
-			return g.section(gtx, "Type", func(gtx C) D { return g.knobRows(gtx, "fonts", "text", "heading") })
+			return g.section(gtx, "Type", func(gtx C) D {
+				return g.knobRows(gtx, &g.theme.knobs.fonts, &g.theme.knobs.text, &g.theme.knobs.heading)
+			})
 		},
 		func(gtx C) D {
-			return g.section(gtx, "Depth, contrast, size", func(gtx C) D { return g.knobRows(gtx, "elevation", "contrast", "controls") })
+			return g.section(gtx, "Depth, contrast, size", func(gtx C) D {
+				return g.knobRows(gtx, &g.theme.knobs.elevation, &g.theme.knobs.contrast, &g.theme.knobs.controls)
+			})
 		},
 		func(gtx C) D {
 			return g.section(gtx, "Spacing and motion", func(gtx C) D {
 				return kit.Row(gtx,
 					kit.Rigid(kit.Fixed(110, func(gtx C) D { return th.Text(gtx, "Density", th.Type.Body, th.Muted, kit.Regular) })),
 					kit.Rigid(func(gtx C) D {
-						return ui.Tabs{ID: "density", Labels: densityNames, Selected: g.dens, Style: ui.TabsSegmented}.Layout(gtx, th, &g.density)
+						return ui.Tabs{ID: "density", Items: densityChoices(), Selected: densities[g.theme.dens].label, Style: ui.TabsSegmented}.Layout(gtx, th, &g.theme.density)
 					}),
 					kit.Rigid(kit.Gap(24, 0)),
 					kit.Rigid(func(gtx C) D {
-						return ui.Switch{ID: "switch:motion", Label: "Animations", On: g.motionOn}.Layout(gtx, th, &g.motion)
+						return ui.Switch{ID: "switch:motion", Label: "Animations", On: g.theme.motionOn}.Layout(gtx, th, &g.theme.motion)
 					}),
 				)
 			})
@@ -297,9 +366,8 @@ func (g *gallery) themePage(gtx C) D {
 				toks := []tok{{"bg", p.Bg}, {"panel", p.Panel}, {"surface", p.Surface}, {"hover", p.Hover}, {"border", p.Border},
 					{"divider", p.Divider}, {"fg", p.Fg}, {"muted", p.Muted}, {"dim", p.Dim}, {"accent", p.Accent},
 					{"accent-bg", p.AccentBg}, {"on-accent", p.OnAccent}, {"good", p.Good}, {"warn", p.Warn}, {"bad", p.Bad}, {"overlay", p.Overlay}}
-				var ws []kit.W
+				var ws []layout.Widget
 				for _, t := range toks {
-					t := t
 					ws = append(ws, func(gtx C) D { return swatch(gtx, th, t.n, t.c) })
 				}
 				return kit.Col(gtx,
@@ -308,7 +376,7 @@ func (g *gallery) themePage(gtx C) D {
 					kit.Rigid(func(gtx C) D {
 						return kit.Row(gtx,
 							kit.Rigid(func(gtx C) D {
-								return ui.Button{ID: "tokens:copy", Text: "Copy as DTCG JSON", Style: ui.Primary}.Layout(gtx, th, &g.copyBt)
+								return ui.Button{ID: "tokens:copy", Text: "Copy as DTCG JSON", Style: ui.Primary}.Layout(gtx, th, &g.theme.copyBt)
 							}),
 							kit.Rigid(kit.Gap(12, 0)),
 							kit.Flexed(1, func(gtx C) D {
@@ -321,14 +389,14 @@ func (g *gallery) themePage(gtx C) D {
 		},
 	}
 	return g.pageFrame(gtx, "Theme", nil, func(gtx C) D {
-		return th.List(gtx, &g.themeLst, "theme", len(sections), func(gtx C, i int) D {
+		return th.List(gtx, &g.theme.list, "theme", len(sections), func(gtx C, i int) D {
 			return layout.Inset{Left: 24, Right: 24}.Layout(gtx, func(gtx C) D { return sections[i](gtx) })
 		})
 	})
 }
 
 // wrapRows lays ws out in rows of n equal columns.
-func wrapRows(gtx C, n int, ws []kit.W) D {
+func wrapRows(gtx C, n int, ws []layout.Widget) D {
 	var rows []layout.FlexChild
 	for i := 0; i < len(ws); i += n {
 		row := ws[i:min(i+n, len(ws))]
@@ -346,15 +414,14 @@ func wrapRows(gtx C, n int, ws []kit.W) D {
 	return kit.Col(gtx, rows...)
 }
 
-// knobRows lays out the named knobs, one labelled segmented control a row.
-func (g *gallery) knobRows(gtx C, ids ...string) D { return g.knobRowsW(gtx, 110, ids...) }
+// knobRows lays out knobs, one labelled segmented control a row.
+func (g *gallery) knobRows(gtx C, knobs ...*knob) D { return g.knobRowsW(gtx, 110, knobs...) }
 
 // knobRowsW is knobRows with a label column labelW dp wide.
-func (g *gallery) knobRowsW(gtx C, labelW unit.Dp, ids ...string) D {
+func (g *gallery) knobRowsW(gtx C, labelW unit.Dp, knobs ...*knob) D {
 	th := g.th
 	var rows []layout.FlexChild
-	for i, id := range ids {
-		k := g.knob(id)
+	for i, k := range knobs {
 		if i > 0 {
 			rows = append(rows, kit.Rigid(kit.Gap(0, 10)))
 		}
@@ -362,7 +429,7 @@ func (g *gallery) knobRowsW(gtx C, labelW unit.Dp, ids ...string) D {
 			return kit.Row(gtx,
 				kit.Rigid(kit.Fixed(labelW, func(gtx C) D { return th.Text(gtx, k.label, th.Type.Body, th.Muted, kit.Regular) })),
 				kit.Rigid(func(gtx C) D {
-					return ui.Tabs{ID: "knob:" + k.id, Labels: k.names, Selected: k.sel, Style: ui.TabsSegmented}.Layout(gtx, th, &k.tabs)
+					return ui.Tabs{ID: "knob:" + k.id, Items: choices(k.labels()), Selected: k.selected().label, Style: ui.TabsSegmented}.Layout(gtx, th, &k.tabs)
 				}),
 			)
 		}))
@@ -378,18 +445,18 @@ func (g *gallery) themePreview(gtx C) D {
 		kit.Rigid(kit.Gap(0, 10)),
 		kit.Rigid(func(gtx C) D {
 			return kit.Flex{Gap: kit.Space2p5, Align: layout.Middle}.Layout(gtx, th,
-				kit.Rigid(func(gtx C) D { return ui.Button{ID: "preview:save", Text: "Save"}.Layout(gtx, th, &g.prevSave) }),
+				kit.Rigid(func(gtx C) D { return ui.Button{ID: "preview:save", Text: "Save"}.Layout(gtx, th, &g.theme.prevSave) }),
 				kit.Rigid(func(gtx C) D {
-					return ui.Button{ID: "preview:solid", Text: "Publish", Style: ui.Solid}.Layout(gtx, th, &g.prevSolid)
+					return ui.Button{ID: "preview:solid", Text: "Publish", Style: ui.Solid}.Layout(gtx, th, &g.theme.prevSolid)
 				}),
 				kit.Rigid(kit.Fixed(180, func(gtx C) D {
-					return ui.TextField{ID: "preview:name", Placeholder: "Project name"}.Layout(gtx, th, &g.prevName)
+					return ui.TextField{ID: "preview:name", Placeholder: "Project name"}.Layout(gtx, th, &g.theme.prevName)
 				})),
 				kit.Rigid(kit.Fixed(150, func(gtx C) D {
-					return ui.Select{ID: "preview:sel", Options: []string{"Private", "Team", "Public"}, Selected: g.prevSelI}.Layout(gtx, th, &g.prevSel)
+					return ui.Select{ID: "preview:sel", Options: choices(previewOptions), Selected: previewOptions[g.theme.prevSelI]}.Layout(gtx, th, &g.theme.prevSel)
 				})),
 				kit.Rigid(func(gtx C) D {
-					return ui.Checkbox{ID: "preview:check", Label: "Notify me", Checked: g.prevChecked}.Layout(gtx, th, &g.prevCheck)
+					return ui.Checkbox{ID: "preview:check", Label: "Notify me", Checked: g.theme.prevChecked}.Layout(gtx, th, &g.theme.prevCheck)
 				}),
 				kit.Rigid(func(gtx C) D { return ui.Badge{Status: kit.StatusGood, Text: "live"}.Layout(gtx, th) }),
 			)

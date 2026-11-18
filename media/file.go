@@ -16,22 +16,27 @@ import (
 // streams...). H.264 and H.265 come out in Annex B form with the parameter
 // sets as a Config packet first: the same shape a live encoder sends, so a
 // file can stand in for a device in tests and demos.
+//
+// A File has one owner: call Read from one goroutine at a time, and Close
+// it when done.
 type File struct {
-	m             *C.gk_demux
+	// Stream metadata, fixed when the file opens.
 	Codec         Codec
-	Width, Height int
-	FPS           float64
-	config        []byte
+	Width, Height int     // coded picture size in pixels
+	FPS           float64 // 0 if the container does not say
+
+	m      *C.gk_demux // nil after Close
+	config []byte
 }
 
-// OpenFile opens path.
+// OpenFile opens path and reads its first video stream's metadata.
 func OpenFile(path string) (*File, error) {
 	cp := C.CString(path)
 	defer C.free(unsafe.Pointer(cp))
 	var e C.int
 	m := C.gk_demux_open(cp, &e)
 	if m == nil {
-		return nil, fmt.Errorf("open %s: %w", path, averr(e))
+		return nil, averr("open "+path, e)
 	}
 	f := &File{m: m}
 	var codec, w, h, num, den C.int
@@ -42,7 +47,7 @@ func OpenFile(path string) (*File, error) {
 	}
 	if f.Codec == 0 {
 		f.Close()
-		return nil, fmt.Errorf("open %s: unsupported video codec", path)
+		return nil, fmt.Errorf("media: open %s: unsupported video codec", path)
 	}
 	n := C.gk_demux_config(m, nil, 0)
 	if n > 0 {
@@ -53,17 +58,22 @@ func OpenFile(path string) (*File, error) {
 }
 
 // Config is the codec configuration packet, or nil if the codec carries it
-// in band.
+// in band. The slice is shared: do not modify it. It stays valid after
+// Close.
 func (f *File) Config() []byte { return f.config }
 
-// Read returns the next video packet, or io.EOF.
+// Read returns the next video packet, io.EOF at the end, or ErrClosed after
+// Close. The packet's Data is a fresh copy owned by the caller.
 func (f *File) Read() (Packet, error) {
+	if f.m == nil {
+		return Packet{}, ErrClosed
+	}
 	var data *C.uint8_t
 	var pts C.int64_t
 	var key C.int
 	n := C.gk_demux_read(f.m, &data, &pts, &key)
 	if n < 0 {
-		return Packet{}, averr(n)
+		return Packet{}, averr("read", n)
 	}
 	if n == 0 {
 		return Packet{}, io.EOF
@@ -75,7 +85,7 @@ func (f *File) Read() (Packet, error) {
 	}, nil
 }
 
-// Close closes the file.
+// Close closes the file. Calling it again does nothing.
 func (f *File) Close() {
 	if f.m != nil {
 		C.gk_demux_close(f.m)

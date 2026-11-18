@@ -1,6 +1,7 @@
 package x
 
 import (
+	"sort"
 	"time"
 
 	"gioui.org/layout"
@@ -8,70 +9,68 @@ import (
 	"github.com/hhhapz/giokit/kit"
 )
 
+// lyricLeadLines is how many lines stay visible above the current line when
+// following scrolls to it, so the listener keeps some context.
+const lyricLeadLines = 2
+
 // LyricLine starts at At and remains current until the next line starts.
 type LyricLine struct {
-	At   time.Duration
-	Text string
+	At   time.Duration // start time from the beginning of the track
+	Text string        // the line; "" draws an empty line
 }
 
-// ActiveLyric returns the current line, or -1 before the first one.
+// ActiveLyric returns the index of the line current at time at, or -1
+// before the first one. lines must be sorted by At.
 func ActiveLyric(lines []LyricLine, at time.Duration) int {
-	lo, hi := 0, len(lines)
-	for lo < hi {
-		m := int(uint(lo+hi) >> 1)
-		if lines[m].At <= at {
-			lo = m + 1
-		} else {
-			hi = m
-		}
-	}
-	return lo - 1
+	return sort.Search(len(lines), func(i int) bool { return lines[i].At > at }) - 1
 }
 
 // Lyrics is a timed, scrollable line view of Lines at time At; the current
 // line is highlighted and, while following, kept in view. The scroll region's
-// id is ID.
+// id is ID. Lines must be sorted by At.
 type Lyrics struct {
-	ID    string
-	Lines []LyricLine
-	At    time.Duration
+	ID    string        // the scroll region's id
+	Lines []LyricLine   // sorted by At
+	At    time.Duration // the playback position
 }
 
 // LyricsState is a Lyrics' scroll position and follow mode. Follow turns off
 // when the listener scrolls the transcript; turning it on jumps to the
-// current line.
+// current line. The zero value does not follow.
 type LyricsState struct {
-	List       kit.List
-	Follow     bool
+	List       kit.List // the scroll position
+	Follow     bool     // keep the current line in view; set it to jump there
 	lastActive int
 	lastFollow bool
 	seen       bool
 }
 
-func (ly Lyrics) Layout(gtx C, t *kit.Theme, l *LyricsState) D {
-	id, lines, at := ly.ID, ly.Lines, ly.At
-	active := ActiveLyric(lines, at)
-	jumped := l.Follow && (active != l.lastActive || !l.lastFollow) && active >= 0
+// Layout draws the lines, scrolling to the current one when it changes while
+// following, and turns Follow off when the listener scrolls.
+func (ly Lyrics) Layout(gtx layout.Context, th *kit.Theme, st *LyricsState) layout.Dimensions {
+	active := ActiveLyric(ly.Lines, ly.At)
+	jumped := st.Follow && (active != st.lastActive || !st.lastFollow) && active >= 0
 	if jumped {
-		l.List.ScrollTo(max(0, active-2))
+		st.List.ScrollTo(max(0, active-lyricLeadLines))
 	}
-	prior := l.List.Position
-	l.lastActive, l.lastFollow = active, l.Follow
-	d := t.List(gtx, &l.List, id, len(lines), func(gtx C, i int) D {
-		line := lines[i]
-		fg, weight := t.Muted, kit.Regular
+	prior := st.List.Position
+	st.lastActive, st.lastFollow = active, st.Follow
+	d := th.List(gtx, &st.List, ly.ID, len(ly.Lines), func(gtx layout.Context, i int) layout.Dimensions {
+		fg, weight := th.Muted, kit.Regular
 		if i == active {
-			fg, weight = t.Fg, kit.SemiBold
+			fg, weight = th.Fg, kit.SemiBold
 		}
-		return layout.Inset{Top: t.Space(kit.Space2), Bottom: t.Space(kit.Space2), Left: t.Space(kit.Space3), Right: t.Space(kit.Space3)}.Layout(gtx, func(gtx C) D {
+		inset := layout.Inset{Top: th.Space(kit.Space2), Bottom: th.Space(kit.Space2), Left: th.Space(kit.Space3), Right: th.Space(kit.Space3)}
+		return inset.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 			gtx.Constraints.Min.X = gtx.Constraints.Max.X
-			return t.ParagraphLine(gtx, line.Text, fg, weight)
+			return th.ParagraphLine(gtx, ly.Lines[i].Text, fg, weight)
 		})
 	})
-	if l.seen && l.Follow && !jumped && (l.List.Position.First != prior.First || l.List.Position.Offset != prior.Offset) {
-		l.Follow = false
+	scrolled := st.List.Position.First != prior.First || st.List.Position.Offset != prior.Offset
+	if st.seen && st.Follow && !jumped && scrolled {
+		st.Follow = false
 		kit.Notify(gtx)
 	}
-	l.seen = true
+	st.seen = true
 	return d
 }

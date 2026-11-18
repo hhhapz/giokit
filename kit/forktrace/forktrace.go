@@ -5,6 +5,13 @@
 //
 //	import _ "github.com/hhhapz/giokit/kit/forktrace"
 //
+// Importing it is the only installation step: when GIOKIT_TRACE is set, the
+// package's init assigns kit.Tracef to the fork's app.GiokitTrace hook.
+// Go runs that init before main, so the hook is in place before any window
+// starts. The hook is startup-only configuration: it is read on window
+// goroutines without synchronization, so nothing may reassign it once a
+// window is running.
+//
 // kit itself builds on stock Gio and traces frame pacing without it.
 package forktrace
 

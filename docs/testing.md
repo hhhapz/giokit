@@ -12,7 +12,8 @@ that call `kittest.New` should call `kittest.NoGPU(t, err)` on error.
 | Call | Notes |
 |---|---|
 | `NewT(t, wdp, hdp, frame)` | Scale 1. Reports via `t`. Saves the final frame to `$KITTEST_SHOTS/<test>.png`. |
-| `New(wdp, hdp, scale, frame)` | For tools such as a `-shot` flag. Findings go to `h.Problems()`. |
+| `NewTAt(t, wdp, hdp, scale, frame)` | `NewT` at another scale (HiDPI checks). |
+| `New(wdp, hdp, scale, frame)` | For tools such as a `-shot` flag. Findings go to `h.Problems()` (a copy); `Expect*` methods panic. Call `h.Release()` when done. |
 | `h.Theme = th` | Enables the missing-glyph audit. |
 | `h.Strict` | Default true: re-render after each input to catch stale frames. |
 | `h.MinTarget` | Smallest accepted clickable size, default 16dp. |
@@ -35,10 +36,15 @@ Every input call settles, then (in strict mode) runs a stale check.
     Scroll it into view first.
 - **Async:** pass `h.App()` to `kit.Spawn`/`Post` in the code under test:
   work runs off the UI goroutine as in a real window, so the test sees the
-  in-flight state (a spinner, "loading"); `h.RunTasks()` waits for the work
-  and settles, so the results are drawn. (A nil app still runs work inline.)
+  in-flight state (a spinner, "loading"); `h.RunTasks()` waits for the work,
+  its done callbacks, any work they start and any callbacks they post, and
+  settles, so the results are drawn. Like a window, a settle keeps drawing
+  frames while posted callbacks are queued (`App.Queued`). (A nil app
+  still runs work inline.)
 - **Keyboard:**
   - `Key(name, mods)`: unhandled Tab/Shift+Tab move focus, like a real window.
+  - `Keys(names...)`: several key presses delivered in one frame (a fast
+    typist); components must move once per key.
   - `Tab(back)`
   - `Type(text)`: inserts into the focused editor.
 - **Cursor:** `Cursor()` returns the cursor the UI requests at the pointer (for
@@ -47,8 +53,9 @@ Every input call settles, then (in strict mode) runs a stale check.
 ## Time and motion
 
 - `h.Now` is a virtual clock passed as `gtx.Now`. Settle advances it one
-  frame (1/60 s) per immediate redraw, so finite animations (`kit.Tween`)
-  finish within one input call. `no-settle` fires after 120 such frames.
+  frame (`h.FrameStep`, 1/60 s) per immediate redraw or queued `Post`
+  callback, so finite animations (`kit.Tween`) finish within one input call.
+  `no-settle` fires after 120 such frames.
 - Scheduled redraws (`kit.Loop`, caret blink, timers) are not chased:
   `h.Wait(d)` advances the clock and settles.
 - More input: `Drag(from, to)`, `DragID(id, dx, dy)`, `Chord("Shortcut+K")`.
@@ -107,19 +114,25 @@ In tests, assert `l.Jumps() == 0` after scrolling (see `TestScrollContinuity`).
 ## Automatic checks
 
 - **stale-frame:** after an input, one more frame (with no input) changed the
-  semantics or pixels. Catches draw-before-handle, late hover reads and a missing
-  Notify. The message includes the changed labels, or the changed pixel rectangle.
-- **no-settle:** still requesting redraws after 10 frames.
+  semantics (ids, labels, class, selected, disabled, bounds, kit roles, focus
+  groups, focused id) or pixels. Catches draw-before-handle, late hover reads
+  and a missing Notify. The message names each changed node and field, or the
+  changed pixel rectangle.
+- **no-settle:** still requesting immediate redraws after 120 frames (2s of
+  virtual time). With `NewT`, both fail the test, from the first frame on.
 - **Audit:**
+
+`Problem{Kind, ID, Bounds, Msg}`; `Kind` is a `ProblemKind` constant
+(`ProblemStaleFrame`, `ProblemNoSettle` and the audit kinds below).
 
 | Finding | Meaning |
 |---|---|
-| unlabeled-clickable | No id. Untestable, and silent to screen readers. |
-| tiny-target | Smaller than MinTarget, usually a collapsed box. |
-| occluded | Another interactive area covers the center. |
-| duplicate-id | Two widgets share an id. |
-| missing-glyph | Text the fonts can't draw (tofu). |
-| low-contrast | Enabled text under `MinContrast` (default 4.5, WCAG AA) or `MinContrastLarge` (3, large text) against its background, measured from pixels. 0 turns it off. |
+| unlabeled-clickable (`ProblemUnlabeledClickable`) | No id. Untestable, and silent to screen readers. |
+| tiny-target (`ProblemTinyTarget`) | Smaller than MinTarget, usually a collapsed box. |
+| occluded (`ProblemOccluded`) | Another interactive area covers the center. |
+| duplicate-id (`ProblemDuplicateID`) | Two widgets share an id. |
+| missing-glyph (`ProblemMissingGlyph`) | Text the fonts can't draw (tofu). |
+| low-contrast (`ProblemLowContrast`) | Enabled text under `MinContrast` (default 4.5, WCAG AA) or `MinContrastLarge` (3, large text) against its background, measured from pixels. 0 turns it off. |
 
 - **Contrast:** `h.Contrasts()` returns every enabled label's measured
   ratio, text color and background. Text inside `th.Disable` is exempt, as
@@ -129,7 +142,8 @@ In tests, assert `l.Jumps() == 0` after scrolling (see `TestScrollContinuity`).
   against the old palette.
 - **Focus:** `h.FocusedID()` names the focused widget.
   `h.FocusEscape(id, n)` / `h.ExpectFocusTrapped(id, n)` press Tab and
-  Shift+Tab n times each and report focus leaving `id` (a modal's trap).
+  Shift+Tab n times each and report focus leaving `id` (a modal's trap) as a
+  `FocusLeak`.
   `h.ExpectEscapeCloses(id)`.
   `h.TabUnreachable()` visits enabled named controls and returns those Tab
   skips; `h.ExpectTabReachable()` asserts the result is empty. Run it on a
@@ -154,7 +168,7 @@ gallery, and meetbill's `shot -hover <id>`.
 ## Recipes
 
 - **Hover:**
-  1. Hover row B, then `ExpectBg(B, Panel)` and `ExpectBg(A, Bg)`.
+  1. Hover row B, then `ExpectBg(B, th.Hover)` and `ExpectBg(A, th.Bg)`.
   2. Hover a child control inside B, and check B is still lit.
   3. Move off the table, and check nothing is lit.
 - **Immediate update:** `ClickID(control)`, then assert the model, the control's
@@ -167,15 +181,15 @@ gallery, and meetbill's `shot -hover <id>`.
 Every interactive component has a row in `kit/ui/conform_test.go`:
 
 ```go
-conform.Case{Name: "Switch", ID: "wifi", Role: semantic.Switch, Label: "Wi-Fi",
-	Build: conform.Clickable(func(th *kit.Theme, gtx kit.C, c *kit.Clickable) kit.D {
+conform.Case{Name: "Switch", ID: "wifi", Class: semantic.Switch, Role: kit.RoleSwitch, Label: "Wi-Fi",
+	Build: conform.Clickable(func(th *kit.Theme, gtx layout.Context, c *kit.Clickable) layout.Dimensions {
 		return ui.Switch{ID: "wifi", Label: "Wi-Fi"}.Layout(gtx, th, c)
 	})}
 ```
 
-`Build(th, disabled)` returns a frame (which must wrap the control in
-`th.Disable` when asked) and an activation counter. Per row, subtests check:
-id, role and a spoken label that is not the id; hover changes pixels; one click
+`Build(th, disabled)` returns a `conform.Control`: a frame (which must wrap
+the control in `th.Disable` when asked) and an activation counter. Per row,
+subtests check: id, Gio semantic class, the expected kit role, and a spoken label that is not the id; hover changes pixels; one click
 fires once; Tab reaches it; Enter and Space activate it (`NoKeys` opts out);
 keyboard focus draws a ring; disabled blocks clicks, Tab and keys and says
 so; `ExpectClean` under every preset, at scale 1.5 and 2, density 0.8 and
@@ -196,12 +210,12 @@ clicks, clean under presets, scale and styles. `TestComponentCoverage`
 
 ## Lint (`internal/lint`)
 
-`go/ast` checks over `kit/`: no `color.NRGBA` literal outside the token files,
-no `clip.Stroke`, and two ratchets, geometry literals (`Radius: 4`,
-`gtx.Dp(22)`) and English strings, whose per-file counts may only go down.
-Lower the baseline in the same change (`LINT_BASELINE=1 go test
-./internal/lint -v` prints it). `TestRulesCatch` proves each rule on a
-broken snippet.
+`go/ast` checks over `kit`, `kit/ui` and `kit/x`: no `color.NRGBA` literal
+outside the token files, no `clip.Stroke`, and two ratchets, geometry
+literals (`Radius: 4`, `gtx.Dp(22)`, `kit.Space1 - 1`) and English strings,
+whose per-file counts may only go down. Lower the baseline in the same
+change (`LINT_BASELINE=1 go test ./internal/lint -v` prints it). The
+`*Fixtures` tests prove each rule on snippets it must and must not flag.
 
 ## Writing a new check
 

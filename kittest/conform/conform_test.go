@@ -10,6 +10,7 @@ import (
 
 	"gioui.org/gesture"
 	"gioui.org/io/semantic"
+	"gioui.org/layout"
 	"gioui.org/op/clip"
 	"gioui.org/op/paint"
 
@@ -24,13 +25,13 @@ var broken = map[string]struct {
 	want string
 	c    Case
 }{
-	"unlabeled": {"needs a human label", Case{ID: "x", Role: semantic.Button,
-		Build: custom(func(th *kit.Theme, gtx kit.C, c *kit.Clickable, st kit.State) {
+	"unlabeled": {"needs a human label", Case{ID: "x", Class: semantic.Button, Role: kit.RoleButton,
+		Build: custom(func(th *kit.Theme, gtx layout.Context, c *kit.Clickable, st kit.State) {
 			semantic.Button.Add(gtx.Ops) // no LabelOp: a screen reader says nothing (or the id)
 			fill(gtx, th.Surface, st)
 		})}},
-	"no-hover": {"hover changes nothing", Case{ID: "x", Role: semantic.Button,
-		Build: custom(func(th *kit.Theme, gtx kit.C, c *kit.Clickable, st kit.State) {
+	"no-hover": {"hover changes nothing", Case{ID: "x", Class: semantic.Button, Role: kit.RoleButton,
+		Build: custom(func(th *kit.Theme, gtx layout.Context, c *kit.Clickable, st kit.State) {
 			semantic.Button.Add(gtx.Ops)
 			semantic.LabelOp("X").Add(gtx.Ops)
 			st.Hover, st.Hovered = 0, false
@@ -38,8 +39,8 @@ var broken = map[string]struct {
 		})}},
 	// A transparent control whose hover fill is Panel: visible on the window,
 	// gone on a card.
-	"hover-equals-card": {"hover changes nothing on a card", Case{ID: "x", Role: semantic.Button,
-		Build: custom(func(th *kit.Theme, gtx kit.C, c *kit.Clickable, st kit.State) {
+	"hover-equals-card": {"hover changes nothing on a card", Case{ID: "x", Class: semantic.Button, Role: kit.RoleButton,
+		Build: custom(func(th *kit.Theme, gtx layout.Context, c *kit.Clickable, st kit.State) {
 			semantic.Button.Add(gtx.Ops)
 			semantic.LabelOp("X").Add(gtx.Ops)
 			defer clip.Rect{Max: image.Pt(80, 32)}.Push(gtx.Ops).Pop()
@@ -50,8 +51,17 @@ var broken = map[string]struct {
 				kit.Border(gtx, image.Rectangle{Max: image.Pt(80, 32)}, 0, 2, th.Focus)
 			}
 		})}},
-	"no-ring": {"no visible ring", Case{ID: "x", Role: semantic.Button,
-		Build: custom(func(th *kit.Theme, gtx kit.C, c *kit.Clickable, st kit.State) {
+	// A button that tells kit it is a tab: a screen reader announces the
+	// wrong control.
+	"wrong-role": {"role tab, want button", Case{ID: "x", Class: semantic.Button, Role: kit.RoleButton,
+		Build: custom(func(th *kit.Theme, gtx layout.Context, c *kit.Clickable, st kit.State) {
+			semantic.Button.Add(gtx.Ops)
+			semantic.LabelOp("X").Add(gtx.Ops)
+			kit.SetRole(gtx, "x", kit.RoleTab)
+			fill(gtx, th.Surface, st)
+		})}},
+	"no-ring": {"no visible ring", Case{ID: "x", Class: semantic.Button, Role: kit.RoleButton,
+		Build: custom(func(th *kit.Theme, gtx layout.Context, c *kit.Clickable, st kit.State) {
 			semantic.Button.Add(gtx.Ops)
 			semantic.LabelOp("X").Add(gtx.Ops)
 			st.Focused = false
@@ -59,8 +69,8 @@ var broken = map[string]struct {
 		})}},
 	// The Solid-button bug: a ring in the fill's own colour, visible only in
 	// a few anti-aliased corner pixels.
-	"invisible-ring": {"no visible ring", Case{ID: "x", Role: semantic.Button,
-		Build: custom(func(th *kit.Theme, gtx kit.C, c *kit.Clickable, st kit.State) {
+	"invisible-ring": {"no visible ring", Case{ID: "x", Class: semantic.Button, Role: kit.RoleButton,
+		Build: custom(func(th *kit.Theme, gtx layout.Context, c *kit.Clickable, st kit.State) {
 			semantic.Button.Add(gtx.Ops)
 			semantic.LabelOp("X").Add(gtx.Ops)
 			s := kit.Surface{Bg: th.Accent, Radius: 6}
@@ -68,25 +78,25 @@ var broken = map[string]struct {
 				s.Focus = th.Accent
 			}
 			s.Bg = kit.LerpColor(s.Bg, th.Fg, 0.3*st.Hover)
-			s.Layout(gtx, func(gtx kit.C) kit.D { return kit.D{Size: image.Pt(80, 32)} })
+			s.Layout(gtx, func(gtx layout.Context) layout.Dimensions { return layout.Dimensions{Size: image.Pt(80, 32)} })
 		})}},
-	"ignores-disabled": {"fired 1 times on click", Case{ID: "x", Role: semantic.Button,
-		Build: func(th *kit.Theme, disabled bool) (func(kit.C), *int) {
+	"ignores-disabled": {"fired 1 times on click", Case{ID: "x", Class: semantic.Button, Role: kit.RoleButton,
+		Build: func(th *kit.Theme, disabled bool) Control {
 			var c kit.Clickable
 			n := new(int)
-			return func(gtx kit.C) { // never wraps itself in th.Disable
+			return Control{Activations: n, Frame: func(gtx layout.Context) { // never wraps itself in th.Disable
 				if c.Clicked(gtx) {
 					*n++
 				}
 				ui.Button{ID: "x", Text: "X"}.Layout(gtx, th, &c)
-			}, n
+			}}
 		}}},
-	"pointer-only": {"Tab cannot reach", Case{ID: "x", Role: semantic.Button, NoKeys: true,
-		Build: func(th *kit.Theme, disabled bool) (func(kit.C), *int) {
+	"pointer-only": {"Tab cannot reach", Case{ID: "x", Class: semantic.Button, Role: kit.RoleButton, NoKeys: true,
+		Build: func(th *kit.Theme, disabled bool) Control {
 			var g gesture.Click
 			var hover gesture.Hover
 			n := new(int)
-			return func(gtx kit.C) {
+			return Control{Activations: n, Frame: func(gtx layout.Context) {
 				for {
 					e, ok := g.Update(gtx.Source)
 					if !ok {
@@ -107,30 +117,30 @@ var broken = map[string]struct {
 					col = th.Panel
 				}
 				paint.Fill(gtx.Ops, col)
-			}, n
+			}}
 		}}},
 }
 
 // custom builds a case from a raw draw callback on a Clickable's Press.
-func custom(draw func(th *kit.Theme, gtx kit.C, c *kit.Clickable, st kit.State)) func(*kit.Theme, bool) (func(kit.C), *int) {
-	return func(th *kit.Theme, disabled bool) (func(kit.C), *int) {
+func custom(draw func(th *kit.Theme, gtx layout.Context, c *kit.Clickable, st kit.State)) Builder {
+	return func(th *kit.Theme, disabled bool) Control {
 		var c kit.Clickable
 		n := new(int)
-		return func(gtx kit.C) {
+		return Control{Activations: n, Frame: func(gtx layout.Context) {
 			if c.Clicked(gtx) {
 				*n++
 			}
-			th.Disable(gtx, disabled, func(gtx kit.C) kit.D {
-				return c.Press(gtx, "x", func(gtx kit.C, st kit.State) kit.D {
+			th.Disable(gtx, disabled, func(gtx layout.Context) layout.Dimensions {
+				return th.Press(gtx, &c, "x", func(gtx layout.Context, st kit.State) layout.Dimensions {
 					draw(th, gtx, &c, st)
-					return kit.D{Size: image.Pt(80, 32)}
+					return layout.Dimensions{Size: image.Pt(80, 32)}
 				})
 			})
-		}, n
+		}}
 	}
 }
 
-func fill(gtx kit.C, base color.NRGBA, st kit.State) {
+func fill(gtx layout.Context, base color.NRGBA, st kit.State) {
 	c := kit.LerpColor(base, kit.WithAlpha(base, 120), st.Hover)
 	defer clip.Rect{Max: image.Pt(80, 32)}.Push(gtx.Ops).Pop()
 	paint.Fill(gtx.Ops, c)
@@ -170,25 +180,27 @@ func TestCatchesBrokenControls(t *testing.T) {
 
 // brokenMenu builds a menu composite and lets break_ misbehave after each
 // frame's Update (picked reports a pick this frame).
-func brokenMenu(break_ func(gtx kit.C, m *ui.MenuState, other *kit.Clickable, picked bool, n *int)) func(*kit.Theme) (func(kit.C), *int) {
-	return func(th *kit.Theme) (func(kit.C), *int) {
+func brokenMenu(break_ func(gtx layout.Context, m *ui.MenuState, other *kit.Clickable, picked bool, n *int)) func(*kit.Theme) Control {
+	return func(th *kit.Theme) Control {
 		var m ui.MenuState
 		var other kit.Clickable
 		n := new(int)
 		items := []ui.MenuItem{{ID: "a", Label: "A"}, {ID: "b", Label: "B"}}
-		return func(gtx kit.C) {
+		return Control{Activations: n, Frame: func(gtx layout.Context) {
 			_, picked := m.Update(gtx)
 			other.Clicked(gtx)
 			break_(gtx, &m, &other, picked, n)
 			kit.Col(gtx,
-				kit.Rigid(func(gtx kit.C) kit.D {
-					return ui.Menu{ID: "m", Items: items, Trigger: func(gtx kit.C) kit.D {
+				kit.Rigid(func(gtx layout.Context) layout.Dimensions {
+					return ui.Menu{ID: "m", Items: items, Trigger: func(gtx layout.Context) layout.Dimensions {
 						return ui.Button{ID: "m:btn", Text: "Menu"}.Layout(gtx, th, &m.Trigger)
 					}}.Layout(gtx, th, &m)
 				}),
-				kit.Rigid(func(gtx kit.C) kit.D { return ui.Button{ID: "other", Text: "Other"}.Layout(gtx, th, &other) }),
+				kit.Rigid(func(gtx layout.Context) layout.Dimensions {
+					return ui.Button{ID: "other", Text: "Other"}.Layout(gtx, th, &other)
+				}),
 			)
-		}, n
+		}}
 	}
 }
 
@@ -197,27 +209,34 @@ var brokenComposite = map[string]struct {
 	c    Composite
 }{
 	"focus-lost-on-pick": {"after a pick: focus", Composite{Trigger: "m:btn", Panel: "m", Item: "m/a",
-		Build: brokenMenu(func(gtx kit.C, m *ui.MenuState, other *kit.Clickable, picked bool, n *int) {
+		Build: brokenMenu(func(gtx layout.Context, m *ui.MenuState, other *kit.Clickable, picked bool, n *int) {
 			if picked {
 				*n++
 				other.Focus(gtx) // focus lands somewhere else
 			}
 		})}},
 	"escape-reopens": {"Escape left", Composite{Trigger: "m:btn", Panel: "m", Item: "m/a",
-		Build: brokenMenu(func(gtx kit.C, m *ui.MenuState, other *kit.Clickable, picked bool, n *int) {
-			if picked {
-				*n++
-			}
-			if d, _ := m.DidDismiss(); d {
-				m.Show() // dismissal ignored
-			}
-		})}},
+		Build: brokenMenu(reopen())}},
 	"double-pick": {"Enter picked 2 times", Composite{Trigger: "m:btn", Panel: "m", Item: "m/a",
-		Build: brokenMenu(func(gtx kit.C, m *ui.MenuState, other *kit.Clickable, picked bool, n *int) {
+		Build: brokenMenu(func(gtx layout.Context, m *ui.MenuState, other *kit.Clickable, picked bool, n *int) {
 			if picked {
 				*n += 2
 			}
 		})}},
+}
+
+// reopen breaks a menu by reopening it whenever it closes without a pick:
+// the dismissal is ignored.
+func reopen() func(gtx layout.Context, m *ui.MenuState, other *kit.Clickable, picked bool, n *int) {
+	wasOpen := map[*ui.MenuState]bool{}
+	return func(gtx layout.Context, m *ui.MenuState, other *kit.Clickable, picked bool, n *int) {
+		if picked {
+			*n++
+		} else if wasOpen[m] && !m.Opened() {
+			m.Show()
+		}
+		wasOpen[m] = m.Opened()
+	}
 }
 
 func TestBrokenComposite(t *testing.T) {
@@ -255,23 +274,27 @@ var brokenGroup = map[string]struct {
 	c    Group
 }{
 	"buttons-not-a-group": {"Down reported 0 picks", Group{First: "l/a", Second: "l/b",
-		Build: func(th *kit.Theme, disabled bool) (func(kit.C), *int) {
+		Build: func(th *kit.Theme, disabled bool) Control {
 			var a, b kit.Clickable
 			n := new(int)
-			return func(gtx kit.C) {
+			return Control{Activations: n, Frame: func(gtx layout.Context) {
 				if a.Clicked(gtx) {
 					*n++
 				}
 				if b.Clicked(gtx) {
 					*n++
 				}
-				th.Disable(gtx, disabled, func(gtx kit.C) kit.D {
+				th.Disable(gtx, disabled, func(gtx layout.Context) layout.Dimensions {
 					return kit.Col(gtx,
-						kit.Rigid(func(gtx kit.C) kit.D { return ui.Button{ID: "l/a", Text: "Alpha"}.Layout(gtx, th, &a) }),
-						kit.Rigid(func(gtx kit.C) kit.D { return ui.Button{ID: "l/b", Text: "Beta"}.Layout(gtx, th, &b) }),
+						kit.Rigid(func(gtx layout.Context) layout.Dimensions {
+							return ui.Button{ID: "l/a", Text: "Alpha"}.Layout(gtx, th, &a)
+						}),
+						kit.Rigid(func(gtx layout.Context) layout.Dimensions {
+							return ui.Button{ID: "l/b", Text: "Beta"}.Layout(gtx, th, &b)
+						}),
 					)
 				})
-			}, n
+			}}
 		}}},
 }
 

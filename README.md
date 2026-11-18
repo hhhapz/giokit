@@ -26,7 +26,7 @@ type view struct {
 	toasts     ui.Toasts
 }
 
-func (v *view) Frame(gtx kit.C) {
+func (v *view) Frame(gtx layout.Context) {
 	// 1. Handle input.
 	if v.inc.Clicked(gtx) {
 		v.count++
@@ -36,13 +36,21 @@ func (v *view) Frame(gtx kit.C) {
 	}
 	// 2. Draw from state.
 	th := v.th
-	kit.Fill(gtx, th.Bg, func(gtx kit.C) kit.D {
-		return ui.ToastHost{Page: func(gtx kit.C) kit.D {
+	kit.Fill(gtx, th.Bg, func(gtx layout.Context) layout.Dimensions {
+		return ui.ToastHost{Page: func(gtx layout.Context) layout.Dimensions {
 			return kit.Flex{Axis: layout.Vertical, Gap: kit.Space3, Pad: kit.Space6}.Layout(gtx, th,
-				kit.Rigid(func(gtx kit.C) kit.D { return th.Heading(gtx, fmt.Sprintf("Clicked %d times", v.count)) }),
-				kit.Rigid(func(gtx kit.C) kit.D { return ui.Button{ID: "inc", Text: "Click me", Style: ui.Solid}.Layout(gtx, th, &v.inc) }),
-				kit.Rigid(kit.Fixed(240, func(gtx kit.C) kit.D { return ui.TextField{ID: "name", Placeholder: "Your name"}.Layout(gtx, th, &v.name) })),
-				kit.Rigid(func(gtx kit.C) kit.D { return ui.Button{ID: "greet", Text: "Greet"}.Layout(gtx, th, &v.greet) }),
+				kit.Rigid(func(gtx layout.Context) layout.Dimensions {
+					return th.Heading(gtx, fmt.Sprintf("Clicked %d times", v.count))
+				}),
+				kit.Rigid(func(gtx layout.Context) layout.Dimensions {
+					return ui.Button{ID: "inc", Text: "Click me", Style: ui.Solid}.Layout(gtx, th, &v.inc)
+				}),
+				kit.Rigid(kit.Fixed(240, func(gtx layout.Context) layout.Dimensions {
+					return ui.TextField{ID: "name", Placeholder: "Your name"}.Layout(gtx, th, &v.name)
+				})),
+				kit.Rigid(func(gtx layout.Context) layout.Dimensions {
+					return ui.Button{ID: "greet", Text: "Greet"}.Layout(gtx, th, &v.greet)
+				}),
 			)
 		}}.Layout(gtx, th, &v.toasts)
 	})
@@ -50,19 +58,32 @@ func (v *view) Frame(gtx kit.C) {
 
 func main() {
 	v := &view{th: kit.Dark()}
-	kit.NewApp("hello", "Hello", 480, 320).Run(v.Frame)
+	a := kit.NewApp("hello", "Hello", 480, 320)
+	go func() {
+		if err := a.Run(v.Frame); err != nil {
+			log.Fatal(err)
+		}
+		os.Exit(0)
+	}()
+	kit.Main()
 }
 ```
 
 And its test, headless, with real input (`examples/hello/main_test.go`):
 
 ```go
+v := &view{th: kit.Dark()}
 h := kittest.NewT(t, 480, 320, v.Frame)
+h.Theme = v.th
 h.ClickID("inc")
-h.ExpectText("Clicked 1 times")
-h.ClickID("name"); h.Type("Ada"); h.ClickID("greet")
+h.ClickID("inc")
+h.ExpectText("Clicked 2 times")
+h.ClickID("name")
+h.Type("Ada")
+h.ClickID("greet")
 h.ExpectText("Hello, Ada")
-h.ExpectClean() // no stale frame, unlabeled control, tiny target, low contrast…
+h.ExpectClean()         // no stale frame, unlabeled control, tiny target, low contrast…
+h.ExpectTabReachable()  // every control can be reached with Tab
 ```
 
 ```sh

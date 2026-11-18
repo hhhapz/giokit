@@ -9,12 +9,12 @@ import (
 	"gioui.org/unit"
 )
 
-func flexGtx(max image.Point) C {
+func flexGtx(max image.Point) layout.Context {
 	return layout.Context{Ops: new(op.Ops), Metric: unit.Metric{PxPerDp: 1, PxPerSp: 1}, Constraints: layout.Constraints{Max: max}}
 }
 
 func box(w, h int) layout.FlexChild {
-	return Rigid(func(gtx C) D { return D{Size: image.Pt(w, h)} })
+	return Rigid(func(gtx layout.Context) layout.Dimensions { return layout.Dimensions{Size: image.Pt(w, h)} })
 }
 
 func TestFlexGapPadDensity(t *testing.T) {
@@ -37,7 +37,7 @@ func TestFlexGapPadDensity(t *testing.T) {
 
 func TestFlexSizes(t *testing.T) {
 	th := Light()
-	gtx := func() C { return flexGtx(image.Pt(300, 200)) }
+	gtx := func() layout.Context { return flexGtx(image.Pt(300, 200)) }
 	for name, tc := range map[string]struct {
 		f    Flex
 		want image.Point

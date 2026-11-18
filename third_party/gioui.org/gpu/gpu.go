@@ -578,10 +578,10 @@ func (r *renderer) streamImport(tex *texture, st *stream.Stream, u *stream.Use, 
 		}
 		e = &streamImport{tex: it}
 		tex.imports[d.ID] = e
-		tex.evictImports()
 	}
-	st.SetImportState(stream.ImportSupported)
 	e.used = u.Seq
+	tex.evictImports(e)
+	st.SetImportState(stream.ImportSupported)
 	tex.unhold(u)
 	u.Hold()
 	tex.held, tex.heldSeq, tex.bound = true, u.Seq, e.tex
@@ -598,12 +598,15 @@ type streamImport struct {
 // handful of buffers; IDs beyond that are stale.
 const maxStreamImports = 12
 
-func (t *texture) evictImports() {
+// evictImports releases the least recently bound imports beyond
+// maxStreamImports, sparing keep (the import about to be bound) and the
+// import bound now.
+func (t *texture) evictImports(keep *streamImport) {
 	for len(t.imports) > maxStreamImports {
 		var oldest uint64
 		var e *streamImport
 		for id, v := range t.imports {
-			if v.tex != t.bound && (e == nil || v.used < e.used) {
+			if v != keep && v.tex != t.bound && (e == nil || v.used < e.used) {
 				oldest, e = id, v
 			}
 		}

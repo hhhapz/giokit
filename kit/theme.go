@@ -1,12 +1,3 @@
-// Package kit is a small component layer over Gio for dense, Zed-style desktop tools.
-//
-// Rules the components rely on (see SKILL.md):
-//   - Handle input before drawing, and read hover/press state only inside a
-//     component's own Layout callback, never before it.
-//   - Any state change during a frame must schedule a redraw. kit.Clickable does
-//     this for clicks; use kit.Notify(gtx) for anything else.
-//   - App state is owned by the UI goroutine. Background work hands results back
-//     with App.Post.
 package kit
 
 import (
@@ -20,35 +11,15 @@ import (
 	"gioui.org/widget/material"
 )
 
-// Palette holds the semantic color tokens every component draws from.
-// Components never use raw colors: add a token instead.
-type Palette struct {
-	Bg      color.NRGBA // window background
-	Panel   color.NRGBA // bars, sidebars, cards, row hover
-	Surface color.NRGBA // buttons, inputs, selected nav item
-	Hover   color.NRGBA // hovered nav item / control
-	Border  color.NRGBA // panel separators, button and input outlines
-	Divider color.NRGBA // row separators, card outlines
-
-	Fg    color.NRGBA // primary text
-	Muted color.NRGBA // secondary text
-	Dim   color.NRGBA // tertiary text, headings, disabled
-
-	Accent, AccentBg, AccentBorder color.NRGBA // primary actions, selection, "open" state
-	OnAccent                       color.NRGBA // text/icons on a solid Accent fill
-	Good, GoodBg                   color.NRGBA // done / success
-	Warn, WarnBg                   color.NRGBA // needs attention
-	Bad, BadBg                     color.NRGBA // errors, destructive actions
-
-	Focus   color.NRGBA // keyboard focus ring
-	Overlay color.NRGBA // tooltips, popovers, menus, dialogs (drawn above content)
-	Scrim   color.NRGBA // translucent wash behind a modal dialog
-}
-
 // TypeScale is the theme's text sizes. Components read sizes from here, so a
 // theme can be denser or roomier without touching components.
 type TypeScale struct {
-	Caption, Small, Body, Text, Stat, Title unit.Sp
+	Caption unit.Sp // uppercase section labels, column headers
+	Small   unit.Sp // secondary text: hints, captions under fields
+	Body    unit.Sp // controls and most text
+	Text    unit.Sp // reading text and empty-state titles
+	Stat    unit.Sp // large figures (Stat cards)
+	Title   unit.Sp // dialog and page titles
 }
 
 // Default type scale (also exposed as the Size* constants).
@@ -61,22 +32,47 @@ const (
 	SizeTitle   unit.Sp = 22
 )
 
-var DefaultType = TypeScale{SizeCaption, SizeSmall, SizeBody, SizeText, SizeStat, SizeTitle}
+// DefaultType returns giokit's type scale, the Size* constants. Each call
+// returns a fresh value.
+func DefaultType() TypeScale {
+	return TypeScale{
+		Caption: SizeCaption,
+		Small:   SizeSmall,
+		Body:    SizeBody,
+		Text:    SizeText,
+		Stat:    SizeStat,
+		Title:   SizeTitle,
+	}
+}
 
+// Theme is everything a component reads to draw: colors, text sizes and
+// faces, spacing, shape, motion and the strings it shows or speaks.
+//
+// Build a theme with New, Dark, Light, Generate or ThemeFromTokens; the zero
+// Theme has no shaper and cannot draw text. Fields may be written directly,
+// between frames, and take effect from the next frame. A theme belongs to
+// the UI goroutine. Copies made by Derive (or by assignment) share its
+// Shaper, which is not safe for concurrent use, so a copy is not
+// permission to draw on another goroutine.
 type Theme struct {
-	Palette
-	Name string
-	Dark bool // the palette is dark (for apps choosing images/icons)
-	Type TypeScale
+	Palette           // the colour tokens
+	Name    string    // the theme's display name ("Dark", a preset's name)
+	Dark    bool      // the palette is dark (for apps choosing images/icons)
+	Type    TypeScale // text sizes; scale them all with Type.Scaled
 
 	// Radius is the corner radius of controls (buttons, fields, selects).
 	// Everything else derives from it: RadiusSm (checkboxes, menu rows, tabs),
 	// RadiusLg (cards, menus, dialogs) and RadiusFull (badges). 0 is square
 	// everywhere; a huge value makes pill-shaped controls.
-	Radius  unit.Dp
-	Stroke  unit.Dp // border width of controls, fields and cards (1 hairline)
-	Ring    unit.Dp // keyboard focus ring width (2; thicker is easier to see)
-	Density float32 // spacing multiplier: 0.8 compact, 1 regular, 1.2 comfortable
+	Radius unit.Dp
+	// Stroke is the border width of controls, fields and cards (1 is a
+	// hairline). Ring is the keyboard focus ring width (2; thicker is
+	// easier to see). Styled applies both to a Surface that leaves its own
+	// widths 0.
+	Stroke, Ring unit.Dp
+	// Density multiplies spacing (Space): 0.8 compact, 1 regular, 1.2
+	// comfortable. 0 means 1, so a theme built without it is regular.
+	Density float32
 	// Controls is the height class of buttons, fields, selects, tabs and menu
 	// rows; they line up with each other at every size.
 	Controls ControlSize
@@ -85,8 +81,9 @@ type Theme struct {
 	Elevation float32
 	// HeadingWeight is the weight of page headings.
 	HeadingWeight font.Weight
-	// Motion scales every animation duration. 0 disables animation (reduced
-	// motion); continuous animations (spinners) then draw a static frame.
+	// Motion scales every animation duration (Dur). Unlike Density, 0 is
+	// meaningful: it disables animation (reduced motion), and continuous
+	// animations (spinners) then draw a static frame.
 	Motion float32
 	// DisabledAlpha is the opacity of controls inside Theme.Disable.
 	DisabledAlpha float32
@@ -97,13 +94,22 @@ type Theme struct {
 	UI, Mono font.Typeface // bundled typefaces for UI text and code/logs
 	Fonts    string        // name of the font set (UseFonts); "Go" by default
 
+	// Shaper shapes all text, from bundled fonts only. UseFonts replaces it.
 	Shaper *text.Shaper
-	mat    *material.Theme
+	mat    *material.Theme // built and refreshed by Material
 }
 
-func rgb(v uint32) color.NRGBA {
-	return color.NRGBA{R: uint8(v >> 16), G: uint8(v >> 8), B: uint8(v), A: 0xff}
-}
+// New's defaults for the fields a palette does not set.
+const (
+	defaultRadius        unit.Dp = 6
+	defaultStroke        unit.Dp = 1
+	defaultRing          unit.Dp = 2
+	defaultDensity               = 1
+	defaultMotion                = 1
+	defaultElevation             = 1
+	defaultDisabledAlpha         = 0.45
+	defaultFontSet               = "Go"
+)
 
 // Dark is the default theme: a muted One Dark–like palette.
 func Dark() *Theme {
@@ -116,49 +122,69 @@ func Dark() *Theme {
 		Bad: rgb(0xd07277), BadBg: rgb(0x3e2729),
 		Focus: rgb(0x74ade8), Overlay: rgb(0x31373d), Scrim: color.NRGBA{A: 0x8c},
 	}
-	t := New(p.Legible(true))
-	t.Name, t.Dark = "Dark", true
-	return t
+	const dark = true
+	return newNamed("Dark", dark, p.Legible(dark))
 }
 
 // Light is the default light theme, generated from the same accent.
 func Light() *Theme {
-	return Generate(PresetSeeds[0])
+	return Generate(PresetSeeds()[0])
 }
 
-// New builds a theme from a palette with default metrics.
+// New builds a theme from a palette, with giokit's default type scale,
+// metrics, shape, motion and English strings, and the bundled Go fonts.
+// It uses p as given; Palette.Legible fixes text contrast first if needed.
+//
+// New creates a text shaper, which loads fonts and caches shaped text: it
+// is too costly to call per frame. Build themes once and restyle with
+// Derive, which shares the shaper.
 func New(p Palette) *Theme {
 	// Bundled fonts only: system fallback makes rendering machine-dependent and
 	// hides missing glyphs on the dev box that show as tofu elsewhere.
-	sh := text.NewShaper(text.NoSystemFonts(), text.WithCollection(gofont.Collection()))
-	t := &Theme{Palette: p, Type: DefaultType, Radius: 6, Stroke: 1, Ring: 2, Density: 1, Motion: 1,
-		Elevation: 1, HeadingWeight: font.Bold, DisabledAlpha: 0.45, Metrics: DefaultMetrics, Strings: English,
-		UI: "Go", Mono: "Go Mono", Fonts: "Go", Shaper: sh}
-	t.syncMaterial()
+	shaper := text.NewShaper(text.NoSystemFonts(), text.WithCollection(gofont.Collection()))
+	return &Theme{
+		Palette:       p,
+		Type:          DefaultType(),
+		Radius:        defaultRadius,
+		Stroke:        defaultStroke,
+		Ring:          defaultRing,
+		Density:       defaultDensity,
+		Motion:        defaultMotion,
+		Elevation:     defaultElevation,
+		HeadingWeight: Bold,
+		DisabledAlpha: defaultDisabledAlpha,
+		Metrics:       DefaultMetrics(),
+		Strings:       English(),
+		UI:            "Go",
+		Mono:          "Go Mono",
+		Fonts:         defaultFontSet,
+		Shaper:        shaper,
+	}
+}
+
+// newNamed is New for a named palette of known mode.
+func newNamed(name string, dark bool, p Palette) *Theme {
+	t := New(p)
+	t.Name, t.Dark = name, dark
 	return t
 }
 
-func (t *Theme) syncMaterial() {
-	m := material.NewTheme()
-	if t.mat != nil {
-		cp := *t.mat
-		m = &cp
-	}
-	m.Shaper = t.Shaper
-	m.Palette = material.Palette{Bg: t.Bg, Fg: t.Fg, ContrastBg: t.Accent, ContrastFg: t.OnAccent}
-	m.Face = t.UI
-	t.mat = m
-}
-
-// Derive returns a copy of t changed by f, sharing the font shaper. Use it to
+// Derive returns a copy of t changed by f; t is unchanged. Use it to
 // restyle a subtree (a danger zone, a sidebar with its own tint, a compact
 // table) without touching components:
 //
 //	danger := th.Derive(func(t *kit.Theme) { t.Accent, t.AccentBg = t.Bad, t.BadBg })
+//
+// Value fields (colors, sizes, Strings, Metrics) are the copy's own, as are
+// its Material settings. The Shaper is shared, which keeps text caches warm;
+// calling UseFonts on the copy gives it a new shaper without touching t.
 func (t *Theme) Derive(f func(t *Theme)) *Theme {
 	c := *t
+	if c.mat != nil { // the copy's material settings are its own
+		m := *c.mat
+		c.mat = &m
+	}
 	f(&c)
-	c.syncMaterial()
 	return &c
 }
 
@@ -166,11 +192,20 @@ func (t *Theme) Derive(f func(t *Theme)) *Theme {
 // theme, a component's Size for one instance.
 type ControlSize int
 
+// Control sizes. ControlDefault is the zero value, so a component without a
+// Size follows its theme, and a theme without Controls is medium. Any value
+// other than these is treated as medium.
 const (
 	ControlDefault ControlSize = iota // on a component: the theme's size; on a theme: medium
 	ControlSmall
 	ControlMedium
 	ControlLarge
+)
+
+// Padding multipliers of the small and large control sizes; medium is 1.
+const (
+	controlSmallScale = 0.55
+	controlLargeScale = 1.5
 )
 
 // ControlPad scales a control's inner padding v by density and size
@@ -180,25 +215,39 @@ func (t *Theme) ControlPad(size ControlSize, v unit.Dp) unit.Dp {
 	if size == ControlDefault {
 		size = t.Controls
 	}
-	f := float32(1)
+	scale := unit.Dp(1)
 	switch size {
 	case ControlSmall:
-		f = 0.55
+		scale = controlSmallScale
 	case ControlLarge:
-		f = 1.5
+		scale = controlLargeScale
 	}
-	return t.Space(v) * unit.Dp(f)
+	return t.Space(v) * scale
 }
 
 // control is ControlPad at the theme's size.
 func (t *Theme) control(v unit.Dp) unit.Dp { return t.ControlPad(ControlDefault, v) }
 
-// RadiusSm is the corner of small parts: checkboxes, menu rows, tabs.
-func (t *Theme) RadiusSm() unit.Dp { return min(t.Radius*2/3, 8) }
+// Caps on the derived radii. They are design limits, not geometry: they
+// keep a pill-shaped theme (huge Radius) from rounding small parts into
+// dots and containers into capsules.
+const (
+	radiusSmMax unit.Dp = 8
+	radiusLgMax unit.Dp = 16
+)
 
-// RadiusLg is the corner of containers: cards, menus, popovers, dialogs.
-// It is capped, so pill-shaped controls don't make capsule-shaped cards.
-func (t *Theme) RadiusLg() unit.Dp { return min(t.Radius*1.4, 16) }
+// radiusRound is larger than any half side a control has. Surface and
+// Border clamp a radius to half the shorter side, so it draws fully round.
+const radiusRound unit.Dp = 999
+
+// RadiusSm is the corner of small parts: checkboxes, menu rows, tabs. It is
+// two thirds of Radius, at most 8dp.
+func (t *Theme) RadiusSm() unit.Dp { return min(t.Radius*2/3, radiusSmMax) }
+
+// RadiusLg is the corner of containers: cards, menus, popovers, dialogs. It
+// is 1.4 times Radius, at most 16dp, so pill-shaped controls don't make
+// capsule-shaped cards.
+func (t *Theme) RadiusLg() unit.Dp { return min(t.Radius*1.4, radiusLgMax) }
 
 // RadiusFull is the corner of badges and pills: fully round, unless the
 // theme is square (Radius 0).
@@ -206,11 +255,12 @@ func (t *Theme) RadiusFull() unit.Dp {
 	if t.Radius == 0 {
 		return 0
 	}
-	return 999
+	return radiusRound
 }
 
-// Styled fills a Surface's border and ring widths from the theme. Components
-// build their surfaces through it, so Stroke and Ring apply everywhere.
+// Styled fills a Surface's border and ring widths from the theme's Stroke
+// and Ring where the Surface leaves them 0. Components build their surfaces
+// through it, so Stroke and Ring apply everywhere.
 func (t *Theme) Styled(s Surface) Surface {
 	if s.Stroke == 0 {
 		s.Stroke = t.Stroke
@@ -224,31 +274,58 @@ func (t *Theme) Styled(s Surface) Surface {
 // Fonts is a set of bundled typefaces: a UI face and a code face, with the
 // font files to shape them. See package kit/fonts for the curated sets.
 type Fonts struct {
-	Name     string
-	UI, Mono font.Typeface
-	Faces    []font.FontFace
+	Name     string          // recorded in Theme.Fonts and theme tokens
+	UI, Mono font.Typeface   // faces for UI text and for code and logs
+	Faces    []font.FontFace // the font files; UseFonts does not modify them
 }
 
-// UseFonts switches t to the font set f. It builds a new shaper (call it
-// when the choice changes, not every frame); Go's fonts stay in the
-// collection as a fallback for glyphs f lacks.
+// UseFonts switches t to the font set f, in place. It builds a new shaper
+// (call it when the choice changes, not every frame); Go's fonts stay in
+// the collection as a fallback for glyphs f lacks. Themes derived from t
+// earlier keep the old shaper.
 func (t *Theme) UseFonts(f Fonts) {
 	faces := append(append([]font.FontFace(nil), f.Faces...), gofont.Collection()...)
 	t.Shaper = text.NewShaper(text.NoSystemFonts(), text.WithCollection(faces))
 	t.UI, t.Mono, t.Fonts = f.UI, f.Mono, f.Name
-	t.syncMaterial()
 }
 
 // Scaled returns the type scale with every size multiplied by f.
 func (s TypeScale) Scaled(f float32) TypeScale {
 	m := unit.Sp(f)
-	return TypeScale{s.Caption * m, s.Small * m, s.Body * m, s.Text * m, s.Stat * m, s.Title * m}
+	return TypeScale{
+		Caption: s.Caption * m,
+		Small:   s.Small * m,
+		Body:    s.Body * m,
+		Text:    s.Text * m,
+		Stat:    s.Stat * m,
+		Title:   s.Title * m,
+	}
 }
 
-// Material exposes the underlying material theme for widgets kit doesn't wrap.
-func (t *Theme) Material() *material.Theme { return t.mat }
+// Material returns the material theme kit draws editors and labels with,
+// for widgets kit doesn't wrap. Its Palette, Face and Shaper follow the
+// theme's Bg, Fg, Accent, OnAccent, UI and Shaper at every call, so direct
+// field writes take effect. Its other settings (TextSize, FingerSize,
+// icons) are the caller's to change, and are kept when those fields change.
+// Call it each frame rather than keeping the pointer: a change to a
+// mirrored field replaces it.
+func (t *Theme) Material() *material.Theme {
+	want := material.Palette{Bg: t.Bg, Fg: t.Fg, ContrastBg: t.Accent, ContrastFg: t.OnAccent}
+	if m := t.mat; m != nil && m.Palette == want && m.Face == t.UI && m.Shaper == t.Shaper {
+		return m
+	}
+	var m material.Theme
+	if t.mat != nil {
+		m = *t.mat // never mutate a material theme an earlier call returned
+	} else {
+		m = *material.NewTheme()
+	}
+	m.Palette, m.Face, m.Shaper = want, t.UI, t.Shaper
+	t.mat = &m
+	return t.mat
+}
 
-// Space scales a spacing value by the theme's density.
+// Space scales a spacing value by the theme's Density (0 counts as 1).
 func (t *Theme) Space(v unit.Dp) unit.Dp {
 	if t.Density == 0 {
 		return v
@@ -268,7 +345,9 @@ const (
 	DurSlow   = 260 * time.Millisecond // larger movement
 )
 
-var (
+// Font weights for Theme.Text and Theme.HeadingWeight, so callers need not
+// import gioui.org/font.
+const (
 	Regular  = font.Normal
 	Medium   = font.Medium
 	SemiBold = font.SemiBold

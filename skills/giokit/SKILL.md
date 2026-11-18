@@ -15,7 +15,7 @@ Docs: `$(go list -m -f '{{.Dir}}' github.com/hhhapz/giokit)/docs/`. Read only wh
    then draw. Drawing first shows stale state until the next mouse move.
    `Clickable.Layout` drops unread clicks.
 2. **Read hover/press only inside the component callback**
-   (`th.Press(gtx, c, id, func(gtx, st kit.State) D)`, `Hover.Layout`). A value read before
+   (`th.Press(gtx, c, id, func(gtx, st kit.State) layout.Dimensions)`, `kit.HoverArea.Layout`). A value read before
    layout is one event old, so the highlight lands on the wrong row.
 3. **Mid-frame mutation → `kit.Notify(gtx)`.** `kit.Clickable` does this for you.
 4. **UI goroutine owns state.** No mutexes or snapshots. Background work goes
@@ -47,14 +47,14 @@ Docs: `$(go list -m -f '{{.Dir}}' github.com/hhhapz/giokit)/docs/`. Read only wh
 15. **Disabled is `th.Disable(gtx, cond, w)`,** never a gray color: it also
     blocks input, leaves the Tab order and tells screen readers.
 16. **Floating things are kit overlays** (`Popover`, `Menu`, `Select`,
-    `ContextArea`, `Modal`, `ToastHost`), never a hand-rolled `op.Defer`:
+    `ContextMenu`, `Modal`, `ToastHost`), never a hand-rolled `op.Defer`:
     they place against window edges, trap focus, and close on Escape.
 17. **giokit builds on stock Gio** (Linux: `-tags novulkan` or the Vulkan
     headers). The fork (`replace gioui.org => <giokit>/third_party/gioui.org`)
     is optional (Wayland cursor and wheel fixes; Vulkan opt-in) and required
     only by `kit/x/video` and `kit/forktrace`.
 18. **Custom buttons must be Tab reachable:** give icon-only controls a human label with `TagLabel` or `ui.IconButton{Label: ...}`, then check `h.TabUnreachable()`.
-19. **Alternative text is not painted text:** tag artwork with `semantic.Image`; keep its label for accessibility without applying text contrast checks to pixels.
+19. **Alternative text is not painted text:** tag artwork with `kit.TagImage(gtx, id, label)` (role image): the label is spoken, and the contrast audit skips its pixels.
 20. **Spacing comes from the scale:** `kit.Space2` (8dp), `kit.Space3` (12dp)…
     through `th.Space(...)` or a `kit.Flex{Gap, Pad}`, so Density applies. One
     styled `kit.Flex` replaces Col + Gap + Pad + Surface nesting.
@@ -77,15 +77,21 @@ Docs: `$(go list -m -f '{{.Dir}}' github.com/hhhapz/giokit)/docs/`. Read only wh
 ## Verify every UI change headlessly (no window needed)
 
 ```go
-h := kittest.NewT(t, 1100, 720, v.Frame); h.Theme = v.th
-h.Hover("row:2"); h.ExpectBg("row:2", th.Panel)
-h.ClickID("qty:2/plus"); h.ExpectTextIn("row:2", "1.5")
-h.ExpectClean() // audit: ids, tiny targets, occlusion, duplicate ids, tofu
+h := kittest.NewT(t, 1100, 720, v.Frame)
+h.Theme = v.th
+h.Hover("row:2")
+h.ExpectBg("row:2", th.Hover)
+h.ClickID("qty:2/plus")
+h.ExpectTextIn("row:2", "1.5")
+h.ExpectClean() // audit: ids, tiny targets, occlusion, duplicate ids, tofu, contrast
 ```
 
 - **Custom controls:** add a `conform.Case` (`kittest/conform`) and
   `conform.Run(t, ...)`: role, label, hover, click, Tab, keys, ring, disabled,
-  presets, HiDPI.
+  presets, HiDPI. Layer openers use `conform.Composite`, collections
+  `conform.Group`.
+- **Background work in tests:** pass `h.App()` to `kit.Spawn`/`Post`, then
+  `h.RunTasks()` waits for the work and its callbacks.
 - **Strict mode is on by default.** After each input the harness re-renders, and
   any change means the frame was stale (catches rules 1–3 automatically).
 - **Look at the UI:** `h.Snap(label)` …, then `h.SaveSheet(path, 2, 2)`, then read

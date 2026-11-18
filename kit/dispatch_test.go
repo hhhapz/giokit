@@ -1,0 +1,286 @@
+package kit
+
+import (
+	"image"
+	"slices"
+	"testing"
+	"time"
+
+	"gioui.org/f32"
+	"gioui.org/io/event"
+	"gioui.org/io/input"
+	"gioui.org/io/key"
+	"gioui.org/io/pointer"
+	"gioui.org/layout"
+	"gioui.org/op"
+	"gioui.org/op/clip"
+)
+
+// windowRunner drives frames through a Window and a Gio router, the way
+// App.Run does, without a display.
+type windowRunner struct {
+	w   Window
+	r   input.Router
+	ops op.Ops
+}
+
+func (wr *windowRunner) frame(draw func(gtx layout.Context)) {
+	wr.ops.Reset()
+	gtx := wr.w.Begin(layout.Context{
+		Ops:         &wr.ops,
+		Source:      wr.r.Source(),
+		Constraints: layout.Exact(image.Pt(100, 100)),
+		Now:         time.Unix(0, 0),
+	})
+	draw(gtx)
+	wr.w.End(gtx)
+	wr.r.Frame(&wr.ops)
+}
+
+// focus gives tag focus, with frames before and after so the router knows
+// the tag and the widgets see the focus.
+func (wr *windowRunner) focus(draw func(gtx layout.Context), tag event.Tag) {
+	wr.frame(draw)
+	wr.r.Source().Execute(key.FocusCmd{Tag: tag})
+	wr.frame(draw)
+}
+
+// press queues a key press and runs a frame to dispatch it.
+func (wr *windowRunner) press(draw func(gtx layout.Context), name key.Name, mods key.Modifiers) {
+	wr.r.Queue(key.Event{Name: name, Modifiers: mods, State: key.Press})
+	wr.frame(draw)
+}
+
+// customFocusable is a focusable built from Gio primitives and kit's
+// exported API only, the way kit/ui builds a slider or a split handle.
+type customFocusable struct{}
+
+func (c *customFocusable) layout(gtx layout.Context, id string) {
+	for {
+		if _, ok := gtx.Event(key.FocusFilter{Target: c}); !ok {
+			break
+		}
+	}
+	defer clip.Rect(image.Rect(0, 0, 10, 10)).Push(gtx.Ops).Pop()
+	event.Op(gtx.Ops, c)
+	Tag(gtx, id)
+	FocusID(gtx, c, id)
+}
+
+// A custom focusable that declares itself with FocusID takes part in key
+// dispatch: an action of the KeyContext around it runs while it is focused.
+func TestFocusIDJoinsKeyContext(t *testing.T) {
+	var wr windowRunner
+	var c customFocusable
+	got := ""
+	draw := func(gtx layout.Context) {
+		OnAction(gtx, ActConfirm, func() { got = "root" })
+		KeyContext(gtx, "editor", func(gtx layout.Context) layout.Dimensions {
+			OnAction(gtx, ActConfirm, func() { got = "editor" })
+			c.layout(gtx, "custom")
+			return layout.Dimensions{}
+		})
+	}
+	wr.focus(draw, &c)
+	if id := wr.w.FocusedID(wr.r.Source()); id != "custom" {
+		t.Fatalf("focused id %q, want custom", id)
+	}
+	wr.press(draw, key.NameReturn, 0)
+	if got != "editor" {
+		t.Fatalf("Enter on a custom focusable ran %q, want the enclosing context's handler", got)
+	}
+}
+
+// A focusable registered twice in one frame (a dialog tracks its focus
+// inside its own context, then names it outside) resolves from its first
+// registration.
+func TestFocusFirstRegistrationWins(t *testing.T) {
+	var wr windowRunner
+	var c customFocusable
+	got := ""
+	draw := func(gtx layout.Context) {
+		KeyContext(gtx, "dialog", func(gtx layout.Context) layout.Dimensions {
+			OnAction(gtx, ActCancel, func() { got = "dialog" })
+			trackFocus(gtx, &c)
+			return layout.Dimensions{}
+		})
+		c.layout(gtx, "custom")
+	}
+	wr.focus(draw, &c)
+	wr.press(draw, key.NameEscape, 0)
+	if got != "dialog" {
+		t.Fatalf("Escape ran %q, want the context of the first registration", got)
+	}
+}
+
+// A tag named twice in one frame keeps its first id, as it keeps its first
+// KeyContext.
+func TestFocusIDFirstNameWins(t *testing.T) {
+	var wr windowRunner
+	var c customFocusable
+	draw := func(gtx layout.Context) {
+		c.layout(gtx, "first")
+		FocusID(gtx, &c, "second")
+	}
+	wr.focus(draw, &c)
+	if id := wr.w.FocusedID(wr.r.Source()); id != "first" {
+		t.Fatalf("focused id %q, want first", id)
+	}
+}
+
+// A shortcut bound to a disabled action does not take its chord: the key
+// bubbles to the next binding outward. Once enabled, the action runs.
+func TestDisabledActionBindingBubbles(t *testing.T) {
+	var wr windowRunner
+	enabled := false
+	ran := ""
+	var a Actions
+	a.MustRegister(Action{ID: "inner", Title: "Inner", Run: func() { ran = "inner" }, Enabled: func() bool { return enabled }})
+	var inner, outer Keymap
+	if err := inner.BindActions(&a, map[string]string{"inner": "Ctrl+K"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	outer.MustBind("Ctrl+K", "Outer", func() { ran = "outer" })
+	var c Clickable
+	draw := func(gtx layout.Context) {
+		outer.Attach(gtx)
+		KeyContext(gtx, "inner", func(gtx layout.Context) layout.Dimensions {
+			inner.Attach(gtx)
+			return c.Layout(gtx, func(gtx layout.Context) layout.Dimensions { return layout.Dimensions{Size: image.Pt(10, 10)} })
+		})
+	}
+	wr.focus(draw, &c)
+	wr.press(draw, "K", key.ModCtrl)
+	if ran != "outer" {
+		t.Fatalf("disabled action: ran %q, want the outer binding", ran)
+	}
+	enabled, ran = true, ""
+	wr.press(draw, "K", key.ModCtrl)
+	if ran != "inner" {
+		t.Fatalf("enabled action: ran %q, want inner", ran)
+	}
+}
+
+// Re-applying overrides after the user clears a shortcut must remove the
+// binding, not leave the old one live.
+func TestBindActionsRemovesClearedShortcut(t *testing.T) {
+	var a Actions
+	a.MustRegister(Action{ID: "save", Title: "Save", Run: func() {}})
+	a.MustRegister(Action{ID: "open", Title: "Open", Run: func() {}})
+	defaults := map[string]string{"save": "Ctrl+S", "open": "Ctrl+O"}
+	var km Keymap
+	km.MustBind("Ctrl+Q", "Quit", func() {}) // not an action: kept
+	if err := km.BindActions(&a, defaults, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := km.BindActions(&a, defaults, []byte(`{"save":"","open":"Ctrl+P"}`)); err != nil {
+		t.Fatal(err)
+	}
+	var chords []string
+	for _, b := range km.Bindings() {
+		chords = append(chords, b.Chord)
+	}
+	if !slices.Equal(chords, []string{"Ctrl+Q", "Ctrl+P"}) {
+		t.Fatalf("bindings after clearing save and moving open: %v", chords)
+	}
+	if km.HintFor("save") != "" || km.HintFor("open") != "Ctrl+P" {
+		t.Fatalf("hints: save %q, open %q", km.HintFor("save"), km.HintFor("open"))
+	}
+	// A failing call changes nothing.
+	if err := km.BindActions(&a, defaults, []byte(`{"open":"Hyper+P"}`)); err == nil {
+		t.Fatal("invalid chord accepted")
+	}
+	if len(km.Bindings()) != 2 {
+		t.Fatalf("a failed BindActions changed the keymap: %+v", km.Bindings())
+	}
+}
+
+// Bindings is a snapshot: changing it does not change the keymap.
+func TestBindingsIsACopy(t *testing.T) {
+	var km Keymap
+	km.MustBind("Ctrl+K", "Palette", func() {})
+	b := km.Bindings()
+	b[0].Title = "Changed"
+	if km.Hint("Palette") != "Ctrl+K" {
+		t.Fatal("changing the slice Bindings returned changed the keymap")
+	}
+}
+
+func TestParseChordPlusAndFunctionKeys(t *testing.T) {
+	for _, c := range []struct {
+		in   string
+		name key.Name
+		mods key.Modifiers
+	}{
+		{in: "+", name: "+"},
+		{in: "Ctrl++", name: "+", mods: key.ModCtrl},
+		{in: "Ctrl+Shift++", name: "+", mods: key.ModCtrl | key.ModShift},
+		{in: "F1", name: key.NameF1},
+		{in: "f12", name: key.NameF12},
+		{in: "Shift+F5", name: key.NameF5, mods: key.ModShift},
+	} {
+		n, m, err := ParseChord(c.in)
+		if err != nil || n != c.name || m != c.mods {
+			t.Errorf("%q → %q %v %v, want %q %v", c.in, n, m, err, c.name, c.mods)
+		}
+	}
+	for _, bad := range []string{"F0", "F13", "F99", "Ctrl+F13", "++", "+K"} {
+		if _, _, err := ParseChord(bad); err == nil {
+			t.Errorf("%q should not parse", bad)
+		}
+	}
+	// The plus key round-trips through its display form.
+	n, m, _ := ParseChord("Ctrl++")
+	if n2, m2, err := ParseChord(FormatChord(n, m)); err != nil || n2 != n || m2 != m {
+		t.Errorf("Ctrl++ does not round-trip: %q", FormatChord(n, m))
+	}
+}
+
+// Theme.Press animates hover at the theme's motion speed: with Motion 0
+// the hover value jumps straight to 1.
+func TestPressHonoursMotion(t *testing.T) {
+	for _, tc := range []struct {
+		motion float32
+		jumps  bool
+	}{{motion: 1, jumps: false}, {motion: 0, jumps: true}} {
+		th := Dark()
+		th.Motion = tc.motion
+		var wr windowRunner
+		var c Clickable
+		var hover float32
+		draw := func(gtx layout.Context) {
+			th.Press(gtx, &c, "b", func(gtx layout.Context, st State) layout.Dimensions {
+				hover = st.Hover
+				return layout.Dimensions{Size: image.Pt(50, 50)}
+			})
+		}
+		wr.frame(draw)
+		wr.r.Queue(pointer.Event{Kind: pointer.Move, Source: pointer.Mouse, Position: f32.Pt(10, 10)})
+		wr.frame(draw)
+		if !c.Hovered() {
+			t.Fatalf("motion %v: pointer move did not hover", tc.motion)
+		}
+		if got := hover == 1; got != tc.jumps {
+			t.Errorf("motion %v: hover %v on the first hovered frame", tc.motion, hover)
+		}
+	}
+}
+
+func TestFocusVisible(t *testing.T) {
+	var v FocusVisible
+	if !v.Visible(true) {
+		t.Fatal("zero value should show the ring")
+	}
+	v.Hide()
+	if v.Visible(true) {
+		t.Fatal("ring shown after a pointer focus")
+	}
+	if v.Visible(false) || !v.Visible(true) {
+		t.Fatal("losing focus should reset the ring to visible")
+	}
+	v.Hide()
+	v.Show()
+	if !v.Visible(true) {
+		t.Fatal("Show did not show the ring")
+	}
+}

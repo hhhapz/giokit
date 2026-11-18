@@ -5,7 +5,9 @@ import (
 	"image"
 	"testing"
 
+	"gioui.org/layout"
 	"gioui.org/widget"
+	"gioui.org/widget/material"
 
 	"github.com/hhhapz/giokit/kit"
 	"github.com/hhhapz/giokit/kit/fonts"
@@ -24,15 +26,19 @@ func TestControlsLineUp(t *testing.T) {
 				var b kit.Clickable
 				var e widget.Editor
 				var s ui.SelectState
-				h := kittest.NewT(t, 600, 120, func(gtx kit.C) {
+				h := kittest.NewT(t, 600, 120, func(gtx layout.Context) {
 					b.Clicked(gtx)
 					s.Update(gtx)
 					gtx.Constraints.Min = image.Point{} // natural heights, not the window's
 					kit.Row(gtx,
-						kit.Rigid(func(gtx kit.C) kit.D { return ui.Button{ID: "b", Text: "Save"}.Layout(gtx, th, &b) }),
-						kit.Rigid(kit.Fixed(160, func(gtx kit.C) kit.D { return ui.TextField{ID: "f", Placeholder: "Name"}.Layout(gtx, th, &e) })),
-						kit.Rigid(kit.Fixed(160, func(gtx kit.C) kit.D {
-							return ui.Select{ID: "s", Options: []string{"One"}, Selected: 0}.Layout(gtx, th, &s)
+						kit.Rigid(func(gtx layout.Context) layout.Dimensions {
+							return ui.Button{ID: "b", Text: "Save"}.Layout(gtx, th, &b)
+						}),
+						kit.Rigid(kit.Fixed(160, func(gtx layout.Context) layout.Dimensions {
+							return ui.TextField{ID: "f", Placeholder: "Name"}.Layout(gtx, th, &e)
+						})),
+						kit.Rigid(kit.Fixed(160, func(gtx layout.Context) layout.Dimensions {
+							return ui.Select{ID: "s", Options: []ui.Choice{{ID: "one", Label: "One"}}, Selected: "one"}.Layout(gtx, th, &s)
 						})),
 					)
 				})
@@ -54,9 +60,11 @@ func TestControlSizeOrders(t *testing.T) {
 	for _, size := range []kit.ControlSize{kit.ControlSmall, kit.ControlMedium, kit.ControlLarge} {
 		th := kit.Dark().Derive(func(t *kit.Theme) { t.Controls = size })
 		var b kit.Clickable
-		h, err := kittest.New(300, 100, 1, func(gtx kit.C) {
+		h, err := kittest.New(300, 100, 1, func(gtx layout.Context) {
 			gtx.Constraints.Min = image.Point{}
-			kit.Row(gtx, kit.Rigid(func(gtx kit.C) kit.D { return ui.Button{ID: "b", Text: "Save"}.Layout(gtx, th, &b) }))
+			kit.Row(gtx, kit.Rigid(func(gtx layout.Context) layout.Dimensions {
+				return ui.Button{ID: "b", Text: "Save"}.Layout(gtx, th, &b)
+			}))
 		})
 		if err != nil {
 			kittest.NoGPU(t, err)
@@ -82,20 +90,22 @@ func TestInstanceSizesLineUp(t *testing.T) {
 			var e widget.Editor
 			var s ui.SelectState
 			var d ui.DateFieldState
-			h := kittest.NewT(t, 800, 120, func(gtx kit.C) {
+			h := kittest.NewT(t, 800, 120, func(gtx layout.Context) {
 				b.Clicked(gtx)
 				s.Update(gtx)
 				d.Update(gtx)
 				gtx.Constraints.Min = image.Point{}
 				kit.Row(gtx,
-					kit.Rigid(func(gtx kit.C) kit.D { return ui.Button{ID: "b", Text: "Save", Size: size}.Layout(gtx, th, &b) }),
-					kit.Rigid(kit.Fixed(160, func(gtx kit.C) kit.D {
+					kit.Rigid(func(gtx layout.Context) layout.Dimensions {
+						return ui.Button{ID: "b", Text: "Save", Size: size}.Layout(gtx, th, &b)
+					}),
+					kit.Rigid(kit.Fixed(160, func(gtx layout.Context) layout.Dimensions {
 						return ui.TextField{ID: "f", Placeholder: "Name", Size: size}.Layout(gtx, th, &e)
 					})),
-					kit.Rigid(kit.Fixed(160, func(gtx kit.C) kit.D {
-						return ui.Select{ID: "s", Options: []string{"One"}, Size: size}.Layout(gtx, th, &s)
+					kit.Rigid(kit.Fixed(160, func(gtx layout.Context) layout.Dimensions {
+						return ui.Select{ID: "s", Options: []ui.Choice{{ID: "one", Label: "One"}}, Size: size}.Layout(gtx, th, &s)
 					})),
-					kit.Rigid(kit.Fixed(200, func(gtx kit.C) kit.D {
+					kit.Rigid(kit.Fixed(200, func(gtx layout.Context) layout.Dimensions {
 						return ui.DateField{ID: "d", Placeholder: "Date", Size: size}.Layout(gtx, th, &d)
 					})),
 				)
@@ -108,5 +118,26 @@ func TestInstanceSizesLineUp(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// Writing a theme field directly must reach widgets drawn through the
+// material theme (editors, labels), as Derive and UseFonts do.
+func TestMaterialFollowsThemeFields(t *testing.T) {
+	th := kit.Dark()
+	th.Material().TextSize = 20 // an escape-hatch setting kit does not mirror
+	th.Accent, th.OnAccent, th.Fg, th.Bg = th.Bad, th.Panel, th.Good, th.Warn
+	th.UI = "Go Mono"
+	m := th.Material()
+	want := material.Palette{Bg: th.Bg, Fg: th.Fg, ContrastBg: th.Accent, ContrastFg: th.OnAccent}
+	if m.Palette != want || m.Face != th.UI || m.Shaper != th.Shaper {
+		t.Errorf("material theme is stale after field writes: palette %v face %q", m.Palette, m.Face)
+	}
+	if m.TextSize != 20 {
+		t.Errorf("material TextSize %v: settings kit does not mirror must survive a resync", m.TextSize)
+	}
+	d := th.Derive(func(t *kit.Theme) { t.Accent = t.Dim })
+	if d.Material().Palette.ContrastBg != th.Dim || th.Material().Palette.ContrastBg != th.Bad {
+		t.Error("a derived theme's material theme must be independent of its parent's")
 	}
 }

@@ -54,7 +54,9 @@ func TestSkipDetected(t *testing.T) {
 	}
 	h.ExpectClean()
 	if dir := os.Getenv("KITTEST_SHOTS"); dir != "" {
-		h.Save(filepath.Join(dir, "scrolltest.png"))
+		if err := h.Save(filepath.Join(dir, "scrolltest.png")); err != nil {
+			t.Error(err)
+		}
 	}
 }
 
@@ -65,6 +67,20 @@ func TestComponentsInteractive(t *testing.T) {
 	h.ClickID("2:sw")
 	if !b.on["2:sw"] {
 		t.Fatal("switch didn't toggle")
+	}
+	label, found := "", false
+	var walk func([]kittest.A11yNode)
+	walk = func(nodes []kittest.A11yNode) {
+		for _, n := range nodes {
+			if n.ID == "1:icon" {
+				label, found = n.Label, true
+			}
+			walk(n.Children)
+		}
+	}
+	walk(h.A11yTree())
+	if !found || label != "Brightness" {
+		t.Errorf("1:icon: label %q (found %v), want %q", label, found, "Brightness")
 	}
 	h.ExpectClean()
 }

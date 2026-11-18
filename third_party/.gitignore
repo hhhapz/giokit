@@ -1,0 +1,3 @@
+# The fork is an exact copy of upstream plus the patch series, including
+# upstream's reference images (the root ignores *.png).
+!*.png

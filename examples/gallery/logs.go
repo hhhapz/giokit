@@ -3,11 +3,11 @@ package main
 import (
 	"fmt"
 	"math/rand"
+	"slices"
 	"time"
 
 	"gioui.org/layout"
 	"gioui.org/op"
-	"gioui.org/unit"
 	"gioui.org/widget"
 
 	"github.com/hhhapz/giokit/kit"
@@ -16,9 +16,9 @@ import (
 )
 
 type logsState struct {
-	logBuf    x.LogBuffer
-	logView   x.LogViewState
-	logFilter widget.Editor
+	buf       x.LogBuffer
+	view      x.LogViewState
+	filter    widget.Editor
 	levels    ui.TabsState
 	stream    kit.Clickable
 	addMany   kit.Clickable
@@ -29,7 +29,28 @@ type logsState struct {
 	level     int
 }
 
-var levelNames = []string{"All", "Info", "Warn", "Error"}
+// levelOption is one choice of the log demo's level filter.
+type levelOption struct {
+	label string     // the tab's label and id
+	min   x.LogLevel // the least severe level shown
+}
+
+// levels are the level filter's tabs, in display order.
+var levels = []levelOption{
+	{label: "All", min: x.LogDebug},
+	{label: "Info", min: x.LogInfo},
+	{label: "Warn", min: x.LogWarn},
+	{label: "Error", min: x.LogError},
+}
+
+// levelChoices are the level filter's items.
+func levelChoices() []ui.Choice {
+	items := make([]ui.Choice, len(levels))
+	for i, l := range levels {
+		items[i] = ui.Choice{ID: l.label, Label: l.label}
+	}
+	return items
+}
 
 var (
 	logSources = []string{"http", "db", "auth", "cache", "worker"}
@@ -41,69 +62,66 @@ var (
 	}
 )
 
-func unitDp(f float32) unit.Dp { return unit.Dp(f) }
-func unitSp(f float32) unit.Sp { return unit.Sp(f) }
-
 func (g *gallery) initLogs() {
-	g.rng = rand.New(rand.NewSource(7))
-	g.logBuf.Cap = 50000
-	g.logFilter.SingleLine = true
+	g.logs.rng = rand.New(rand.NewSource(7))
+	g.logs.buf.Cap = 50000
+	g.logs.filter.SingleLine = true
 	base := time.Date(2026, 11, 15, 9, 30, 0, 0, time.UTC)
 	for i := 0; i < 200; i++ {
-		g.logBuf.Append(g.fakeLine(base.Add(time.Duration(i) * 137 * time.Millisecond)))
+		g.logs.buf.Append(g.fakeLine(base.Add(time.Duration(i) * 137 * time.Millisecond)))
 	}
 }
 
 func (g *gallery) fakeLine(t time.Time) x.LogLine {
-	i := g.rng.Intn(len(logMsgs))
+	i := g.logs.rng.Intn(len(logMsgs))
 	lvl := x.LogInfo
-	switch {
-	case i == 5 || i == 6:
+	switch i {
+	case 5, 6:
 		lvl = x.LogWarn
-	case i == 7:
+	case 7:
 		lvl = x.LogError
-	case i == 1 || i == 3 || i == 9:
+	case 1, 3, 9:
 		lvl = x.LogDebug
 	}
-	return x.LogLine{Time: t, Level: lvl, Source: logSources[g.rng.Intn(len(logSources))], Text: logMsgs[i]}
+	return x.LogLine{Time: t, Level: lvl, Source: logSources[g.logs.rng.Intn(len(logSources))], Text: logMsgs[i]}
 }
 
 func (g *gallery) handleLogs(gtx C) {
-	if g.stream.Clicked(gtx) {
-		g.streaming = !g.streaming
-		g.nextLine = gtx.Now
+	if g.logs.stream.Clicked(gtx) {
+		g.logs.streaming = !g.logs.streaming
+		g.logs.nextLine = gtx.Now
 	}
-	if g.addMany.Clicked(gtx) {
+	if g.logs.addMany.Clicked(gtx) {
 		for i := 0; i < 1000; i++ {
-			g.logBuf.Append(g.fakeLine(gtx.Now))
+			g.logs.buf.Append(g.fakeLine(gtx.Now))
 		}
 	}
-	if g.clear.Clicked(gtx) {
-		g.logBuf.Clear()
+	if g.logs.clear.Clicked(gtx) {
+		g.logs.buf.Clear()
 	}
-	if i, ok := g.levels.Update(gtx); ok {
-		g.level = i
+	if id, ok := g.logs.levels.Update(gtx); ok {
+		g.logs.level = slices.IndexFunc(levels, func(l levelOption) bool { return l.label == id })
 	}
 	for {
-		if _, ok := g.logFilter.Update(gtx); !ok {
+		if _, ok := g.logs.filter.Update(gtx); !ok {
 			break
 		}
 	}
-	g.logView.Filter = g.logFilter.Text()
-	g.logView.MinLevel = []x.LogLevel{x.LogDebug, x.LogInfo, x.LogWarn, x.LogError}[g.level]
+	g.logs.view.Filter = g.logs.filter.Text()
+	g.logs.view.MinLevel = levels[g.logs.level].min
 	// Streaming without a goroutine: emit lines on a timer driven by the frame
 	// clock. (A real tail would run in a goroutine and hand lines over with
 	// app.Post; see kit.Spawn.)
-	if g.streaming {
-		for !gtx.Now.Before(g.nextLine) {
-			g.logBuf.Append(g.fakeLine(g.nextLine))
-			g.nextLine = g.nextLine.Add(120 * time.Millisecond)
+	if g.logs.streaming {
+		for !gtx.Now.Before(g.logs.nextLine) {
+			g.logs.buf.Append(g.fakeLine(g.logs.nextLine))
+			g.logs.nextLine = g.logs.nextLine.Add(120 * time.Millisecond)
 		}
-		gtx.Execute(op.InvalidateCmd{At: g.nextLine})
+		gtx.Execute(op.InvalidateCmd{At: g.logs.nextLine})
 	}
 }
 
-func (g *gallery) logs(gtx C) D {
+func (g *gallery) logsPage(gtx C) D {
 	th := g.th
 	return g.pageFrame(gtx, "Logs", nil, func(gtx C) D {
 		return kit.Col(gtx,
@@ -113,26 +131,26 @@ func (g *gallery) logs(gtx C) D {
 					// wraps instead of squeezing the last buttons to nothing.
 					return kit.Flow(gtx, 10, 8,
 						kit.Fixed(260, func(gtx C) D {
-							return ui.TextField{ID: "logs:filter", Placeholder: "Filter lines", Icon: kit.IconSearch}.Layout(gtx, th, &g.logFilter)
+							return ui.TextField{ID: "logs:filter", Placeholder: "Filter lines", Icon: kit.IconSearch}.Layout(gtx, th, &g.logs.filter)
 						}),
 						func(gtx C) D {
-							return ui.Tabs{ID: "level", Labels: levelNames, Selected: g.level, Style: ui.TabsSegmented}.Layout(gtx, th, &g.levels)
+							return ui.Tabs{ID: "level", Items: levelChoices(), Selected: levels[g.logs.level].label, Style: ui.TabsSegmented}.Layout(gtx, th, &g.logs.levels)
 						},
 						func(gtx C) D {
-							return ui.Switch{ID: "logs:stream", Label: "Stream", On: g.streaming}.Layout(gtx, th, &g.stream)
+							return ui.Switch{ID: "logs:stream", Label: "Stream", On: g.logs.streaming}.Layout(gtx, th, &g.logs.stream)
 						},
 						func(gtx C) D {
-							return th.Text(gtx, fmt.Sprintf("%d of %d lines", g.logView.Count(&g.logBuf), g.logBuf.Len()), th.Type.Small, th.Dim, kit.Regular)
+							return th.Text(gtx, fmt.Sprintf("%d of %d lines", g.logs.view.Count(&g.logs.buf), g.logs.buf.Len()), th.Type.Small, th.Dim, kit.Regular)
 						},
-						func(gtx C) D { return ui.Button{ID: "logs:add", Text: "Add 1000"}.Layout(gtx, th, &g.addMany) },
+						func(gtx C) D { return ui.Button{ID: "logs:add", Text: "Add 1000"}.Layout(gtx, th, &g.logs.addMany) },
 						func(gtx C) D {
-							return ui.Button{ID: "logs:clear", Text: "Clear", Style: ui.Ghost}.Layout(gtx, th, &g.clear)
+							return ui.Button{ID: "logs:clear", Text: "Clear", Style: ui.Ghost}.Layout(gtx, th, &g.logs.clear)
 						},
 					)
 				})
 			}),
 			kit.Rigid(kit.HLine(th.Border)),
-			kit.Flexed(1, func(gtx C) D { return x.LogView{ID: "logs", Buffer: &g.logBuf}.Layout(gtx, th, &g.logView) }),
+			kit.Flexed(1, func(gtx C) D { return x.LogView{ID: "logs", Buffer: &g.logs.buf}.Layout(gtx, th, &g.logs.view) }),
 		)
 	})
 }

@@ -44,7 +44,7 @@
  	var tex *texture
  	t, exists := cache.get(key)
  	if !exists {
-@@ -487,10 +503,150 @@
+@@ -487,10 +503,153 @@
  	return tex.tex
  }
  
@@ -123,10 +123,10 @@
 +		}
 +		e = &streamImport{tex: it}
 +		tex.imports[d.ID] = e
-+		tex.evictImports()
 +	}
-+	st.SetImportState(stream.ImportSupported)
 +	e.used = u.Seq
++	tex.evictImports(e)
++	st.SetImportState(stream.ImportSupported)
 +	tex.unhold(u)
 +	u.Hold()
 +	tex.held, tex.heldSeq, tex.bound = true, u.Seq, e.tex
@@ -143,12 +143,15 @@
 +// handful of buffers; IDs beyond that are stale.
 +const maxStreamImports = 12
 +
-+func (t *texture) evictImports() {
++// evictImports releases the least recently bound imports beyond
++// maxStreamImports, sparing keep (the import about to be bound) and the
++// import bound now.
++func (t *texture) evictImports(keep *streamImport) {
 +	for len(t.imports) > maxStreamImports {
 +		var oldest uint64
 +		var e *streamImport
 +		for id, v := range t.imports {
-+			if v.tex != t.bound && (e == nil || v.used < e.used) {
++			if v != keep && v.tex != t.bound && (e == nil || v.used < e.used) {
 +				oldest, e = id, v
 +			}
 +		}
@@ -195,7 +198,7 @@
  }
  
  func newRenderer(ctx driver.Device) *renderer {
-@@ -515,6 +671,9 @@
+@@ -515,6 +674,9 @@
  }
  
  func (r *renderer) release() {
@@ -205,6 +208,146 @@
  	r.pather.release()
  	r.blitter.release()
  	r.layerFBOs.delete(r.ctx, 0)
+--- a/gpu/stream_test.go
++++ b/gpu/stream_test.go
+@@ -0,0 +1,137 @@
++// SPDX-License-Identifier: Unlicense OR MIT
++
++package gpu
++
++import (
++	"testing"
++
++	"gioui.org/gpu/internal/driver"
++	"gioui.org/internal/stream"
++)
++
++// importDevice is a device that only imports DMA-BUFs. Calling any other
++// Device method panics.
++type importDevice struct {
++	driver.Device
++	imports int
++}
++
++func (d *importDevice) ImportDMABuf(b driver.DMABuf, filter driver.TextureFilter) (driver.Texture, error) {
++	d.imports++
++	return &importedTexture{fd: b.FD}, nil
++}
++
++// importedTexture records its release. Calling any other Texture method
++// panics.
++type importedTexture struct {
++	driver.Texture
++	fd       int
++	released bool
++}
++
++func (t *importedTexture) Release() {
++	if t.released {
++		panic("texture released twice")
++	}
++	t.released = true
++}
++
++// dmaFrame is a frame of the DMA-BUF with the given ID; its Release
++// increments *released.
++func dmaFrame(id uint64, released *int) stream.Frame {
++	return stream.Frame{
++		DMA:     &stream.DMABuf{ID: id, FD: int(id), Width: 1, Height: 1},
++		Release: func() { *released++ },
++	}
++}
++
++// drawStream draws st once with r, as a frame would, and returns the bound
++// texture.
++func drawStream(t *testing.T, r *renderer, cache *textureCache, st *stream.Stream) *importedTexture {
++	t.Helper()
++	key := textureCacheKey{filter: filterLinear, handle: st}
++	tex, ok := r.streamTex(cache, key, st).(*importedTexture)
++	if !ok {
++		t.Fatal("stream did not draw an imported texture")
++	}
++	return tex
++}
++
++func TestStreamImportEviction(t *testing.T) {
++	dev := new(importDevice)
++	r := &renderer{ctx: dev}
++	cache := newTextureCache()
++	var st stream.Stream
++	released := 0
++	const n = 2*maxStreamImports + 3
++	for id := uint64(1); id <= n; id++ {
++		st.Submit(dmaFrame(id, &released))
++		tex := drawStream(t, r, cache, &st)
++		if tex.released {
++			t.Fatalf("buffer %d: bound texture was released by eviction", id)
++		}
++		if tex.fd != int(id) {
++			t.Fatalf("buffer %d: bound the import of buffer %d", id, tex.fd)
++		}
++		cache.frame()
++	}
++	if dev.imports != n {
++		t.Errorf("imported %d times, want %d", dev.imports, n)
++	}
++	if released != n-1 {
++		t.Errorf("released %d frames, want all but the bound one (%d)", released, n-1)
++	}
++	// A producer cycling a few buffers reuses their imports.
++	for id := uint64(n - 2); id <= n; id++ {
++		st.Submit(dmaFrame(id, &released))
++		drawStream(t, r, cache, &st)
++		cache.frame()
++	}
++	if dev.imports != n {
++		t.Errorf("recent buffers re-imported: %d imports, want %d", dev.imports, n)
++	}
++}
++
++// Two windows draw the same stream: a DMA-BUF frame is released only after
++// both have let go of it.
++func TestStreamTwoRenderers(t *testing.T) {
++	var st stream.Stream
++	released := 0
++	type window struct {
++		r     *renderer
++		cache *textureCache
++	}
++	var wins [2]window
++	for i := range wins {
++		wins[i] = window{r: &renderer{ctx: new(importDevice)}, cache: newTextureCache()}
++	}
++	st.Submit(dmaFrame(1, &released))
++	for _, w := range wins {
++		drawStream(t, w.r, w.cache, &st)
++		w.cache.frame()
++	}
++	st.Submit(dmaFrame(2, &released))
++	if released != 0 {
++		t.Fatalf("bound frame released on replace: %d", released)
++	}
++	drawStream(t, wins[0].r, wins[0].cache, &st)
++	wins[0].cache.frame()
++	if released != 0 {
++		t.Fatalf("frame released while the second window still samples it: %d", released)
++	}
++	// The second window stops drawing the stream: its cache drops the texture
++	// at the end of the next frame.
++	wins[1].cache.frame()
++	if released != 1 {
++		t.Fatalf("released %d frames after both windows moved on, want 1", released)
++	}
++	st.Close()
++	if released != 1 {
++		t.Fatalf("Close released the frame the first window still samples: %d", released)
++	}
++	wins[0].cache.frame()
++	wins[0].cache.frame()
++	if released != 2 {
++		t.Fatalf("released %d frames after closing and dropping, want 2", released)
++	}
++}
 --- a/gpu/internal/driver/driver.go
 +++ b/gpu/internal/driver/driver.go
 @@ -251,3 +251,19 @@
@@ -267,7 +410,7 @@
  	}
  	t.backend.glstate.deleteTexture(t.backend.funcs, t.obj)
 +	if t.dmabufImage != nil {
-+		if t.dmabufBase.V != 0 {
++		if !t.dmabufBase.Equal(gl.Texture{}) {
 +			t.backend.glstate.deleteTexture(t.backend.funcs, t.dmabufBase)
 +		}
 +		releaseDMABufImage(t.dmabufImage)
@@ -431,7 +574,7 @@
 +}
 --- a/internal/stream/stream.go
 +++ b/internal/stream/stream.go
-@@ -0,0 +1,140 @@
+@@ -0,0 +1,211 @@
 +// SPDX-License-Identifier: Unlicense OR MIT
 +
 +// Package stream is the state shared by paint.Stream (producer and layout)
@@ -484,32 +627,90 @@
 +// Stream holds the newest frame. The renderer uploads (or imports) it into
 +// a texture it keeps per stream, and only when Seq has moved on.
 +//
-+// Imported frames are sampled for as long as they are on screen, so the
++// Imported frames are sampled for as long as they are on screen, so a
 +// renderer holds the frame it has bound: such a frame is released when the
-+// renderer lets go of it, not when a newer frame replaces it.
++// last renderer holding it lets go, not when a newer frame replaces it.
++// Several renderers (one per window) may draw the same stream; holds are
++// counted, and each Hold must be balanced by one Unhold of the same
++// sequence number.
++//
++// A frame's Release function runs exactly once, without the stream's lock
++// held, on the goroutine that ends the stream's need for the frame: the
++// producer's in Submit or Close, or a renderer's in Use or Unhold. It must
++// therefore be safe to call from any goroutine and should not block.
++//
++// The zero Stream is empty and ready to use.
 +type Stream struct {
-+	mu   sync.Mutex
-+	cur  Frame
-+	seq  uint64
-+	size image.Point
-+	held map[uint64]Frame // frames bound by a renderer, by sequence number
++	mu     sync.Mutex
++	cur    Frame
++	seq    uint64
++	size   image.Point
++	held   map[uint64]*heldFrame // frames bound by renderers, by sequence number
++	closed bool
 +
 +	importState atomic.Int32
 +}
 +
++// heldFrame is a frame bound by one or more renderers.
++type heldFrame struct {
++	frame   Frame
++	holders int
++}
++
 +// Submit makes f the current frame and releases the previous one unless a
 +// renderer holds it. It waits for an upload in progress, so a released
-+// frame is never mid-copy.
-+func (s *Stream) Submit(f Frame) {
++// frame is never mid-copy. Submitting an empty Frame releases the current
++// frame and leaves the stream drawing nothing.
++//
++// After Close, Submit releases f immediately and reports false; otherwise
++// it reports true.
++func (s *Stream) Submit(f Frame) bool {
 +	s.mu.Lock()
++	if s.closed {
++		s.mu.Unlock()
++		release(f)
++		return false
++	}
++	old := s.replace(f)
++	s.mu.Unlock()
++	release(old)
++	return true
++}
++
++// Close empties the stream for good: the current frame is released (once
++// no renderer holds it) and later frames are refused. Frames still held are
++// released when their renderers Unhold them, which happens at the latest
++// when a renderer drops the stream's texture after a frame that does not
++// draw it. Close may be called more than once and from any goroutine.
++func (s *Stream) Close() {
++	s.mu.Lock()
++	if s.closed {
++		s.mu.Unlock()
++		return
++	}
++	s.closed = true
++	old := s.replace(Frame{})
++	s.mu.Unlock()
++	release(old)
++}
++
++// replace makes f the current frame and returns the previous one if it
++// must be released now, or the empty Frame if a renderer holds it. s.mu
++// must be held.
++func (s *Stream) replace(f Frame) Frame {
 +	old, oldSeq := s.cur, s.seq
 +	s.cur = f
 +	s.seq++
 +	s.size = f.size()
-+	_, held := s.held[oldSeq]
-+	s.mu.Unlock()
-+	if !held && old.Release != nil {
-+		old.Release()
++	if _, held := s.held[oldSeq]; held {
++		return Frame{}
++	}
++	return old
++}
++
++func release(f Frame) {
++	if f.Release != nil {
++		f.Release()
 +	}
 +}
 +
@@ -527,44 +728,57 @@
 +func (s *Stream) SetImportState(v int) { s.importState.Store(int32(v)) }
 +
 +// Use calls fn with the current frame and its sequence number, holding the
-+// stream so the frame cannot be released during fn. Inside fn, the
-+// renderer may Hold the current frame and Unhold one it held before.
++// stream's lock so the frame cannot be released during fn. Inside fn, the
++// renderer may Hold the current frame and Unhold one it held before. Frames
++// whose last hold ends in fn are released after the lock is dropped.
 +func (s *Stream) Use(fn func(u *Use)) {
 +	s.mu.Lock()
 +	u := Use{s: s, Frame: s.cur, Seq: s.seq}
 +	fn(&u)
 +	s.mu.Unlock()
-+	for _, r := range u.release {
-+		r()
++	for _, f := range u.release {
++		release(f)
 +	}
 +}
 +
-+// Use is the renderer's view of the stream during Stream.Use.
++// Use is the renderer's view of the stream during Stream.Use. It is valid
++// only inside the function passed to Use.
 +type Use struct {
 +	Frame   Frame
 +	Seq     uint64
 +	s       *Stream
-+	release []func()
++	release []Frame
 +}
 +
-+// Hold keeps the current frame from being released until Unhold.
++// Hold keeps the current frame from being released until a matching
++// Unhold. Each renderer holds a given frame at most once.
 +func (u *Use) Hold() {
 +	if u.s.held == nil {
-+		u.s.held = make(map[uint64]Frame)
++		u.s.held = make(map[uint64]*heldFrame)
 +	}
-+	u.s.held[u.Seq] = u.Frame
++	h := u.s.held[u.Seq]
++	if h == nil {
++		h = &heldFrame{frame: u.Frame}
++		u.s.held[u.Seq] = h
++	}
++	h.holders++
 +}
 +
-+// Unhold lets go of a frame held earlier; it is released (after Use returns)
-+// unless it is still the current frame.
++// Unhold ends one hold of the frame with sequence number seq. When its last
++// hold ends, the frame is released (after Use returns) unless it is still
++// the current frame. Unholding a frame that is not held does nothing.
 +func (u *Use) Unhold(seq uint64) {
-+	f, ok := u.s.held[seq]
++	h, ok := u.s.held[seq]
 +	if !ok {
 +		return
 +	}
++	h.holders--
++	if h.holders > 0 {
++		return
++	}
 +	delete(u.s.held, seq)
-+	if seq != u.s.seq && f.Release != nil {
-+		u.release = append(u.release, f.Release)
++	if seq != u.s.seq {
++		u.release = append(u.release, h.frame)
 +	}
 +}
 +
@@ -572,9 +786,158 @@
 +func (s *Stream) Unhold(seq uint64) {
 +	s.Use(func(u *Use) { u.Unhold(seq) })
 +}
+--- a/internal/stream/stream_test.go
++++ b/internal/stream/stream_test.go
+@@ -0,0 +1,146 @@
++// SPDX-License-Identifier: Unlicense OR MIT
++
++package stream
++
++import (
++	"image"
++	"testing"
++)
++
++// counted returns a frame whose Release increments *n.
++func counted(n *int) Frame {
++	return Frame{Img: image.NewRGBA(image.Rect(0, 0, 2, 1)), Release: func() { *n++ }}
++}
++
++// hold holds the current frame of s and returns its sequence number.
++func hold(s *Stream) uint64 {
++	var seq uint64
++	s.Use(func(u *Use) {
++		seq = u.Seq
++		u.Hold()
++	})
++	return seq
++}
++
++func TestReplaceReleases(t *testing.T) {
++	var s Stream
++	released := 0
++	s.Submit(counted(&released))
++	if released != 0 {
++		t.Fatalf("current frame released: %d", released)
++	}
++	s.Submit(Frame{})
++	if released != 1 {
++		t.Fatalf("replaced frame released %d times, want 1", released)
++	}
++	if got := s.Size(); got != (image.Point{}) {
++		t.Errorf("empty frame size: %v", got)
++	}
++}
++
++func TestHoldDefersRelease(t *testing.T) {
++	var s Stream
++	released := 0
++	s.Submit(counted(&released))
++	seq := hold(&s)
++	s.Submit(Frame{})
++	if released != 0 {
++		t.Fatalf("held frame released on replace: %d", released)
++	}
++	s.Unhold(seq)
++	if released != 1 {
++		t.Fatalf("held frame released %d times after Unhold, want 1", released)
++	}
++	s.Unhold(seq)
++	if released != 1 {
++		t.Fatalf("second Unhold released again: %d", released)
++	}
++}
++
++func TestUnholdCurrentKeepsFrame(t *testing.T) {
++	var s Stream
++	released := 0
++	s.Submit(counted(&released))
++	seq := hold(&s)
++	s.Unhold(seq)
++	if released != 0 {
++		t.Fatalf("current frame released on Unhold: %d", released)
++	}
++	s.Submit(Frame{})
++	if released != 1 {
++		t.Fatalf("frame released %d times after replace, want 1", released)
++	}
++}
++
++// Two renderers (windows) bind the same frame: it stays alive until both
++// let go.
++func TestTwoHolders(t *testing.T) {
++	var s Stream
++	released := 0
++	s.Submit(counted(&released))
++	first := hold(&s)
++	second := hold(&s)
++	s.Submit(Frame{})
++	s.Unhold(first)
++	if released != 0 {
++		t.Fatalf("frame released with second holder still active: released=%d", released)
++	}
++	s.Unhold(second)
++	if released != 1 {
++		t.Fatalf("frame released %d times after both Unholds, want 1", released)
++	}
++}
++
++func TestReleaseOutsideLock(t *testing.T) {
++	var s Stream
++	// A Release that re-enters the stream deadlocks if it runs under the lock.
++	s.Submit(Frame{Release: func() { s.Size() }})
++	seq := hold(&s)
++	s.Submit(Frame{Release: func() { s.Size() }})
++	s.Unhold(seq)
++	s.Close()
++}
++
++func TestClose(t *testing.T) {
++	var s Stream
++	released := 0
++	s.Submit(counted(&released))
++	s.Close()
++	if released != 1 {
++		t.Fatalf("Close released current frame %d times, want 1", released)
++	}
++	if got := s.Size(); got != (image.Point{}) {
++		t.Errorf("size after Close: %v", got)
++	}
++	late := 0
++	if s.Submit(counted(&late)) {
++		t.Error("Submit after Close accepted the frame")
++	}
++	if late != 1 {
++		t.Errorf("frame submitted after Close released %d times, want 1", late)
++	}
++	s.Use(func(u *Use) {
++		if u.Frame.Img != nil || u.Frame.DMA != nil {
++			t.Error("closed stream has a current frame")
++		}
++	})
++	s.Close()
++	if released != 1 || late != 1 {
++		t.Errorf("second Close released again: %d, %d", released, late)
++	}
++}
++
++func TestCloseWhileHeld(t *testing.T) {
++	var s Stream
++	released := 0
++	s.Submit(counted(&released))
++	seq := hold(&s)
++	s.Close()
++	if released != 0 {
++		t.Fatalf("held frame released on Close: %d", released)
++	}
++	s.Unhold(seq)
++	if released != 1 {
++		t.Fatalf("held frame released %d times after Unhold, want 1", released)
++	}
++}
 --- a/op/paint/stream.go
 +++ b/op/paint/stream.go
-@@ -0,0 +1,103 @@
+@@ -0,0 +1,129 @@
 +// SPDX-License-Identifier: Unlicense OR MIT
 +
 +package paint
@@ -595,6 +958,11 @@
 +//
 +// Frames are latest-wins: a frame submitted before the previous one was
 +// drawn replaces it, so a slow UI drops frames instead of adding latency.
++// Any number of windows may draw the same stream.
++//
++// A producer that is done calls Close, which releases the current frame
++// and refuses later ones. Submitting an empty StreamFrame also releases the
++// current frame but leaves the stream open.
 +type Stream struct {
 +	// Filter is the scaling filter, as for ImageOp.
 +	Filter ImageFilter
@@ -608,8 +976,18 @@
 +
 +// StreamFrame is one frame: RGBA pixels (alpha is respected) or a DMA-BUF,
 +// and a release function called once the stream has finished with it, for
-+// pooling. A DMA-BUF frame is sampled in place for as long as it is on
-+// screen, so it is released when the renderer moves to a newer frame.
++// pooling. The stream owns the frame's pixels or buffer from Submit until
++// Release; the producer must not modify or reuse them before then.
++//
++// Release runs exactly once per submitted frame. An Image frame is released
++// when a newer frame replaces it or the stream is closed; the renderer
++// copies it under the stream's lock, so replacement waits for the copy. A
++// DMA-BUF frame is sampled in place for as long as it is on screen, so it
++// is released only when every window drawing it has moved to a newer frame
++// or stopped drawing the stream. Release may therefore run on the
++// goroutine calling Submit or Close, or on a window's rendering goroutine.
++// It must be safe for concurrent use with the producer and should not
++// block; it is never called with the stream's lock held.
 +type StreamFrame struct {
 +	Image   *image.RGBA
 +	DMABuf  *DMABuf
@@ -645,17 +1023,28 @@
 +func NewStream() *Stream { return new(Stream) }
 +
 +// Submit replaces the current frame. It is safe to call from any goroutine.
++// After Close, Submit releases f at once and does not call OnFrame.
 +func (s *Stream) Submit(f StreamFrame) {
 +	var d *stream.DMABuf
 +	if b := f.DMABuf; b != nil {
 +		d = &stream.DMABuf{ID: b.ID, FD: b.FD, Offset: b.Offset, Pitch: b.Pitch, Fourcc: b.Fourcc,
 +			Modifier: b.Modifier, Width: b.Width, Height: b.Height}
 +	}
-+	s.s.Submit(stream.Frame{Img: f.Image, DMA: d, Release: f.Release})
++	if !s.s.Submit(stream.Frame{Img: f.Image, DMA: d, Release: f.Release}) {
++		return
++	}
 +	if s.OnFrame != nil {
 +		s.OnFrame()
 +	}
 +}
++
++// Close ends the stream: the current frame is released, once no window
++// holds it, and later frames are released as soon as they are submitted.
++// The stream draws nothing afterwards. A window still holding a DMA-BUF
++// frame releases it when it next renders without drawing the stream. Close
++// is safe to call from any goroutine and more than once; it does not call
++// OnFrame, so invalidate the window if the stream is on screen.
++func (s *Stream) Close() { s.s.Close() }
 +
 +// ImportState reports whether the renderer drawing this stream imports
 +// DMA-BUF frames. It stays ImportUnknown until a DMA-BUF frame is drawn.

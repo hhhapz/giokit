@@ -13,27 +13,9 @@ func TestPatternsInteractions(t *testing.T) {
 	h.ExpectID("patterns:toolbar/save")
 	h.ExpectID("patterns:toolbar/unavailable")
 	h.ExpectID("patterns:form/name")
-	var named func([]kittest.A11yNode, string) (kittest.A11yNode, bool)
-	named = func(nodes []kittest.A11yNode, id string) (kittest.A11yNode, bool) {
-		for _, node := range nodes {
-			if node.ID == id {
-				return node, true
-			}
-			if found, ok := named(node.Children, id); ok {
-				return found, true
-			}
-		}
-		return kittest.A11yNode{}, false
-	}
-	for id, label := range map[string]string{
-		"patterns:link":            "Read the component guide",
-		"patterns:form/name/label": "Name",
-		"patterns:toolbar/save":    "Save",
-	} {
-		if node, ok := named(h.A11yTree(), id); !ok || node.Label != label {
-			t.Errorf("semantic label for %s: %+v, present %v", id, node, ok)
-		}
-	}
+	expectLabel(t, h, "patterns:link", "Read the component guide")
+	expectLabel(t, h, "patterns:form/name/label", "Name")
+	expectLabel(t, h, "patterns:toolbar/save", "Save")
 	h.Hover("patterns:toolbar/save")
 	h.ClickID("patterns:toolbar/save")
 	h.ExpectTextIn("patterns:form/name", "Required")
@@ -44,8 +26,8 @@ func TestPatternsInteractions(t *testing.T) {
 		t.Fatalf("save status: %q", g.status)
 	}
 	h.ClickID("patterns:toolbar/reset")
-	if g.patName.Text() != "" {
-		t.Fatalf("reset left name %q", g.patName.Text())
+	if g.patterns.name.Text() != "" {
+		t.Fatalf("reset left name %q", g.patterns.name.Text())
 	}
 	h.Hover("patterns:link")
 	h.ClickID("patterns:link")
@@ -70,13 +52,13 @@ func TestPatternsInteractions(t *testing.T) {
 		t.Fatalf("breadcrumb status: %q", g.status)
 	}
 	h.ClickID("patterns:accordion/first")
-	if g.patOpen != "first" {
-		t.Fatalf("first accordion section: %q", g.patOpen)
+	if g.patterns.open != "first" {
+		t.Fatalf("first accordion section: %q", g.patterns.open)
 	}
 	h.ExpectText("The first section is open.")
 	h.ClickID("patterns:accordion/second")
-	if g.patOpen != "second" {
-		t.Fatalf("second accordion section: %q", g.patOpen)
+	if g.patterns.open != "second" {
+		t.Fatalf("second accordion section: %q", g.patterns.open)
 	}
 	if _, ok := h.FindText("The first section is open."); ok {
 		t.Fatal("closed accordion body is still visible")

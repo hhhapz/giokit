@@ -1,16 +1,36 @@
 // Package media decodes compressed video (H.264, H.265, AV1, VP8, VP9) into
 // frames for a paint.Stream, using FFmpeg's libavcodec through cgo.
 //
-// It is a separate module so that giokit itself stays free of cgo: only
-// apps that show video pay for FFmpeg.
+// It is a separate module so that giokit does not depend on FFmpeg: only
+// apps that show video link it. (This is about FFmpeg, not cgo in general:
+// Gio's desktop backends may use cgo in any giokit app.)
 //
 // Decoding prefers the GPU (VA-API on Linux) and falls back to software.
 // A hardware frame can leave the decoder two ways: copied to RGBA in system
 // memory (works everywhere), or converted to RGBA on the GPU and exported as
 // a DMA-BUF (Linux), which a renderer that can import it draws with no copy.
 //
-//	d, _ := media.NewDecoder(media.H264, media.Options{})
-//	d.Decode(pkt, func(f media.Frame) { stream.Submit(f.StreamFrame()) })
+//	d, err := media.NewDecoder(media.H264, media.Options{})
+//	if err != nil {
+//		return err
+//	}
+//	defer d.Close()
+//	err = d.Decode(pkt, func(f media.Frame) {
+//		stream.Submit(f.StreamFrame()) // the stream releases f
+//	})
+//
+// # Ownership
+//
+// A Decoder or File has one owner: call its methods from one goroutine at a
+// time, and do not use it after Close, which reports ErrClosed. Packet data
+// is borrowed: Decode copies what it keeps, so the caller may reuse the
+// bytes once it returns.
+//
+// Every Frame passed to an emit callback holds a decoder buffer until
+// released. Call Release exactly when done with it, from any goroutine, or
+// hand it to a paint.Stream with StreamFrame, which releases it (on the
+// renderer's goroutine) once it has drawn a newer frame. Frames remain
+// valid after their decoder is closed.
 package media
 
 /*
@@ -36,13 +56,15 @@ import (
 type Codec int
 
 const (
-	H264 Codec = C.GK_H264
-	H265 Codec = C.GK_H265
-	AV1  Codec = C.GK_AV1
-	VP8  Codec = C.GK_VP8
-	VP9  Codec = C.GK_VP9
+	H264 Codec = C.GK_H264 // H.264 / AVC
+	H265 Codec = C.GK_H265 // H.265 / HEVC
+	AV1  Codec = C.GK_AV1  // AV1
+	VP8  Codec = C.GK_VP8  // VP8
+	VP9  Codec = C.GK_VP9  // VP9
 )
 
+// String returns the codec's lower-case short name ("h264", "av1"), or
+// "codec(n)" for an unknown value.
 func (c Codec) String() string {
 	switch c {
 	case H264:
@@ -75,7 +97,7 @@ const (
 
 // Options configure a Decoder. The zero value is right for live streams.
 type Options struct {
-	Hardware Hardware
+	Hardware Hardware // where to decode; HardwareAuto is the zero value
 	// Device is the VA-API render node; "" picks the default.
 	Device string
 	// Buffered allows frame threading and reordering: more throughput, more
@@ -89,9 +111,9 @@ type Options struct {
 
 // Packet is one compressed frame, or codec configuration.
 type Packet struct {
-	Data []byte
-	PTS  int64 // microseconds
-	Key  bool  // a key frame
+	Data []byte // borrowed for the duration of Decode
+	PTS  int64  // microseconds
+	Key  bool   // a key frame
 	// Config marks codec configuration (H.264/H.265 parameter sets, the AV1
 	// sequence header) sent ahead of the frames, as Android encoders and
 	// scrcpy do. The decoder prepends it to the next packet.
@@ -99,17 +121,20 @@ type Packet struct {
 }
 
 // Frame is one decoded picture. Exactly one of Image and DMABuf is set.
-// Call Release when done with it (a paint.Stream does, via StreamFrame).
+// Its buffer belongs to the decoder's pool until Release: call Release
+// when done with it, or pass StreamFrame to a paint.Stream, which does.
 type Frame struct {
-	Width, Height int
-	PTS           int64 // microseconds
-	Hardware      bool  // decoded on the GPU
-	Image         *image.RGBA
-	DMABuf        *DMABuf
+	Width, Height int         // picture size in pixels
+	PTS           int64       // microseconds
+	Hardware      bool        // decoded on the GPU
+	Image         *image.RGBA // the picture in memory, or nil
+	DMABuf        *DMABuf     // the picture in GPU memory, or nil
 	release       func()
 }
 
-// Release returns the frame's buffer. Safe to call from any goroutine, once.
+// Release returns the frame's buffer for reuse; stop using Image or DMABuf
+// after it. It may run on any goroutine, also after the decoder is closed.
+// Calls after the first do nothing.
 func (f Frame) Release() {
 	if f.release != nil {
 		f.release()
@@ -121,22 +146,35 @@ func (f Frame) Release() {
 // once the frame is released.
 type DMABuf struct {
 	ID            uint64 // the buffer's identity: the decoder cycles a few
-	FD            int
-	Offset, Pitch uint32
+	FD            int    // the dma-buf file descriptor, owned by the decoder
+	Offset, Pitch uint32 // the plane's start and row stride, in bytes
 	Fourcc        uint32 // DRM format, e.g. 'AB24' (ABGR8888: bytes R,G,B,A)
 	Modifier      uint64 // DRM format modifier (tiling)
-	Width, Height int
+	Width, Height int    // image size in pixels
 }
 
-// Error is an FFmpeg error.
+// ErrClosed is returned by a Decoder or File used after Close.
+var ErrClosed = errors.New("media: use after Close")
+
+// rgbaPoolCap is how many released RGBA buffers a decoder keeps for reuse:
+// enough for the frames a renderer typically holds (on screen, queued and
+// in flight) without retaining much memory for a stalled consumer.
+const rgbaPoolCap = 4
+
+// Error is an FFmpeg error. Errors that callers branch on are separate:
+// io.EOF for the end of input and ErrClosed for use after Close.
 type Error struct {
-	Code int
-	Msg  string
+	Op   string // what failed, such as "open clip.mp4" or "decode"
+	Code int    // FFmpeg's negative AVERROR code
+	Msg  string // FFmpeg's description of Code
 }
 
-func (e *Error) Error() string { return "media: " + e.Msg }
+// Error returns "media: Op: Msg".
+func (e *Error) Error() string { return "media: " + e.Op + ": " + e.Msg }
 
-func averr(code C.int) error {
+// averr converts an FFmpeg return code from op to an error: nil for
+// success, io.EOF at the end of input, and an *Error otherwise.
+func averr(op string, code C.int) error {
 	if code >= 0 {
 		return nil
 	}
@@ -145,25 +183,32 @@ func averr(code C.int) error {
 	}
 	var buf [128]C.char
 	C.gk_err(code, &buf[0], C.int(len(buf)))
-	return &Error{Code: int(code), Msg: C.GoString(&buf[0])}
+	return &Error{Op: op, Code: int(code), Msg: C.GoString(&buf[0])}
 }
 
 // Decoder decodes one stream. Its methods must be called from one goroutine
-// at a time; frames may be released from any goroutine.
+// at a time; frames may be released from any goroutine. Create it with
+// NewDecoder and free it with Close.
 type Decoder struct {
-	c      *C.gk_dec
-	codec  Codec
-	opt    Options
+	codec Codec
+	opt   Options
+
+	c *C.gk_dec // nil after Close
+
+	// config is configuration waiting to be prepended to the next packet;
+	// last is the most recent configuration, kept to prime a reopened
+	// decoder after config has been consumed.
 	config []byte
-	last   []byte // the most recent configuration, for reopening
+	last   []byte
 
-	softwareNext bool // reopen in software at the next key frame (Auto, export failed)
+	softwareNext bool  // reopen in software at the next key frame (Auto, export failed)
+	dmaFailed    error // why DMA-BUF export stopped, if it did
 
+	// The RGBA pool is shared with Frame.Release, which may run on any
+	// goroutine.
 	mu   sync.Mutex
-	pool []*image.RGBA // released RGBA buffers of the current size
+	pool []*image.RGBA // released RGBA buffers of size
 	size image.Point
-
-	dmaFailed error // why DMA-BUF export stopped, if it did
 }
 
 // NewDecoder opens a decoder for codec.
@@ -179,6 +224,7 @@ func NewDecoder(codec Codec, opt Options) (*Decoder, error) {
 	return d, nil
 }
 
+// open opens the codec context for hw. It sets d.c only on success.
 func (d *Decoder) open(hw Hardware) error {
 	opt := d.opt
 	var dev *C.char
@@ -193,7 +239,7 @@ func (d *Decoder) open(hw Hardware) error {
 	var e C.int
 	c := C.gk_dec_open(C.int(d.codec), C.int(hw), dev, lowDelay, &e)
 	if c == nil {
-		return fmt.Errorf("open %v decoder: %w", d.codec, averr(e))
+		return averr(fmt.Sprintf("open %v decoder", d.codec), e)
 	}
 	d.c = c
 	return nil
@@ -204,11 +250,13 @@ func (d *Decoder) Codec() Codec { return d.codec }
 
 // Hardware reports whether the decoder runs on the GPU. A hardware decoder
 // may still hand out software frames for a stream the GPU cannot decode.
-func (d *Decoder) Hardware() bool { return C.gk_dec_hw(d.c) != 0 }
+// It is false after Close.
+func (d *Decoder) Hardware() bool { return d.c != nil && C.gk_dec_hw(d.c) != 0 }
 
 // DisableDMABuf stops DMA-BUF output, for a renderer that reported it
 // cannot import (paint.ImportUnsupported). Under HardwareAuto the decoder
-// switches to software at the next key frame.
+// switches to software at the next key frame. Calls after the first do
+// nothing.
 func (d *Decoder) DisableDMABuf() {
 	if d.dmaFailed == nil {
 		d.dmaFailed = errors.New("media: DMA-BUF output disabled: the renderer cannot import")
@@ -216,12 +264,20 @@ func (d *Decoder) DisableDMABuf() {
 	}
 }
 
-// DMABufError reports why DMA-BUF export was turned off, or nil.
+// DMABufError reports why DMA-BUF export was turned off, or nil while it
+// is on (or was never requested). The reason is the first one seen: the
+// FFmpeg or VA-API error from the export (an *Error), or DisableDMABuf's
+// renderer report. Frames are RGBA from then on.
 func (d *Decoder) DMABufError() error { return d.dmaFailed }
 
 // Decode sends one packet and calls emit for every frame it completes (in
-// low-delay mode, normally one). emit runs on the calling goroutine.
+// low-delay mode, normally one). emit runs on the calling goroutine; each
+// frame it receives must be released (see Frame). A Config packet is
+// stored and sent ahead of the next frame packet.
 func (d *Decoder) Decode(p Packet, emit func(Frame)) error {
+	if d.c == nil {
+		return ErrClosed
+	}
 	if p.Config {
 		d.config = append(d.config[:0], p.Data...)
 		d.last = append(d.last[:0], p.Data...)
@@ -229,7 +285,8 @@ func (d *Decoder) Decode(p Packet, emit func(Frame)) error {
 	}
 	if d.softwareNext && p.Key {
 		// Export failed under HardwareAuto: a key frame is a clean point to
-		// switch to the faster software path.
+		// switch to the faster software path. If the software decoder does
+		// not open, open leaves d.c as it was and decoding carries on.
 		d.softwareNext = false
 		old := d.c
 		if err := d.open(HardwareOff); err == nil {
@@ -237,8 +294,6 @@ func (d *Decoder) Decode(p Packet, emit func(Frame)) error {
 			if len(d.config) == 0 {
 				d.config = append(d.config, d.last...)
 			}
-		} else {
-			d.c = old
 		}
 	}
 	data := p.Data
@@ -255,15 +310,19 @@ func (d *Decoder) Decode(p Packet, emit func(Frame)) error {
 	}
 	r := C.gk_dec_send(d.c, (*C.uint8_t)(unsafe.Pointer(&data[0])), C.int(len(data)), C.int64_t(p.PTS), key)
 	if r < 0 && r != C.gk_eagain() {
-		return averr(r)
+		return averr("decode", r)
 	}
 	return d.drain(emit)
 }
 
-// Flush drains the frames still inside the decoder at the end of a stream.
+// Flush drains the frames still inside the decoder at the end of a stream,
+// calling emit as Decode does.
 func (d *Decoder) Flush(emit func(Frame)) error {
+	if d.c == nil {
+		return ErrClosed
+	}
 	if r := C.gk_dec_flush(d.c); r < 0 && r != C.gk_eof() {
-		return averr(r)
+		return averr("flush", r)
 	}
 	err := d.drain(emit)
 	if errors.Is(err, io.EOF) {
@@ -279,7 +338,7 @@ func (d *Decoder) drain(emit func(Frame)) error {
 			return nil
 		}
 		if r < 0 {
-			return averr(r)
+			return averr("decode", r)
 		}
 		f, err := d.frame()
 		if err != nil {
@@ -308,14 +367,18 @@ func (d *Decoder) frame() (Frame, error) {
 			return f, nil
 		} else if e != C.gk_eagain() {
 			// Not available on this GPU or driver: stop trying, use RGBA.
-			d.dmaFailed = averr(e)
+			d.dmaFailed = averr("export DMA-BUF", e)
 			d.softwareNext = d.opt.Hardware == HardwareAuto
 		}
+	}
+	if f.Width <= 0 || f.Height <= 0 {
+		// The conversion writes through &img.Pix[0]; an empty image has none.
+		return Frame{}, fmt.Errorf("media: %v decoder produced a %dx%d frame", d.codec, f.Width, f.Height)
 	}
 	img := d.buffer(image.Pt(f.Width, f.Height))
 	if r := C.gk_dec_frame_rgba(d.c, (*C.uint8_t)(unsafe.Pointer(&img.Pix[0])), C.int(img.Stride)); r < 0 {
 		d.put(img)
-		return Frame{}, averr(r)
+		return Frame{}, averr("convert to RGBA", r)
 	}
 	f.Image = img
 	var once sync.Once
@@ -341,18 +404,24 @@ func (d *Decoder) buffer(sz image.Point) *image.RGBA {
 func (d *Decoder) put(img *image.RGBA) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if img.Rect.Size() == d.size && len(d.pool) < 4 {
+	if img.Rect.Size() == d.size && len(d.pool) < rgbaPoolCap {
 		d.pool = append(d.pool, img)
 	}
 }
 
-// Close frees the decoder. Frames already handed out stay valid until
-// released.
+// Close frees the decoder and its buffer pool. Frames already handed out
+// stay valid until released. Later calls to Decode and Flush return
+// ErrClosed; calling Close again does nothing.
 func (d *Decoder) Close() {
-	if d.c != nil {
-		C.gk_dec_close(d.c)
-		d.c = nil
+	if d.c == nil {
+		return
 	}
+	C.gk_dec_close(d.c)
+	d.c = nil
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	// A zero size matches no frame, so later releases are not pooled.
+	d.pool, d.size = nil, image.Point{}
 }
 
 // StreamFrame converts f for a paint.Stream, which releases it when done.

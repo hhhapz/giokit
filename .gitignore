@@ -6,6 +6,10 @@
 *.prof
 /gallery
 /scrolltest
+/examples/*/gallery
+/examples/*/hello
+/examples/*/music
+/examples/*/scrolltest
 
 # Personal planning notes: never committed.
 /audit/

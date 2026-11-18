@@ -6,6 +6,7 @@ import (
 	"image"
 	"image/color"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -24,7 +25,11 @@ func TestTokensRoundTrip(t *testing.T) {
 		t.IconSize, t.ToastWidth = 16, 400
 	})
 	for _, th := range append(Presets(), styled) {
-		back, err := ThemeFromTokens(th.Tokens(), Dark())
+		b, err := th.Tokens()
+		if err != nil {
+			t.Fatalf("%s: %v", th.Name, err)
+		}
+		back, err := ThemeFromTokens(b, Dark())
 		if err != nil {
 			t.Fatalf("%s: %v", th.Name, err)
 		}
@@ -79,7 +84,7 @@ func TestTokensAliasesAndForms(t *testing.T) {
 
 // Generated themes must stay readable: that's the point of generating in OKLCH.
 func TestPresetContrast(t *testing.T) {
-	seeds := append([]Seed{}, PresetSeeds...)
+	seeds := PresetSeeds()
 	for h := 0.0; h < 360; h += 30 { // and any hue the gallery slider can produce
 		for _, dark := range []bool{true, false} {
 			seeds = append(seeds, Seed{Name: "hue", Dark: dark, Accent: OKLCH{0.65, 0.16, h}.RGB(), Neutral: OKLCH{0.5, 0.03, h}.RGB()})
@@ -248,7 +253,7 @@ func TestPoolSweepDropsUntouched(t *testing.T) {
 	var p Pool[Clickable]
 	for frame := range 10 * poolIdle {
 		p.Get("live")
-		p.Get(itoa(frame)) // a new id every frame, never seen again
+		p.Get(strconv.Itoa(frame)) // a new id every frame, never seen again
 		p.Sweep()
 	}
 	if n := p.Len(); n > 2*poolIdle+2 {
@@ -296,14 +301,14 @@ func TestDispatchNearestHandler(t *testing.T) {
 	var w Window
 	var inner, outer Clickable
 	got := ""
-	frame := func(gtx C) {
+	frame := func(gtx layout.Context) {
 		OnAction(gtx, ActMoveDown, func() { got = "root" })
-		KeyContext(gtx, "outer", func(gtx C) D {
+		KeyContext(gtx, "outer", func(gtx layout.Context) layout.Dimensions {
 			OnAction(gtx, ActMoveDown, func() { got = "outer" })
-			outer.Layout(gtx, func(gtx C) D { return D{Size: image.Pt(10, 10)} })
-			return KeyContext(gtx, "inner", func(gtx C) D {
+			outer.Layout(gtx, func(gtx layout.Context) layout.Dimensions { return layout.Dimensions{Size: image.Pt(10, 10)} })
+			return KeyContext(gtx, "inner", func(gtx layout.Context) layout.Dimensions {
 				OnAction(gtx, ActMoveDown, func() { got = "inner" })
-				return inner.Layout(gtx, func(gtx C) D { return D{Size: image.Pt(10, 10)} })
+				return inner.Layout(gtx, func(gtx layout.Context) layout.Dimensions { return layout.Dimensions{Size: image.Pt(10, 10)} })
 			})
 		})
 	}
@@ -311,7 +316,7 @@ func TestDispatchNearestHandler(t *testing.T) {
 	var ops op.Ops
 	run := func() {
 		ops.Reset()
-		gtx := w.Begin(C{Ops: &ops, Source: r.Source(), Constraints: layout.Exact(image.Pt(100, 100))})
+		gtx := w.Begin(layout.Context{Ops: &ops, Source: r.Source(), Constraints: layout.Exact(image.Pt(100, 100))})
 		frame(gtx)
 		w.End(gtx)
 		r.Frame(&ops)
@@ -388,6 +393,11 @@ func TestSpawnCancel(t *testing.T) {
 	ok.Cancel() // after finishing: a no-op
 	var nilTask *Task
 	nilTask.Cancel()
+	var zero Task // a zero Task is not running and Cancel does nothing
+	zero.Cancel()
+	if zero.Running() {
+		t.Error("a zero Task reports Running")
+	}
 }
 
 // With OnPanic set, a panicking Post callback is reported and the queue

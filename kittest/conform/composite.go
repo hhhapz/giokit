@@ -5,8 +5,6 @@ import (
 	"testing"
 
 	"gioui.org/io/key"
-	"gioui.org/layout"
-	"gioui.org/op/paint"
 
 	"github.com/hhhapz/giokit/kit"
 	"github.com/hhhapz/giokit/kittest"
@@ -18,15 +16,17 @@ import (
 // Escape dismisses, and focus returns to the trigger either way; the open
 // layer is clean under every preset, scale and extreme style.
 type Composite struct {
-	Name    string
+	Name    string // subtest name
 	Trigger string // the opener's id
 	Panel   string // the open layer's id
 	// Item is the id focused after opening and pressing Down once.
 	Item string
-	// Build returns the frame and a counter of picks.
-	Build func(th *kit.Theme) (frame func(gtx kit.C), picks *int)
+	// Build makes the control; its Activations count picks.
+	Build func(th *kit.Theme) Control
 	Size  image.Point // window in dp; default 420×360
 }
+
+var compositeSize = image.Pt(420, 360) // default Composite window, dp
 
 // RunComposite runs each composite's contract as subtests.
 func RunComposite(t *testing.T, cases ...Composite) {
@@ -38,32 +38,20 @@ func RunComposite(t *testing.T, cases ...Composite) {
 
 func (c Composite) size() image.Point {
 	if c.Size == (image.Point{}) {
-		return image.Pt(420, 360)
+		return compositeSize
 	}
 	return c.Size
 }
 
 func (c Composite) harness(t *testing.T, th *kit.Theme, scale float32) (*kittest.Harness, *int) {
-	return c.harnessMin(t, th, scale, false)
+	t.Helper()
+	return c.harnessOn(t, th, stage{size: c.size(), scale: scale, bg: th.Bg})
 }
 
-// harnessMin is harness; with stretch the control gets the window's whole
-// size as its minimum, as an app's root does.
-func (c Composite) harnessMin(t *testing.T, th *kit.Theme, scale float32, stretch bool) (*kittest.Harness, *int) {
+func (c Composite) harnessOn(t *testing.T, th *kit.Theme, s stage) (*kittest.Harness, *int) {
 	t.Helper()
-	frame, n := c.Build(th)
-	h := kittest.NewTAt(t, c.size().X, c.size().Y, scale, func(gtx layout.Context) {
-		paint.Fill(gtx.Ops, th.Bg)
-		layout.UniformInset(24).Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-			if !stretch {
-				gtx.Constraints.Min = image.Point{}
-			}
-			frame(gtx)
-			return layout.Dimensions{Size: gtx.Constraints.Max}
-		})
-	})
-	h.Theme = th
-	return h, n
+	ctl := c.Build(th)
+	return s.open(t, th, ctl), ctl.Activations
 }
 
 func (c Composite) run(t *testing.T) {
@@ -84,7 +72,7 @@ func (c Composite) run(t *testing.T) {
 	// A minimum size from the caller (a window's) must not stretch the
 	// trigger and leave the layer no room for its items.
 	t.Run("stretched", func(t *testing.T) {
-		h, n := c.harnessMin(t, th, 1, true)
+		h, n := c.harnessOn(t, th, stage{size: c.size(), scale: 1, bg: th.Bg, stretch: true})
 		h.ClickID(c.Trigger)
 		if _, ok := h.Find(c.Panel); !ok {
 			t.Fatalf("click did not open %q", c.Panel)

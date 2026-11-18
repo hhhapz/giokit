@@ -1,7 +1,12 @@
+// Package bench holds rendering baselines for text-heavy UIs (editor,
+// terminal) and video upload. They render through kittest's headless GPU
+// context and skip when none is available.
+//
+//	go test -run x -bench . -benchtime 100x ./internal/bench
 package bench
 
 import (
-	"fmt"
+	"image"
 	"image/color"
 	"math/rand"
 	"testing"
@@ -18,22 +23,46 @@ import (
 )
 
 var words = []string{"func", "return", "if", "err", "!=", "nil", "{", "}", "ctx", "(", ")", "for", "range", ":=", "value", "string", "\"hello\"", "42", "//", "comment", "struct", "map", "[]byte", "go", "defer"}
-var palette = []color.NRGBA{{0xc6, 0x78, 0xdd, 255}, {0x98, 0xc3, 0x79, 255}, {0xe5, 0xc0, 0x7b, 255}, {0x61, 0xaf, 0xef, 255}, {0xab, 0xb2, 0xbf, 255}, {0x5c, 0x63, 0x70, 255}}
 
-type tok struct {
-	s string
-	c color.NRGBA
+// syntaxColors stand in for an editor's syntax highlighting.
+var syntaxColors = []color.NRGBA{
+	{R: 0xc6, G: 0x78, B: 0xdd, A: 255},
+	{R: 0x98, G: 0xc3, B: 0x79, A: 255},
+	{R: 0xe5, G: 0xc0, B: 0x7b, A: 255},
+	{R: 0x61, G: 0xaf, B: 0xef, A: 255},
+	{R: 0xab, G: 0xb2, B: 0xbf, A: 255},
+	{R: 0x5c, G: 0x63, B: 0x70, A: 255},
 }
 
-var unique bool
-var scale float32 = 1
+// tok is one coloured word of a line of code.
+type tok struct {
+	text  string
+	color color.NRGBA
+}
 
-func genLines(n int, seed int64) [][]tok {
+// textConfig is the workload of one text benchmark.
+type textConfig struct {
+	// unique replaces every word with random letters, so the shaper's cache
+	// never hits: the cost of text seen for the first time.
+	unique bool
+	// scale is the pixels per dp of the offscreen window.
+	scale float32
+}
+
+// Text benchmark dimensions.
+const (
+	textLines   = 5000 // lines of generated code
+	visibleRows = 60   // lines drawn per frame
+	lineHeight  = 16   // dp
+)
+
+// genLines generates n lines of 8 to 21 words, deterministic for a seed.
+func genLines(n int, seed int64, unique bool) [][]tok {
 	r := rand.New(rand.NewSource(seed))
 	out := make([][]tok, n)
 	for i := range out {
 		k := 8 + r.Intn(14)
-		for j := 0; j < k; j++ {
+		for range k {
 			w := words[r.Intn(len(words))]
 			if unique {
 				bs := make([]byte, 3+r.Intn(8))
@@ -42,87 +71,91 @@ func genLines(n int, seed int64) [][]tok {
 				}
 				w = string(bs)
 			}
-			out[i] = append(out[i], tok{w + " ", palette[r.Intn(len(palette))]})
+			out[i] = append(out[i], tok{text: w + " ", color: syntaxColors[r.Intn(len(syntaxColors))]})
 		}
 	}
 	return out
 }
 
-func run(b *testing.B, name string, mutate func(frame int, lines *[][]tok, top *int)) {
+// mutation changes what the next frame draws: the lines, or the first
+// visible line.
+type mutation func(frame int, lines *[][]tok, top *int)
+
+func static(int, *[][]tok, *int) {}
+
+func scroll(frame int, _ *[][]tok, top *int) { *top = frame }
+
+// allNew replaces every visible line each frame.
+func allNew(cfg textConfig) mutation {
+	return func(frame int, lines *[][]tok, _ *int) {
+		*lines = genLines(visibleRows, int64(frame+100), cfg.unique)
+	}
+}
+
+// runText draws visibleRows lines of coloured words, one label per word,
+// and reports the time per frame including GPU work.
+func runText(b *testing.B, cfg textConfig, mutate mutation) {
 	th := kit.Dark()
 	mt := th.Material()
-	lines := genLines(5000, 1)
+	lines := genLines(textLines, 1, cfg.unique)
 	top, frame := 0, 0
-	const rows = 60
 	draw := func(gtx layout.Context) {
 		mutate(frame, &lines, &top)
 		frame++
-		lineH := gtx.Dp(16)
-		for i := 0; i < rows; i++ {
+		lineH := gtx.Dp(lineHeight)
+		for i := range visibleRows {
 			ln := lines[(top+i)%len(lines)]
-			st := op.Offset(imagePt(0, i*lineH)).Push(gtx.Ops)
+			row := op.Offset(image.Pt(0, i*lineH)).Push(gtx.Ops)
 			x := 0
 			for _, t := range ln {
-				s2 := op.Offset(imagePt(x, 0)).Push(gtx.Ops)
-				l := material.Label(mt, unit.Sp(13), t.s)
+				word := op.Offset(image.Pt(x, 0)).Push(gtx.Ops)
+				l := material.Label(mt, unit.Sp(13), t.text)
 				l.Font = font.Font{Typeface: "Go Mono"}
-				l.Color = t.c
+				l.Color = t.color
 				l.MaxLines = 1
-				gtx2 := gtx
-				gtx2.Constraints.Min.X = 0
-				d := l.Layout(gtx2)
+				wordGtx := gtx
+				wordGtx.Constraints.Min.X = 0
+				d := l.Layout(wordGtx)
 				x += d.Size.X
-				s2.Pop()
+				word.Pop()
 			}
-			st.Pop()
+			row.Pop()
 		}
 	}
-	h, err := kittest.New(1600, 1000, scale, draw)
+	h, err := kittest.New(1600, 1000, cfg.scale, draw)
 	if err != nil {
 		b.Skip(err)
 	}
 	defer h.Release()
 	h.Settle()
+	measureFrames(b, h)
+}
+
+// measureFrames settles b.N frames, waits for the GPU and reports
+// milliseconds per frame.
+func measureFrames(b *testing.B, h *kittest.Harness) {
+	b.Helper()
 	b.ResetTimer()
 	t0 := time.Now()
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		h.Settle()
 	}
-	_ = h.Pixel(imagePt(1, 1)) // force GPU sync
+	_ = h.Pixel(image.Pt(1, 1)) // a readback waits for the GPU
 	b.ReportMetric(float64(time.Since(t0).Microseconds())/float64(b.N)/1000, "ms/frame")
-	_ = fmt.Sprint
 }
 
-func BenchmarkStatic(b *testing.B) { run(b, "static", func(int, *[][]tok, *int) {}) }
-func BenchmarkScroll(b *testing.B) {
-	run(b, "scroll", func(f int, _ *[][]tok, top *int) { *top = f })
-}
-func BenchmarkAllNew(b *testing.B) {
-	run(b, "allnew", func(f int, l *[][]tok, _ *int) { *l = genLines(60, int64(f+100)) })
-}
+var (
+	lowDPI       = textConfig{scale: 1}
+	lowDPIUnique = textConfig{scale: 1, unique: true}
+	hiDPI        = textConfig{scale: 2}
+	hiDPIUnique  = textConfig{scale: 2, unique: true}
+)
 
-func BenchmarkUniqueAllNew(b *testing.B) {
-	unique = true
-	defer func() { unique = false }()
-	run(b, "u", func(f int, l *[][]tok, _ *int) { *l = genLines(60, int64(f+100)) })
-}
-func BenchmarkUniqueScroll(b *testing.B) {
-	unique = true
-	defer func() { unique = false }()
-	run(b, "u", func(f int, _ *[][]tok, top *int) { *top = f })
-}
-func BenchmarkHiDPIStatic(b *testing.B) {
-	scale = 2
-	defer func() { scale = 1 }()
-	run(b, "h", func(int, *[][]tok, *int) {})
-}
-func BenchmarkHiDPIUniqueScroll(b *testing.B) {
-	scale, unique = 2, true
-	defer func() { scale, unique = 1, false }()
-	run(b, "h", func(f int, _ *[][]tok, top *int) { *top = f })
-}
-func BenchmarkHiDPIUniqueAllNew(b *testing.B) {
-	scale, unique = 2, true
-	defer func() { scale, unique = 1, false }()
-	run(b, "h", func(f int, l *[][]tok, _ *int) { *l = genLines(60, int64(f+100)) })
-}
+func BenchmarkStatic(b *testing.B)            { runText(b, lowDPI, static) }
+func BenchmarkScroll(b *testing.B)            { runText(b, lowDPI, scroll) }
+func BenchmarkAllNew(b *testing.B)            { runText(b, lowDPI, allNew(lowDPI)) }
+func BenchmarkUniqueAllNew(b *testing.B)      { runText(b, lowDPIUnique, allNew(lowDPIUnique)) }
+func BenchmarkUniqueScroll(b *testing.B)      { runText(b, lowDPIUnique, scroll) }
+func BenchmarkHiDPIStatic(b *testing.B)       { runText(b, hiDPI, static) }
+func BenchmarkHiDPIUniqueScroll(b *testing.B) { runText(b, hiDPIUnique, scroll) }
+func BenchmarkHiDPIUniqueAllNew(b *testing.B) { runText(b, hiDPIUnique, allNew(hiDPIUnique)) }

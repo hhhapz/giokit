@@ -7,25 +7,6 @@ import (
 	"gioui.org/unit"
 )
 
-// The spacing scale, GPUI/Tailwind style: SpaceN is N×4dp, with half steps
-// spelled 0p5, 1p5, 2p5, 3p5. Use these instead of hand-picked dp values; pass
-// them through Theme.Space (or kit.Flex, which does it) so Density applies.
-const (
-	Space0p5 unit.Dp = 2
-	Space1   unit.Dp = 4
-	Space1p5 unit.Dp = 6
-	Space2   unit.Dp = 8
-	Space2p5 unit.Dp = 10
-	Space3   unit.Dp = 12
-	Space3p5 unit.Dp = 14
-	Space4   unit.Dp = 16
-	Space5   unit.Dp = 20
-	Space6   unit.Dp = 24
-	Space8   unit.Dp = 32
-	Space10  unit.Dp = 40
-	Space12  unit.Dp = 48
-)
-
 // Flex is the styled flex container: a row or column with gaps, padding, an
 // optional surface and size limits, in one zero-value struct.
 //
@@ -38,27 +19,27 @@ const (
 // SpaceEnd, packed at the start); Justify only matters when the container
 // is wider than its children, so pair it with FillW/FillH or W/H.
 type Flex struct {
-	Axis    layout.Axis
-	Gap     unit.Dp // between children
-	Align   layout.Alignment
-	Justify layout.Spacing
+	Axis    layout.Axis      // layout.Horizontal (the zero value) or Vertical
+	Gap     unit.Dp          // between children
+	Align   layout.Alignment // cross axis; see the type doc
+	Justify layout.Spacing   // main axis; see the type doc
 
 	Pad        unit.Dp // all sides
 	PadX, PadY unit.Dp // override Pad on one axis when non-zero
 
 	Bg, Border color.NRGBA // drawn with th.Styled (theme stroke width)
-	Radius     unit.Dp
+	Radius     unit.Dp     // the surface's corner radius
 
 	W, H       unit.Dp // exact size; 0 leaves it to the constraints
 	MinW, MaxW unit.Dp // 0 is no limit
-	MinH, MaxH unit.Dp
-	FillW      bool // take the full available width
-	FillH      bool // take the full available height
+	MinH, MaxH unit.Dp // 0 is no limit
+	FillW      bool    // take the full available width
+	FillH      bool    // take the full available height
 }
 
 // Layout lays out children with f's style. Gaps go between children, so a
 // zero-size child still gets one on each side; leave it out instead.
-func (f Flex) Layout(gtx C, th *Theme, children ...layout.FlexChild) D {
+func (f Flex) Layout(gtx layout.Context, th *Theme, children ...layout.FlexChild) layout.Dimensions {
 	gtx.Constraints = f.constrain(gtx)
 
 	px, py := f.Pad, f.Pad
@@ -87,12 +68,12 @@ func (f Flex) Layout(gtx C, th *Theme, children ...layout.FlexChild) D {
 		children = all
 	}
 
-	body := func(gtx C) D {
+	body := func(gtx layout.Context) layout.Dimensions {
 		return layout.Flex{Axis: f.Axis, Alignment: f.Align, Spacing: f.Justify}.Layout(gtx, children...)
 	}
 	inner := body
 	if px != 0 || py != 0 {
-		inner = func(gtx C) D {
+		inner = func(gtx layout.Context) layout.Dimensions {
 			return layout.Inset{Top: py, Bottom: py, Left: px, Right: px}.Layout(gtx, body)
 		}
 	}
@@ -104,25 +85,34 @@ func (f Flex) Layout(gtx C, th *Theme, children ...layout.FlexChild) D {
 
 // constrain applies the size fields to the incoming constraints, never
 // exceeding the incoming maximum.
-func (f Flex) constrain(gtx C) layout.Constraints {
+func (f Flex) constrain(gtx layout.Context) layout.Constraints {
 	c := gtx.Constraints
-	axis := func(lo, hi *int, exact, minV, maxV unit.Dp, fill bool) {
-		if maxV != 0 {
-			*hi = max(*lo, min(*hi, gtx.Dp(maxV)))
-		}
-		if minV != 0 {
-			*lo = max(*lo, min(gtx.Dp(minV), *hi))
-		}
-		if fill {
-			*lo = *hi
-		}
-		if exact != 0 {
-			v := min(gtx.Dp(exact), *hi)
-			*lo, *hi = v, v
-		}
-		*lo = min(*lo, *hi)
-	}
-	axis(&c.Min.X, &c.Max.X, f.W, f.MinW, f.MaxW, f.FillW)
-	axis(&c.Min.Y, &c.Max.Y, f.H, f.MinH, f.MaxH, f.FillH)
+	c.Min.X, c.Max.X = sizeAxis(gtx, c.Min.X, c.Max.X, axisSize{exact: f.W, min: f.MinW, max: f.MaxW, fill: f.FillW})
+	c.Min.Y, c.Max.Y = sizeAxis(gtx, c.Min.Y, c.Max.Y, axisSize{exact: f.H, min: f.MinH, max: f.MaxH, fill: f.FillH})
 	return c
+}
+
+// axisSize is Flex's size fields along one axis.
+type axisSize struct {
+	exact, min, max unit.Dp // 0: unset
+	fill            bool
+}
+
+// sizeAxis narrows the constraint range [lo, hi] (pixels) along one axis to
+// s, never beyond hi, and returns the new range.
+func sizeAxis(gtx layout.Context, lo, hi int, s axisSize) (int, int) {
+	if s.max != 0 {
+		hi = max(lo, min(hi, gtx.Dp(s.max)))
+	}
+	if s.min != 0 {
+		lo = max(lo, min(gtx.Dp(s.min), hi))
+	}
+	if s.fill {
+		lo = hi
+	}
+	if s.exact != 0 {
+		v := min(gtx.Dp(s.exact), hi)
+		lo, hi = v, v
+	}
+	return min(lo, hi), hi
 }

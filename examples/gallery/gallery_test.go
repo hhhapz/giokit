@@ -4,7 +4,7 @@ import (
 	"image"
 	"os"
 	"path/filepath"
-	"strings"
+	"strconv"
 	"testing"
 	"time"
 
@@ -28,7 +28,7 @@ func newHarness(t *testing.T) (*gallery, *kittest.Harness) {
 func goTo(t *testing.T, h *kittest.Harness, g *gallery, id string) {
 	t.Helper()
 	title := ""
-	for _, p := range pages {
+	for _, p := range demoCatalog.pages {
 		if p.id == id {
 			title = p.title
 		}
@@ -53,7 +53,7 @@ func TestAuditClean(t *testing.T) {
 // palette), animates in, settles, and passes the audit.
 func TestEveryPageClean(t *testing.T) {
 	g, h := newHarness(t)
-	for i, p := range pages {
+	for i, p := range demoCatalog.pages {
 		if i < 9 {
 			h.Chord("Shortcut+" + string(rune('1'+i)))
 			if g.page != p.id {
@@ -84,6 +84,45 @@ func TestRowHoverFollowsPointer(t *testing.T) {
 			h.ExpectBg(r, want)
 		}
 	}
+}
+
+// expectLabel fails unless the semantic node with the given id is present
+// and announces exactly label.
+func expectLabel(t *testing.T, h *kittest.Harness, id, label string) {
+	t.Helper()
+	var find func([]kittest.A11yNode) (kittest.A11yNode, bool)
+	find = func(nodes []kittest.A11yNode) (kittest.A11yNode, bool) {
+		for _, n := range nodes {
+			if n.ID == id {
+				return n, true
+			}
+			if found, ok := find(n.Children); ok {
+				return found, true
+			}
+		}
+		return kittest.A11yNode{}, false
+	}
+	n, ok := find(h.A11yTree())
+	switch {
+	case !ok:
+		t.Errorf("%s: no semantic node", id)
+	case n.Label != label:
+		t.Errorf("%s: label %q, want %q", id, n.Label, label)
+	}
+}
+
+// Controls are announced by what they do, not by their ids.
+func TestSpokenLabels(t *testing.T) {
+	g, h := newHarness(t)
+	for _, it := range g.overview.items {
+		scrollTo(t, h, g, "done:"+it.ID)
+		expectLabel(t, h, "done:"+it.ID, it.Name)
+	}
+	goTo(t, h, g, "buttons")
+	expectLabel(t, h, "btn:search", "Search")
+	expectLabel(t, h, "btn:Danger", "Danger")
+	goTo(t, h, g, "menus")
+	expectLabel(t, h, "more:btn", "More actions")
 }
 
 func TestStepperAndCheckbox(t *testing.T) {
@@ -118,20 +157,20 @@ func TestTogglesAndRadio(t *testing.T) {
 	goTo(t, h, g, "selection")
 	before := h.BgColor("switch:notify")
 	h.ClickID("switch:notify")
-	if !g.notifyOn {
+	if !g.controls.notifyOn {
 		t.Fatal("switch did not toggle")
 	}
 	if kittest.Near(before, h.BgColor("switch:notify"), 4) {
 		t.Error("switch track did not change color (animation not settled?)")
 	}
 	h.ClickID("check:agree")
-	if !g.agreed {
+	if !g.controls.agreed {
 		t.Fatal("checkbox did not toggle")
 	}
 	goTo(t, h, g, "buttons") // the size radios live beside the buttons they size
 	h.ClickID("radio:Large")
-	if g.size != "Large" {
-		t.Fatalf("radio: size = %q", g.size)
+	if g.controls.size != "Large" {
+		t.Fatalf("radio: size = %q", g.controls.size)
 	}
 }
 
@@ -170,20 +209,20 @@ func TestSliderKeyboard(t *testing.T) {
 	g, h := newHarness(t)
 	goTo(t, h, g, "selection")
 	h.ClickID("slider:volume") // clicking jumps the value to the pointer; focus with Tab instead
-	start := g.volume.Value
+	start := g.controls.volume.Value
 	for i := 0; i < 30; i++ { // tab until the slider has focus (arrow keys move it)
 		h.Key(key.NameRightArrow, 0)
-		if g.volume.Value != start {
+		if g.controls.volume.Value != start {
 			break
 		}
 		h.Tab(false)
 	}
-	if g.volume.Value <= start {
-		t.Fatalf("Right arrow did not raise the slider (%v → %v)", start, g.volume.Value)
+	if g.controls.volume.Value <= start {
+		t.Fatalf("Right arrow did not raise the slider (%v → %v)", start, g.controls.volume.Value)
 	}
 	h.Key(key.NameEnd, 0)
-	if g.volume.Value != 1 {
-		t.Fatalf("End: value = %v", g.volume.Value)
+	if g.controls.volume.Value != 1 {
+		t.Fatalf("End: value = %v", g.controls.volume.Value)
 	}
 	h.ExpectText("100%")
 }
@@ -192,8 +231,8 @@ func TestTabsMoveIndicator(t *testing.T) {
 	g, h := newHarness(t)
 	goTo(t, h, g, "tabs")
 	h.ClickID("tab/Terminal")
-	if g.tab != 2 {
-		t.Fatalf("tab = %d", g.tab)
+	if g.controls.tab != 2 {
+		t.Fatalf("tab = %d", g.controls.tab)
 	}
 	h.ExpectText("Terminal settings would go here.")
 	// the underline sits under the selected tab once the animation settled
@@ -227,26 +266,26 @@ func TestLogsFilterAndFollow(t *testing.T) {
 	goTo(t, h, g, "logs")
 	h.ExpectText("200 of 200 lines")
 	h.ClickID("level/Error")
-	if n := g.logView.Count(&g.logBuf); n == 0 || n >= 200 {
+	if n := g.logs.view.Count(&g.logs.buf); n == 0 || n >= 200 {
 		t.Fatalf("error filter shows %d lines", n)
 	}
 	h.ClickID("level/All")
 	h.ClickID("logs:filter")
 	h.Type("payments")
-	n := g.logView.Count(&g.logBuf)
+	n := g.logs.view.Count(&g.logs.buf)
 	if n == 0 || n >= 200 {
 		t.Fatalf("text filter shows %d lines", n)
 	}
-	h.ExpectText(itoa(n) + " of 200 lines")
+	h.ExpectText(strconv.Itoa(n) + " of 200 lines")
 	h.ClickID("logs:add")
-	if !g.logView.Following() {
+	if !g.logs.view.Following() {
 		t.Error("view stopped following the tail after appending")
 	}
 	h.ScrollID("logs", -2000) // scroll up: pauses follow and shows the jump button
 	h.ExpectID("logs/jump")
 	h.ClickID("logs/jump")
 	h.ExpectNoID("logs/jump")
-	if !g.logView.Following() {
+	if !g.logs.view.Following() {
 		t.Error("jump did not resume following")
 	}
 }
@@ -255,9 +294,9 @@ func TestLogStreamUsesVirtualClock(t *testing.T) {
 	g, h := newHarness(t)
 	goTo(t, h, g, "logs")
 	h.ClickID("logs:stream")
-	before := g.logBuf.Len()
+	before := g.logs.buf.Len()
 	h.Wait(time.Second)
-	if got := g.logBuf.Len() - before; got < 7 || got > 10 {
+	if got := g.logs.buf.Len() - before; got < 7 || got > 10 {
 		t.Fatalf("1s of streaming at 120ms/line appended %d lines", got)
 	}
 }
@@ -293,7 +332,7 @@ func TestWheelGlides(t *testing.T) {
 	g, h := newHarness(t)
 	goTo(t, h, g, "logs")
 	h.ScrollID("logs", -3000) // leave the tail
-	abs := func() int { p := g.logView.ListPos(); return p.First*1000 + p.Offset }
+	abs := func() int { p := g.logs.view.ListPos(); return p.First*1000 + p.Offset }
 	at := kittest.Center(h.ExpectID("logs"))
 	h.Move(at)
 	start, frames := abs(), h.Frames
@@ -301,7 +340,7 @@ func TestWheelGlides(t *testing.T) {
 	if h.Frames-frames < 10 { // baseline for any scroll call is ~4 (move, settle, stale check)
 		t.Errorf("a 150px wheel step took %d frames: it jumped instead of gliding", h.Frames-frames)
 	}
-	p := g.logView.ListPos()
+	p := g.logs.view.ListPos()
 	if p == (layout.Position{}) || abs() == start {
 		t.Fatal("wheel step did not scroll")
 	}
@@ -333,7 +372,7 @@ func TestScrollContinuity(t *testing.T) {
 			kittest.NoGPU(t, err)
 		}
 		h.Strict = false
-		lists := map[string]*kit.List{"all": g.pageLists.Get("all"), "theme": &g.themeLst}
+		lists := map[string]*kit.List{"all": g.pageLists.Get("all"), "theme": &g.theme.list}
 		for page, l := range lists {
 			if page == "all" {
 				h.Chord("Shortcut+2")
@@ -365,7 +404,7 @@ func TestCheckboxLabelClick(t *testing.T) {
 	goTo(t, h, g, "selection")
 	r := h.ExpectID("check:agree")
 	h.Click(image.Pt(r.Max.X-6, kittest.Center(r).Y)) // on the "I agree" text
-	if !g.agreed {
+	if !g.controls.agreed {
 		t.Fatal("clicking the label did not toggle the checkbox")
 	}
 }
@@ -387,18 +426,34 @@ func TestArrowKeysMoveListSelection(t *testing.T) {
 	h.ClickID("file:controls.go")
 	h.Key(key.NameDownArrow, 0)
 	h.Key(key.NameDownArrow, 0)
-	if g.openFile != "layoutpage.go" {
-		t.Fatalf("after two Downs: %q", g.openFile)
+	if g.panes.openFile != "layoutpage.go" {
+		t.Fatalf("after two Downs: %q", g.panes.openFile)
 	}
 	h.Key(key.NameHome, 0)
-	if g.openFile != "main.go" {
-		t.Fatalf("after Home: %q", g.openFile)
+	if g.panes.openFile != "main.go" {
+		t.Fatalf("after Home: %q", g.panes.openFile)
 	}
 	// the sidebar too
 	h.ClickID("nav:panes")
 	h.Key(key.NameDownArrow, 0)
 	if g.page != "forms" {
 		t.Fatalf("sidebar Down: page %q", g.page)
+	}
+}
+
+// Keys arriving in one frame each move from where the previous one left the
+// selection, not from where the frame started.
+func TestArrowKeysInOneFrame(t *testing.T) {
+	g, h := newHarness(t)
+	goTo(t, h, g, "panes")
+	h.ClickID("file:controls.go")
+	h.Keys(key.NameDownArrow, key.NameDownArrow)
+	if g.panes.openFile != "layoutpage.go" {
+		t.Fatalf("after two Downs in one frame: %q", g.panes.openFile)
+	}
+	h.Keys(key.NameHome, key.NameDownArrow)
+	if g.panes.openFile != "controls.go" {
+		t.Fatalf("after Home, Down in one frame: %q", g.panes.openFile)
 	}
 }
 
@@ -409,8 +464,8 @@ func TestSliderWheelOnlyWhenFocused(t *testing.T) {
 	goTo(t, h, g, "all") // a page tall enough to scroll
 	scroll := g.pageLists.Get("all")
 	h.ScrollID("slider:volume", 40)
-	if g.volume.Value != 0.4 {
-		t.Fatalf("unfocused slider took the wheel: %v", g.volume.Value)
+	if g.controls.volume.Value != 0.4 {
+		t.Fatalf("unfocused slider took the wheel: %v", g.controls.volume.Value)
 	}
 	if scroll.Position.Offset == 0 && scroll.Position.First == 0 {
 		t.Fatal("wheel over an unfocused slider did not scroll the page")
@@ -418,11 +473,11 @@ func TestSliderWheelOnlyWhenFocused(t *testing.T) {
 	scroll.Position = layout.Position{} // back to the top
 	h.Settle()
 	h.ClickID("slider:volume") // sets the value at the pointer and focuses
-	v := g.volume.Value
+	v := g.controls.volume.Value
 	pos := scroll.Position
 	h.ScrollID("slider:volume", -150) // wheel up
-	if g.volume.Value <= v {
-		t.Fatalf("focused slider ignored the wheel: %v → %v", v, g.volume.Value)
+	if g.controls.volume.Value <= v {
+		t.Fatalf("focused slider ignored the wheel: %v → %v", v, g.controls.volume.Value)
 	}
 	if scroll.Position != pos {
 		t.Errorf("wheel on a focused slider also scrolled the page: %+v → %+v", pos, scroll.Position)
@@ -488,8 +543,8 @@ func TestThemeSwitching(t *testing.T) {
 func TestThemeKnobs(t *testing.T) {
 	g, h := newHarness(t)
 	goTo(t, h, g, "theme")
-	for _, k := range g.knobs {
-		for i, name := range k.names {
+	for _, k := range g.theme.knobs.all() {
+		for i, name := range k.labels() {
 			id := kit.Part("knob:"+k.id, name)
 			scrollTo(t, h, g, id)
 			h.ClickID(id)
@@ -501,29 +556,36 @@ func TestThemeKnobs(t *testing.T) {
 		}
 		// leave the default selected for the next knob
 		def := map[string]int{"corners": 2, "ring": 1, "text": 1, "heading": 2, "elevation": 1, "controls": 1}[k.id]
-		h.ClickID(kit.Part("knob:"+k.id, k.names[def]))
+		h.ClickID(kit.Part("knob:"+k.id, k.options[def].label))
 	}
-	checks := map[string]func() bool{
-		"corners/Pill":   func() bool { return g.th.Radius == 999 },
-		"stroke/Bold":    func() bool { return g.th.Stroke == 2 },
-		"ring/Thick":     func() bool { return g.th.Ring == 3 },
-		"fonts/Atkinson": func() bool { return g.th.Fonts == "Atkinson" && g.th.UI == "Atkinson Hyperlegible" },
-		"text/130%":      func() bool { return g.th.Type.Body > kit.DefaultType.Body*1.25 },
-		"heading/Medium": func() bool { return g.th.HeadingWeight == kit.Medium },
-		"elevation/Flat": func() bool { return g.th.Elevation == 0 },
-		"contrast/High":  func() bool { return kit.Contrast(g.th.Border, g.th.Bg) >= 3 },
-		"controls/Large": func() bool { return g.th.Controls == kit.ControlLarge },
-	}
-	for opt, ok := range checks {
-		id := "knob:" + opt
-		scrollTo(t, h, g, kit.Part("knob:"+opt[:strings.Index(opt, "/")], opt[strings.Index(opt, "/")+1:]))
-		h.ClickID(kit.Part("knob:"+opt[:strings.Index(opt, "/")], opt[strings.Index(opt, "/")+1:]))
-		if !ok() {
-			t.Errorf("%s did not apply", id)
+	knobs := &g.theme.knobs
+	for _, c := range []struct {
+		knob   *knob
+		option string
+		ok     func() bool
+	}{
+		{&knobs.corners, "Pill", func() bool { return g.th.Radius == 999 }},
+		{&knobs.stroke, "Bold", func() bool { return g.th.Stroke == 2 }},
+		{&knobs.ring, "Thick", func() bool { return g.th.Ring == 3 }},
+		{&knobs.fonts, "Atkinson", func() bool { return g.th.Fonts == "Atkinson" && g.th.UI == "Atkinson Hyperlegible" }},
+		{&knobs.text, "130%", func() bool { return g.th.Type.Body > kit.DefaultType().Body*1.25 }},
+		{&knobs.heading, "Medium", func() bool { return g.th.HeadingWeight == kit.Medium }},
+		{&knobs.elevation, "Flat", func() bool { return g.th.Elevation == 0 }},
+		{&knobs.contrast, "High", func() bool { return kit.Contrast(g.th.Border, g.th.Bg) >= 3 }},
+		{&knobs.controls, "Large", func() bool { return g.th.Controls == kit.ControlLarge }},
+	} {
+		id := kit.Part("knob:"+c.knob.id, c.option)
+		scrollTo(t, h, g, id)
+		h.ClickID(id)
+		if got := c.knob.selected().label; got != c.option {
+			t.Errorf("clicking %s selected %q", id, got)
+		}
+		if !c.ok() {
+			t.Errorf("%s did not apply to the theme", id)
 		}
 	}
 	h.Theme = g.th
-	for _, p := range pages { // every page under the last mix of knobs
+	for _, p := range demoCatalog.pages { // every page under the last mix of knobs
 		goTo(t, h, g, p.id)
 		h.ExpectClean()
 	}
@@ -532,25 +594,14 @@ func TestThemeKnobs(t *testing.T) {
 // Every preset renders every page cleanly (contrast is checked in kit's tests).
 func TestPresetsClean(t *testing.T) {
 	g, h := newHarness(t)
-	for range g.presets {
+	for range g.theme.presets {
 		h.Chord("Shortcut+T")
 		h.Theme = g.th // the audit judges text against the current palette
-		for _, p := range pages {
+		for _, p := range demoCatalog.pages {
 			goTo(t, h, g, p.id)
 			h.ExpectClean()
 		}
 	}
-}
-
-func itoa(n int) string {
-	if n == 0 {
-		return "0"
-	}
-	s := ""
-	for ; n > 0; n /= 10 {
-		s = string(rune('0'+n%10)) + s
-	}
-	return s
 }
 
 // TestSheet writes contact sheets of key states when KITTEST_SHOTS is set:
@@ -587,9 +638,9 @@ func TestThemeSheet(t *testing.T) {
 	}
 	g2, h2 := newHarness(t)
 	for _, name := range []string{"Midnight", "Paper", "High contrast"} {
-		for i, p := range g2.presets {
+		for i, p := range g2.theme.presets {
 			if p.Name == name {
-				g2.preset = i
+				g2.theme.preset = i
 				g2.applyTheme()
 			}
 		}
@@ -613,7 +664,7 @@ func TestThemeSheet(t *testing.T) {
 // which our layout is 0.15–0.3ms. Before outlines replaced clip.Stroke,
 // controls took ~2.9ms.
 func BenchmarkFrame(b *testing.B) {
-	for _, p := range pages {
+	for _, p := range demoCatalog.pages {
 		b.Run(p.id, func(b *testing.B) {
 			g := newGallery()
 			g.page = p.id
@@ -682,10 +733,10 @@ func TestDisabledFormTakesNoInput(t *testing.T) {
 	h.DragID("lock:slider", -80, 0)
 	h.ClickID("lock:field")
 	h.Type("xyz")
-	if g.status == "Saved" || !g.lockOn || g.lockTab != 0 || g.lockSlide.Value != 0.6 ||
-		g.lockField.Text() != "read-only while locked" {
+	if g.status == "Saved" || !g.controls.lockOn || g.controls.lockTab != 0 || g.controls.lockSlide.Value != 0.6 ||
+		g.controls.lockField.Text() != "read-only while locked" {
 		t.Fatalf("locked form took input: status %q, check %v, tab %d, slider %v, field %q",
-			g.status, g.lockOn, g.lockTab, g.lockSlide.Value, g.lockField.Text())
+			g.status, g.controls.lockOn, g.controls.lockTab, g.controls.lockSlide.Value, g.controls.lockField.Text())
 	}
 	h.ExpectClean()
 
@@ -696,8 +747,8 @@ func TestDisabledFormTakesNoInput(t *testing.T) {
 	h.ClickID("lock:save")
 	h.ClickID("lock:check")
 	h.ClickID("lock:tab/Week")
-	if g.status != "Saved" || g.lockOn || g.lockTab != 1 {
-		t.Fatalf("unlocked form ignored input: status %q, check %v, tab %d", g.status, g.lockOn, g.lockTab)
+	if g.status != "Saved" || g.controls.lockOn || g.controls.lockTab != 1 {
+		t.Fatalf("unlocked form ignored input: status %q, check %v, tab %d", g.status, g.controls.lockOn, g.controls.lockTab)
 	}
 	h.ExpectClean()
 }
@@ -746,13 +797,13 @@ func TestTextFieldNativeKeys(t *testing.T) {
 	goTo(t, h, g, "text")
 	h.ClickID("field:name")
 	set := func(s string) {
-		g.name.SetText(s)
-		g.name.SetCaret(len(s), len(s))
+		g.controls.name.SetText(s)
+		g.controls.name.SetCaret(len(s), len(s))
 		h.Settle()
 	}
 	expect := func(step, want string) {
 		t.Helper()
-		if got := g.name.Text(); got != want {
+		if got := g.controls.name.Text(); got != want {
 			t.Errorf("%s: %q, want %q", step, got, want)
 		}
 	}
@@ -793,7 +844,7 @@ func TestTextAreaNewlines(t *testing.T) {
 	h.Type("one")
 	h.Key(key.NameReturn, 0)
 	h.Type("two")
-	if got := g.notes.Text(); got != "one\ntwo" {
+	if got := g.controls.notes.Text(); got != "one\ntwo" {
 		t.Fatalf("text %q, want two lines", got)
 	}
 	h.ExpectClean()

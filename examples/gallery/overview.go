@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"slices"
 
 	"gioui.org/layout"
 	"gioui.org/unit"
@@ -19,14 +20,14 @@ type item struct {
 }
 
 type rowState struct {
-	hover kit.Hover
+	hover kit.HoverArea
 	done  kit.Clickable
 	step  ui.StepperState
 }
 
 type overviewState struct {
 	rows      kit.Pool[rowState]
-	ovScroll  kit.List
+	scroll    kit.List
 	items     []*item
 	game      lightsOut
 	quickSel  ui.SelectState
@@ -39,20 +40,30 @@ type overviewState struct {
 // explorePages are the pages the Overview links to, for first-time visitors.
 var explorePages = []string{"all", "menus", "collections", "pickers", "theme", "keyboard"}
 
+// table is the Tasks card's table. Its columns, in order: the item's done
+// checkbox labelled with its name, notes, quantity and a status badge.
 var table = kit.Table{Inset: 10, RowPad: 9, Cols: []kit.Column{
-	{Width: 34}, {Title: "Item"}, {Title: "Notes", Width: 180}, {Title: "Qty", Width: 96}, {Width: 84, Align: layout.E},
+	{Title: "Item"}, {Title: "Notes", Width: 180}, {Title: "Qty", Width: 96}, {Width: 84, Align: layout.E},
 }}
 
+// Columns of table.
+const (
+	colItem = iota
+	colNotes
+	colQty
+	colStatus
+)
+
 func (g *gallery) initOverview() {
-	g.game.seed = 7
-	g.game.shuffle()
+	g.overview.game.seed = 7
+	g.overview.game.shuffle()
 	for i, n := range []string{"Alpha", "Bravo", "Charlie", "Delta", "Echo"} {
-		g.items = append(g.items, &item{ID: fmt.Sprint(i + 1), Name: n, Qty: 1, Notes: "note " + n})
+		g.overview.items = append(g.overview.items, &item{ID: fmt.Sprint(i + 1), Name: n, Qty: 1, Notes: "note " + n})
 	}
 }
 
 func (g *gallery) find(id string) *item {
-	for _, it := range g.items {
+	for _, it := range g.overview.items {
 		if it.ID == id {
 			return it
 		}
@@ -62,7 +73,7 @@ func (g *gallery) find(id string) *item {
 
 func (g *gallery) openCount() int {
 	n := 0
-	for _, it := range g.items {
+	for _, it := range g.overview.items {
 		if !it.Done {
 			n++
 		}
@@ -71,7 +82,7 @@ func (g *gallery) openCount() int {
 }
 
 func (g *gallery) handleOverview(gtx C) {
-	g.rows.Each(func(id string, rs *rowState) {
+	g.overview.rows.Each(func(id string, rs *rowState) {
 		it := g.find(id)
 		switch {
 		case rs.done.Clicked(gtx):
@@ -83,21 +94,19 @@ func (g *gallery) handleOverview(gtx C) {
 		}
 	})
 	g.handleGame(gtx)
-	if i, ok := g.quickSel.Update(gtx); ok {
-		g.preset = i
-		if i == len(g.presets) {
-			g.preset = -1 // Custom: the seed from the Theme page
-		}
+	if id, ok := g.overview.quickSel.Update(gtx); ok {
+		// Not a preset: Custom, the seed from the Theme page (-1).
+		g.theme.preset = slices.IndexFunc(g.theme.presets, func(p *kit.Theme) bool { return p.Name == id })
 		g.applyTheme()
 	}
-	if g.surprise.Clicked(gtx) {
+	if g.overview.surprise.Clicked(gtx) {
 		g.surpriseTheme()
 	}
-	if g.toTheme.Clicked(gtx) {
+	if g.overview.toTheme.Clicked(gtx) {
 		g.page = "theme"
 	}
 	for _, id := range explorePages {
-		if g.explore.Get(id).Clicked(gtx) {
+		if g.overview.explore.Get(id).Clicked(gtx) {
 			g.page = id
 		}
 	}
@@ -106,25 +115,22 @@ func (g *gallery) handleOverview(gtx C) {
 // surpriseTheme picks a random preset, corner style, font and control size:
 // the quickest way to see that every component follows the theme.
 func (g *gallery) surpriseTheme() {
-	next := func(n int) int {
-		g.luckySeed = g.luckySeed*1664525 + 1013904223
-		return int(g.luckySeed>>16) % n
-	}
-	g.preset = next(len(g.presets))
-	for _, id := range []string{"corners", "fonts", "controls", "elevation"} {
-		k := g.knob(id)
-		k.sel = next(len(k.names))
+	next := func(n int) int { return lcgNext(&g.overview.luckySeed, n) }
+	g.theme.preset = next(len(g.theme.presets))
+	knobs := &g.theme.knobs
+	for _, k := range []*knob{&knobs.corners, &knobs.fonts, &knobs.controls, &knobs.elevation} {
+		k.sel = next(len(k.options))
 	}
 	g.applyTheme()
-	g.status = fmt.Sprintf("Theme: %s, %s corners, %s", g.th.Name, g.knob("corners").names[g.knob("corners").sel], g.th.Fonts)
+	g.status = fmt.Sprintf("Theme: %s, %s corners, %s", g.th.Name, knobs.corners.selected().label, g.th.Fonts)
 }
 
-func (g *gallery) overview(gtx C) D {
+func (g *gallery) overviewPage(gtx C) D {
 	th := g.th
 	actions := func(gtx C) D {
-		return ui.Button{ID: "overview:theme", Text: "Open the theme editor"}.Layout(gtx, th, &g.toTheme)
+		return ui.Button{ID: "overview:theme", Text: "Open the theme editor"}.Layout(gtx, th, &g.overview.toTheme)
 	}
-	rows := []kit.W{
+	rows := []layout.Widget{
 		func(gtx C) D {
 			return twoCols(gtx, 14,
 				func(gtx C) D { return g.section(gtx, "Theme", g.quickTheme) },
@@ -138,14 +144,14 @@ func (g *gallery) overview(gtx C) D {
 		},
 	}
 	return g.pageFrame(gtx, "Welcome to giokit", actions, func(gtx C) D {
-		return th.List(gtx, &g.ovScroll, "overview", len(rows), func(gtx C, i int) D {
+		return th.List(gtx, &g.overview.scroll, "overview", len(rows), func(gtx C, i int) D {
 			return layout.Inset{Left: 24, Right: 24}.Layout(gtx, rows[i])
 		})
 	})
 }
 
 // twoCols lays a and b side by side, or stacked when the page is narrow.
-func twoCols(gtx C, gap unit.Dp, a, b kit.W) D {
+func twoCols(gtx C, gap unit.Dp, a, b layout.Widget) D {
 	if gtx.Constraints.Max.X < gtx.Dp(760) {
 		return kit.Col(gtx, kit.Rigid(a), kit.Rigid(b))
 	}
@@ -160,30 +166,32 @@ func twoCols(gtx C, gap unit.Dp, a, b kit.W) D {
 // knobs that change the look the most (shared with the Theme page).
 func (g *gallery) quickTheme(gtx C) D {
 	th := g.th
-	names := make([]string, 0, len(g.presets)+1)
-	for _, p := range g.presets {
+	names := make([]string, 0, len(g.theme.presets)+1)
+	for _, p := range g.theme.presets {
 		names = append(names, p.Name)
 	}
 	names = append(names, "Custom")
-	sel := g.preset
+	sel := g.theme.preset
 	if sel < 0 {
-		sel = len(g.presets)
+		sel = len(g.theme.presets)
 	}
 	return kit.Col(gtx,
 		kit.Rigid(func(gtx C) D {
 			return kit.Row(gtx,
 				kit.Rigid(kit.Fixed(76, func(gtx C) D { return th.Text(gtx, "Theme", th.Type.Body, th.Muted, kit.Regular) })),
 				kit.Rigid(kit.Fixed(150, func(gtx C) D {
-					return ui.Select{ID: "quick:preset", Options: names, Selected: sel}.Layout(gtx, th, &g.quickSel)
+					return ui.Select{ID: "quick:preset", Options: choices(names), Selected: names[sel]}.Layout(gtx, th, &g.overview.quickSel)
 				})),
 				kit.Rigid(kit.Gap(10, 0)),
 				kit.Rigid(func(gtx C) D {
-					return ui.Button{ID: "quick:surprise", Text: "Surprise me", Style: ui.Ghost}.Layout(gtx, th, &g.surprise)
+					return ui.Button{ID: "quick:surprise", Text: "Surprise me", Style: ui.Ghost}.Layout(gtx, th, &g.overview.surprise)
 				}),
 			)
 		}),
 		kit.Rigid(kit.Gap(0, 10)),
-		kit.Rigid(func(gtx C) D { return g.knobRowsW(gtx, 76, "corners", "fonts", "controls") }),
+		kit.Rigid(func(gtx C) D {
+			return g.knobRowsW(gtx, 76, &g.theme.knobs.corners, &g.theme.knobs.fonts, &g.theme.knobs.controls)
+		}),
 	)
 }
 
@@ -192,7 +200,7 @@ func (g *gallery) tasks(gtx C) D {
 	th := g.th
 	var qty float64
 	done := 0
-	for _, it := range g.items {
+	for _, it := range g.overview.items {
 		qty += it.Qty
 		if it.Done {
 			done++
@@ -201,22 +209,24 @@ func (g *gallery) tasks(gtx C) D {
 	rows := []layout.FlexChild{
 		kit.Rigid(func(gtx C) D {
 			return layout.Flex{}.Layout(gtx,
-				kit.Flexed(1, func(gtx C) D { return ui.Stat{Title: "Items", Value: fmt.Sprint(len(g.items))}.Layout(gtx, th) }),
+				kit.Flexed(1, func(gtx C) D {
+					return ui.Stat{Title: "Items", Value: fmt.Sprint(len(g.overview.items))}.Layout(gtx, th)
+				}),
 				kit.Rigid(kit.Gap(10, 0)),
 				kit.Flexed(1, func(gtx C) D {
 					return ui.Stat{Title: "Quantity", Value: fmt.Sprintf("%g", qty), ValueColor: th.Fg}.Layout(gtx, th)
 				}),
 				kit.Rigid(kit.Gap(10, 0)),
 				kit.Flexed(1, func(gtx C) D {
-					return ui.Stat{Title: "Done", Value: fmt.Sprintf("%d/%d", done, len(g.items)), ValueColor: th.Good}.Layout(gtx, th)
+					return ui.Stat{Title: "Done", Value: fmt.Sprintf("%d/%d", done, len(g.overview.items)), ValueColor: th.Good}.Layout(gtx, th)
 				}),
 			)
 		}),
 		kit.Rigid(kit.Gap(0, 12)),
 		kit.Rigid(func(gtx C) D { return table.Header(gtx, th) }),
 	}
-	for i, it := range g.items {
-		rows = append(rows, kit.Rigid(func(gtx C) D { return g.row(gtx, it, i == len(g.items)-1) }))
+	for i, it := range g.overview.items {
+		rows = append(rows, kit.Rigid(func(gtx C) D { return g.row(gtx, it, i == len(g.overview.items)-1) }))
 	}
 	return kit.Col(gtx, rows...)
 }
@@ -229,30 +239,30 @@ func (g *gallery) playground(gtx C) D {
 		kit.Rigid(func(gtx C) D {
 			return kit.Flex{Gap: kit.Space6, Align: layout.Middle}.Layout(gtx, th,
 				kit.Rigid(func(gtx C) D {
-					return ui.Switch{ID: "switch:wifi", Label: "Wi-Fi", On: g.wifiOn}.Layout(gtx, th, &g.wifi)
+					return ui.Switch{ID: "switch:wifi", Label: "Wi-Fi", On: g.controls.wifiOn}.Layout(gtx, th, &g.controls.wifi)
 				}),
 				kit.Rigid(func(gtx C) D {
-					return ui.Checkbox{ID: "check:agree", Label: "I agree", Checked: g.agreed}.Layout(gtx, th, &g.agree)
+					return ui.Checkbox{ID: "check:agree", Label: "I agree", Checked: g.controls.agreed}.Layout(gtx, th, &g.controls.agree)
 				}),
 			)
 		}),
 		kit.Rigid(func(gtx C) D {
 			return row.Layout(gtx, th,
 				kit.Rigid(func(gtx C) D { return th.Text(gtx, "Volume", th.Type.Body, th.Muted, kit.Regular) }),
-				kit.Flexed(1, func(gtx C) D { return g.volume.layout(gtx, th, "slider:volume", "Volume") }),
+				kit.Flexed(1, func(gtx C) D { return g.controls.volume.layout(gtx, th, "slider:volume", "Volume") }),
 				kit.Rigid(kit.Fixed(40, func(gtx C) D {
-					return th.Text(gtx, fmt.Sprintf("%d%%", int(g.volume.Value*100+0.5)), th.Type.Body, th.Fg, kit.Medium)
+					return th.Text(gtx, fmt.Sprintf("%d%%", int(g.controls.volume.Value*100+0.5)), th.Type.Body, th.Fg, kit.Medium)
 				})),
 			)
 		}),
-		kit.Rigid(func(gtx C) D { return th.Progress(gtx, g.volume.Value) }),
+		kit.Rigid(func(gtx C) D { return th.Progress(gtx, g.controls.volume.Value) }),
 		kit.Rigid(func(gtx C) D {
 			return kit.Flex{Gap: kit.Space2p5, Align: layout.Middle}.Layout(gtx, th,
 				kit.Rigid(func(gtx C) D {
-					return ui.Button{ID: "toast:good", Text: "Show a toast"}.Layout(gtx, th, &g.toastBtns[1])
+					return ui.Button{ID: "toast:good", Text: "Show a toast"}.Layout(gtx, th, &g.overlays.toastBtns[1])
 				}),
 				kit.Rigid(func(gtx C) D {
-					return ui.Button{ID: "dialog:open", Text: "Open a dialog", Style: ui.Danger}.Layout(gtx, th, &g.delBtn)
+					return ui.Button{ID: "dialog:open", Text: "Open a dialog", Style: ui.Danger}.Layout(gtx, th, &g.overlays.delBtn)
 				}),
 			)
 		}),
@@ -273,15 +283,15 @@ func (g *gallery) exploreLinks(gtx C) D {
 	var rows []layout.FlexChild
 	for _, id := range explorePages {
 		title := id
-		for _, p := range pages {
-			if p.id == id {
-				title = p.title
-			}
+		if p, ok := g.catalog.page(id); ok {
+			title = p.title
 		}
 		rows = append(rows, kit.Rigid(func(gtx C) D {
 			return layout.Inset{Bottom: 8}.Layout(gtx, func(gtx C) D {
 				return kit.Row(gtx,
-					kit.Rigid(func(gtx C) D { return ui.Link{ID: "explore:" + id, Text: title}.Layout(gtx, th, g.explore.Get(id)) }),
+					kit.Rigid(func(gtx C) D {
+						return ui.Link{ID: "explore:" + id, Text: title}.Layout(gtx, th, g.overview.explore.Get(id))
+					}),
 					kit.Rigid(kit.Gap(8, 0)),
 					kit.Flexed(1, func(gtx C) D { return th.Text(gtx, blurbs[id], th.Type.Body, th.Dim, kit.Regular) }),
 				)
@@ -293,20 +303,14 @@ func (g *gallery) exploreLinks(gtx C) D {
 
 func (g *gallery) row(gtx C, it *item, last bool) D {
 	th := g.th
-	rs := g.rows.Get(it.ID)
+	rs := g.overview.rows.Get(it.ID)
 	return table.Row(gtx, th, &rs.hover, "row:"+it.ID, last, func(gtx C, col int, hovered bool) D {
 		switch col {
-		case 0:
-			return ui.Checkbox{ID: "done:" + it.ID, Checked: it.Done}.Layout(gtx, th, &rs.done)
-		case 1:
-			fg := th.Fg
-			if it.Done {
-				fg = th.Muted
-			}
-			return th.Text(gtx, it.Name, th.Type.Text, fg, kit.Medium)
-		case 2:
+		case colItem:
+			return ui.Checkbox{ID: "done:" + it.ID, Label: it.Name, Checked: it.Done}.Layout(gtx, th, &rs.done)
+		case colNotes:
 			return th.Text(gtx, it.Notes, th.Type.Body, th.Dim, kit.Regular)
-		case 3:
+		case colQty:
 			return ui.Stepper{ID: "qty:" + it.ID, Label: it.Name, Value: fmt.Sprintf("%g", it.Qty), Active: hovered}.Layout(gtx, th, &rs.step)
 		default:
 			if it.Done {

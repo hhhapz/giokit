@@ -8,24 +8,25 @@
 //	h.ClickID("save")                       // input → settle → stale check
 //	h.ExpectTextIn("row:42", "Saved")
 //	h.ExpectClean()                         // audit: ids, targets, occlusion, glyphs
+//
+// Input methods (Click, Key, Type...) settle the UI and, in strict mode,
+// re-render once more to catch a stale frame. Queries (Find, Texts, Role)
+// read the last frame's semantic tree and pixels. The Expect methods
+// report through the test and need a harness from NewT; on a standalone
+// harness from New they panic. Package kittest/conform builds the
+// per-control conformance suite on top of it.
 package kittest
 
 import (
 	"fmt"
 	"image"
-	"image/color"
-	"image/png"
 	"os"
 	"path/filepath"
 	"time"
-	"unicode/utf8"
 
 	"gioui.org/f32"
 	"gioui.org/gpu/headless"
 	"gioui.org/io/input"
-	"gioui.org/io/key"
-	"gioui.org/io/pointer"
-	"gioui.org/io/semantic"
 	"gioui.org/layout"
 	"gioui.org/op"
 	"gioui.org/unit"
@@ -33,117 +34,160 @@ import (
 	"github.com/hhhapz/giokit/kit"
 )
 
+// Harness runs one UI headlessly. Make it with New (standalone: problems are
+// recorded for Problems and fatal failures panic) or NewT (attached to a
+// test: problems fail the test and fatal failures stop it). Every input
+// method settles the UI and, in strict mode, checks the settled frame. The
+// harness, like the UI it drives, belongs to one goroutine.
 type Harness struct {
-	app    *kit.App    // h.App(), drained before each frame
-	Size   image.Point // pixels
-	Metric unit.Metric
-	Frames int // total frames drawn
-	// Now is the virtual clock handed to every frame (gtx.Now). Settle advances
-	// it by FrameStep while the UI asks for immediate redraws (animations), so
-	// animations run to completion deterministically. Wait advances it too.
+	Size   image.Point // window size in pixels
+	Metric unit.Metric // the window's scale: PxPerDp and PxPerSp
+	Frames int         // total frames drawn
+	// Now is the virtual clock handed to every frame (gtx.Now); it starts at
+	// 2026-01-01 00:00 UTC. Settle advances it by FrameStep (default 1/60 s)
+	// while the UI asks for immediate redraws (animations), so animations run
+	// to completion deterministically. Wait advances it too.
 	Now       time.Time
-	FrameStep time.Duration
+	FrameStep time.Duration // the clock step per settled frame
 
 	// Strict re-renders after every input and fails if anything changed, i.e.
 	// the settled frame was stale (draw-before-handle, late hover reads,
 	// missing Notify). On by default.
 	Strict bool
-	// Theme enables the missing-glyph audit.
+	// Theme enables the missing-glyph audit and ink recognition in the
+	// contrast audit. Nil by default.
 	Theme *kit.Theme
 	// MinTarget is the smallest clickable size the audit accepts (default 16dp).
 	MinTarget unit.Dp
 	// MinContrast is the smallest text contrast ratio the audit accepts
-	// (WCAG AA: 4.5), MinContrastLarge the same for large text (AA: 3).
-	// 0 turns the check off.
+	// (default WCAG AA: 4.5), MinContrastLarge the same for large text
+	// (default 3). 0 turns the check off.
 	MinContrast, MinContrastLarge float64
 
-	tb       TB
-	draw     func(gtx layout.Context)
-	router   input.Router
-	win      *headless.Window
-	kwin     kit.Window // per-frame dispatch tree, as kit.App keeps one
-	ops      op.Ops
-	cursor   f32.Point
-	problems []Problem
-	snaps    []snap
-	wake     time.Time
-	wakeOK   bool
+	app       *kit.App // h.App(), drained before each frame
+	tb        TB       // the test, or standalone{}
+	draw      func(gtx layout.Context)
+	router    input.Router
+	win       *headless.Window
+	kwin      kit.Window // per-frame dispatch tree, as kit.App keeps one
+	ops       op.Ops
+	cursor    f32.Point
+	inputTime time.Duration // time of the last pointer event; see gestureStart
+	problems  []Problem
+	snaps     []snap
+	wake      time.Time
+	wakeOK    bool
+	// tasksTimeout overrides runTasksTimeout when positive (tests).
+	tasksTimeout time.Duration
 }
 
-// New creates a harness of wdp×hdp dp at the given scale and settles the UI.
+// Harness defaults; see the Harness fields.
+const (
+	defaultMinTarget        unit.Dp = 16
+	defaultMinContrast              = 4.5
+	defaultMinContrastLarge         = 3
+	defaultFrameStep                = time.Second / 60
+)
+
+// epoch is where every harness's virtual clock starts.
+var epoch = time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+
+// New creates a standalone harness of wdp×hdp dp at the given scale (pixels
+// per dp) and settles the UI. Problems found while settling, and later, are
+// recorded for Problems; a fatal failure panics. It fails only when no
+// headless GPU is available. Call Release when done.
 func New(wdp, hdp int, scale float32, draw func(gtx layout.Context)) (*Harness, error) {
+	h, err := newHarness(wdp, hdp, scale, draw, standalone{})
+	if err != nil {
+		return nil, err
+	}
+	h.Settle()
+	return h, nil
+}
+
+// newHarness creates a harness reporting to tb without drawing a frame.
+func newHarness(wdp, hdp int, scale float32, draw func(gtx layout.Context), tb TB) (*Harness, error) {
 	size := image.Pt(int(float32(wdp)*scale), int(float32(hdp)*scale))
 	win, err := headless.NewWindow(size.X, size.Y)
 	if err != nil {
 		return nil, fmt.Errorf("headless GPU unavailable: %w", err)
 	}
-	h := &Harness{Size: size, Metric: unit.Metric{PxPerDp: scale, PxPerSp: scale}, draw: draw, win: win,
-		Strict: true, MinTarget: 16, MinContrast: 4.5, MinContrastLarge: 3, Now: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), FrameStep: time.Second / 60}
-	h.Settle()
-	return h, nil
+	return &Harness{
+		Size:             size,
+		Metric:           unit.Metric{PxPerDp: scale, PxPerSp: scale},
+		Now:              epoch,
+		FrameStep:        defaultFrameStep,
+		Strict:           true,
+		MinTarget:        defaultMinTarget,
+		MinContrast:      defaultMinContrast,
+		MinContrastLarge: defaultMinContrastLarge,
+		tb:               tb,
+		draw:             draw,
+		win:              win,
+	}, nil
 }
 
-// TB is the subset of testing.TB the harness uses. It is declared here so
-// that binaries using New for screenshots (-shot) do not link package testing.
-type TB interface {
-	Helper()
-	Name() string
-	Error(args ...any)
-	Errorf(format string, args ...any)
-	Fatal(args ...any)
-	Fatalf(format string, args ...any)
-	Skip(args ...any)
-	Cleanup(func())
-}
-
-// RequireGPU reports whether a missing headless GPU must fail tests instead
-// of skipping them. Set KITTEST_REQUIRE_GPU=1 in CI, or a runner without EGL
-// reports ok having run nothing.
-func RequireGPU() bool {
-	v := os.Getenv("KITTEST_REQUIRE_GPU")
-	return v != "" && v != "0"
-}
-
-// NoGPU skips t, or fails it when RequireGPU is set. Harness constructors call
-// it when New returns an error.
-func NoGPU(t TB, err error) {
-	t.Helper()
-	if RequireGPU() {
-		t.Fatal(err)
-	}
-	t.Skip(err)
-}
-
-// NewT is New for tests at scale 1: skips without a GPU (fails under
-// KITTEST_REQUIRE_GPU), releases on cleanup, reports problems through t, and
-// saves the final frame to $KITTEST_SHOTS/<test>.png.
+// NewT is NewTAt at scale 1.
 func NewT(t TB, wdp, hdp int, draw func(gtx layout.Context)) *Harness {
 	t.Helper()
 	return NewTAt(t, wdp, hdp, 1, draw)
 }
 
-// NewTAt is NewT at a given scale (pixels per dp): 1.5 and 2 catch hairlines,
-// rings and targets that only break on HiDPI screens.
+// NewTAt creates a harness attached to t at the given scale (pixels per dp)
+// and settles the UI. Every problem, from the first frame on, fails t. It
+// skips t without a GPU (fails it under KITTEST_REQUIRE_GPU). On cleanup it
+// saves the final frame to $KITTEST_SHOTS/<ShotName(test)>.png when that
+// variable is set, then releases the harness. Scales 1.5 and 2 catch
+// hairlines, rings and targets that only break on HiDPI screens.
 func NewTAt(t TB, wdp, hdp int, scale float32, draw func(gtx layout.Context)) *Harness {
 	t.Helper()
-	h, err := New(wdp, hdp, scale, draw)
+	h, err := newHarness(wdp, hdp, scale, draw, t)
 	if err != nil {
 		NoGPU(t, err)
+		return nil
 	}
-	h.tb = t
 	t.Cleanup(func() {
+		defer h.Release()
 		if dir := os.Getenv("KITTEST_SHOTS"); dir != "" {
-			os.MkdirAll(dir, 0o755)
-			h.Save(filepath.Join(dir, sanitize(t.Name())+".png"))
+			if err := h.saveShot(dir, t.Name()); err != nil {
+				t.Errorf("kittest: save final frame: %v", err)
+			}
 		}
-		h.Release()
 	})
+	h.Settle()
 	return h
 }
 
+// saveShot writes the current frame to dir/<ShotName(test)>.png.
+func (h *Harness) saveShot(dir, test string) error {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	return h.Save(filepath.Join(dir, ShotName(test)+".png"))
+}
+
+// ShotName turns a test name into the file name NewTAt saves its final
+// frame under: every byte other than an ASCII letter, digit, '-', '_' or '.'
+// becomes '_', so a subtest name ("Gallery/dark theme") stays one flat,
+// portable file name.
+func ShotName(test string) string {
+	b := []byte(test)
+	for i, c := range b {
+		switch {
+		case 'a' <= c && c <= 'z', 'A' <= c && c <= 'Z', '0' <= c && c <= '9', c == '-', c == '_', c == '.':
+		default:
+			b[i] = '_'
+		}
+	}
+	return string(b)
+}
+
+// Release frees the harness's GPU resources. The harness is unusable after.
 func (h *Harness) Release() { h.win.Release() }
 
+// frame draws one frame: posted callbacks, layout, input routing, render.
 func (h *Harness) frame() {
+	h.tb.Helper()
 	if h.app != nil {
 		h.app.Drain() // posted callbacks run before the frame, as in kit.App.Run
 	}
@@ -160,7 +204,7 @@ func (h *Harness) frame() {
 	h.kwin.End(gtx)
 	h.router.Frame(&h.ops)
 	if err := h.win.Frame(&h.ops); err != nil {
-		panic(err)
+		h.fatal(fmt.Sprintf("kittest: render frame %d: %v", h.Frames+1, err))
 	}
 	h.Frames++
 	// Consume the redraw request now, as a real window does after each frame.
@@ -174,20 +218,24 @@ func (h *Harness) frame() {
 const maxSettle = 120
 
 // Settle draws one frame, then keeps drawing while the UI requests an immediate
-// redraw, exactly like a real window, advancing the virtual clock one FrameStep
-// per extra frame. It never invents input, so "one click and the screen is
+// redraw or h.App() has queued callbacks (App.Post triggers a frame), exactly
+// like a real window, advancing the virtual clock one FrameStep per extra
+// frame. It never invents input, so "one click and the screen is
 // right" is a real assertion. Redraws scheduled for later (caret blink,
 // continuous animations via kit.Loop, delays) are not chased; use Wait.
-// Returns frames drawn.
+// It returns the number of frames drawn and reports no-settle after
+// maxSettle frames.
 func (h *Harness) Settle() int {
+	h.tb.Helper()
 	for n := 1; ; n++ {
 		h.frame()
 		t, ok := h.wake, h.wakeOK
-		if !ok || t.After(h.Now) {
+		redraw := ok && !t.After(h.Now)
+		if !redraw && (h.app == nil || h.app.Queued() == 0) {
 			return n
 		}
 		if n >= maxSettle {
-			h.report(Problem{Kind: "no-settle", Msg: fmt.Sprintf("UI still requesting immediate redraws after %d frames (Notify in every frame? continuous animations must use kit.Loop)", n)})
+			h.report(Problem{Kind: ProblemNoSettle, Msg: fmt.Sprintf("UI still requesting immediate redraws after %d frames (Notify in every frame? continuous animations must use kit.Loop)", n)})
 			return n
 		}
 		h.Now = h.Now.Add(h.FrameStep)
@@ -204,450 +252,65 @@ func (h *Harness) App() *kit.App {
 	return h.app
 }
 
-// RunTasks waits (up to 10s) for every kit.Spawn started on h.App() to
-// finish, then settles, so their done callbacks have run and drawn. Before
-// it, a test sees the UI as the user does while work is in flight.
+// runTasksTimeout bounds, in wall time, how long RunTasks waits for work.
+const runTasksTimeout = 10 * time.Second
+
+// RunTasks waits for every kit.Spawn started on h.App() to finish and its
+// done callback to run and draw, including work those callbacks start in
+// turn: it alternates waiting for running work with settling (which runs
+// the callbacks) until no work is running, all under one 10s deadline;
+// work still running or queued at the deadline (a callback that keeps
+// re-posting itself, say) is a fatal failure.
+// A cancelled task's done never runs, but RunTasks still waits for its work
+// function to return. Callbacks queued with App.Post, from the test or from
+// other callbacks, run in the settle (see Settle); RunTasks returns once no
+// work is running and nothing is queued. It cannot see a goroutine of the
+// app's own that has not posted yet. Before RunTasks, a test sees the UI as
+// the user does while work is in flight.
 func (h *Harness) RunTasks() {
+	h.tb.Helper()
 	if h.app == nil {
 		return
 	}
-	deadline := time.Now().Add(10 * time.Second)
-	for h.app.Pending() > 0 {
+	timeout := runTasksTimeout
+	if h.tasksTimeout > 0 {
+		timeout = h.tasksTimeout
+	}
+	deadline := time.Now().Add(timeout)
+	for {
 		if time.Now().After(deadline) {
-			h.fatal(fmt.Sprintf("RunTasks: %d task(s) still running after 10s", h.app.Pending()))
+			h.fatal(fmt.Sprintf("RunTasks: %d task(s) running and %d callback(s) queued after %v", h.app.Pending(), h.app.Queued(), timeout))
 			return
 		}
-		time.Sleep(time.Millisecond)
+		for h.app.Pending() > 0 && !time.Now().After(deadline) {
+			time.Sleep(time.Millisecond)
+		}
+		if h.app.Pending() > 0 {
+			continue // past the deadline: report at the top of the loop
+		}
+		h.after("run tasks")
+		if h.app.Pending() == 0 && h.app.Queued() == 0 {
+			return
+		}
 	}
-	h.after("run tasks")
 }
 
 // Wait advances the virtual clock by d and settles: use it for hover delays
 // (tooltips) or to step a continuous animation.
 func (h *Harness) Wait(d time.Duration) {
+	h.tb.Helper()
 	h.Now = h.Now.Add(d)
 	h.after(fmt.Sprintf("wait %v", d))
 }
 
-// after runs post-input checks.
+// after settles the UI after input, then checks the settled frame in strict
+// mode.
 func (h *Harness) after(action string) {
+	h.tb.Helper()
 	h.Settle()
 	if h.Strict {
 		if diff := h.Stale(); diff != "" {
-			h.report(Problem{Kind: "stale-frame", Msg: fmt.Sprintf("after %s the settled frame was stale: %s", action, diff)})
+			h.report(Problem{Kind: ProblemStaleFrame, Msg: fmt.Sprintf("after %s the settled frame was stale: %s", action, diff)})
 		}
 	}
-}
-
-// ---- pointer input ----
-
-// Move sends a pointer move to p (pixels).
-func (h *Harness) Move(p image.Point) {
-	h.cursor = f32.Pt(float32(p.X), float32(p.Y))
-	h.router.Queue(pointer.Event{Kind: pointer.Move, Source: pointer.Mouse, Position: h.cursor, Time: since()})
-	h.after(fmt.Sprintf("move to %v", p))
-}
-
-// Click moves to p, then presses and releases the primary button.
-func (h *Harness) Click(p image.Point) {
-	h.Move(p)
-	h.router.Queue(
-		pointer.Event{Kind: pointer.Press, Source: pointer.Mouse, Buttons: pointer.ButtonPrimary, Position: h.cursor, Time: since()},
-		pointer.Event{Kind: pointer.Release, Source: pointer.Mouse, Position: h.cursor, Time: since()},
-	)
-	h.after(fmt.Sprintf("click at %v", p))
-}
-
-// ClickMods clicks at p holding modifiers (Shift-click to extend, Ctrl-click
-// to toggle).
-func (h *Harness) ClickMods(p image.Point, mods key.Modifiers) {
-	h.Move(p)
-	h.router.Queue(
-		pointer.Event{Kind: pointer.Press, Source: pointer.Mouse, Buttons: pointer.ButtonPrimary, Position: h.cursor, Modifiers: mods, Time: since()},
-		pointer.Event{Kind: pointer.Release, Source: pointer.Mouse, Position: h.cursor, Modifiers: mods, Time: since()},
-	)
-	h.after(fmt.Sprintf("%v-click at %v", mods, p))
-}
-
-// DoubleClick clicks twice at p in quick succession (gesture.Click reports
-// NumClicks 2 for the second).
-func (h *Harness) DoubleClick(p image.Point) {
-	h.Move(p)
-	press := pointer.Event{Kind: pointer.Press, Source: pointer.Mouse, Buttons: pointer.ButtonPrimary, Position: h.cursor}
-	release := pointer.Event{Kind: pointer.Release, Source: pointer.Mouse, Position: h.cursor}
-	t := since()
-	for i := range 2 {
-		press.Time, release.Time = t+time.Duration(2*i)*time.Millisecond, t+time.Duration(2*i+1)*time.Millisecond
-		h.router.Queue(press, release)
-	}
-	h.after(fmt.Sprintf("double click at %v", p))
-}
-
-// RightClick moves to p, then presses and releases the secondary button.
-func (h *Harness) RightClick(p image.Point) {
-	h.Move(p)
-	h.router.Queue(
-		pointer.Event{Kind: pointer.Press, Source: pointer.Mouse, Buttons: pointer.ButtonSecondary, Position: h.cursor, Time: since()},
-		pointer.Event{Kind: pointer.Release, Source: pointer.Mouse, Position: h.cursor, Time: since()},
-	)
-	h.after(fmt.Sprintf("right-click at %v", p))
-}
-
-// Scroll scrolls by dy pixels (positive = down) with the pointer at p.
-func (h *Harness) Scroll(p image.Point, dy float32) {
-	h.Move(p)
-	h.router.Queue(pointer.Event{Kind: pointer.Scroll, Source: pointer.Mouse, Position: h.cursor, Scroll: f32.Pt(0, dy), Time: since()})
-	h.after(fmt.Sprintf("scroll %v at %v", dy, p))
-}
-
-// Drag presses at from, moves to to in a few steps, and releases there.
-func (h *Harness) Drag(from, to image.Point) {
-	h.Move(from)
-	h.router.Queue(pointer.Event{Kind: pointer.Press, Source: pointer.Mouse, Buttons: pointer.ButtonPrimary, Position: h.cursor, Time: since()})
-	h.Settle()
-	const steps = 4
-	for i := 1; i <= steps; i++ {
-		p := from.Add(to.Sub(from).Mul(i).Div(steps))
-		h.cursor = f32.Pt(float32(p.X), float32(p.Y))
-		h.router.Queue(pointer.Event{Kind: pointer.Move, Source: pointer.Mouse, Buttons: pointer.ButtonPrimary, Position: h.cursor, Time: since()})
-		h.Settle()
-	}
-	h.router.Queue(pointer.Event{Kind: pointer.Release, Source: pointer.Mouse, Position: h.cursor, Time: since()})
-	h.after(fmt.Sprintf("drag %v→%v", from, to))
-}
-
-// DragID drags the widget tagged id by (dx, dy) pixels from the center of
-// its visible part.
-func (h *Harness) DragID(id string, dx, dy int) {
-	c := Center(h.mustVisible(id))
-	h.Drag(c, c.Add(image.Pt(dx, dy)))
-}
-
-// ScrollID scrolls the region tagged id by dy pixels.
-func (h *Harness) ScrollID(id string, dy float32) { h.Scroll(Center(h.mustVisible(id)), dy) }
-
-// Hover moves to the center of the visible part of the widget tagged id.
-func (h *Harness) Hover(id string) { h.Move(Center(h.mustVisible(id))) }
-
-// ClickID clicks the center of the visible part of the widget tagged id.
-// A widget clipped out of view (laid out past the end of a scrolled list)
-// fails the test rather than clicking whatever covers that point.
-func (h *Harness) ClickID(id string) { h.Click(Center(h.mustVisible(id))) }
-
-// ClickIDMods clicks the widget tagged id holding modifiers.
-func (h *Harness) ClickIDMods(id string, mods key.Modifiers) {
-	h.ClickMods(Center(h.mustVisible(id)), mods)
-}
-
-// DoubleClickID double-clicks the widget tagged id.
-func (h *Harness) DoubleClickID(id string) { h.DoubleClick(Center(h.mustVisible(id))) }
-
-// RightClickID right-clicks the widget tagged id (context menus).
-func (h *Harness) RightClickID(id string) { h.RightClick(Center(h.mustVisible(id))) }
-
-// ---- keyboard input ----
-
-// Key presses and releases a key. Unhandled Tab / Shift+Tab move focus, as in a real window.
-func (h *Harness) Key(name key.Name, mods key.Modifiers) {
-	press := key.Event{Name: name, Modifiers: mods, State: key.Press}
-	dir := key.FocusDirection(-1)
-	switch {
-	case name == key.NameTab && mods == 0:
-		dir = key.FocusForward
-	case name == key.NameTab && mods == key.ModShift:
-		dir = key.FocusBackward
-	}
-	if dir != -1 {
-		h.router.Queue(input.SystemEvent{Event: press})
-		if _, handled := h.router.WakeupTime(); !handled {
-			h.router.MoveFocus(dir)
-		}
-	} else {
-		h.router.Queue(press)
-	}
-	h.router.Queue(key.Event{Name: name, Modifiers: mods, State: key.Release})
-	h.after(fmt.Sprintf("key %v%v", mods, name))
-}
-
-// Chord presses a chord written like a kit.Keymap binding ("Ctrl+1",
-// "Shortcut+K", "Escape").
-func (h *Harness) Chord(chord string) {
-	n, m, err := kit.ParseChord(chord)
-	if err != nil {
-		h.fatal(err.Error())
-	}
-	h.Key(n, m)
-}
-
-// Tab moves focus forward (or backward with back=true).
-func (h *Harness) Tab(back bool) {
-	if back {
-		h.Key(key.NameTab, key.ModShift)
-	} else {
-		h.Key(key.NameTab, 0)
-	}
-}
-
-// Type inserts text into the focused editor, replacing its selection.
-func (h *Harness) Type(s string) {
-	// As app.Window's EditorInsert does: replace the selection, then put the
-	// caret after the inserted text (without the second event the caret
-	// stayed in front of text typed mid-field).
-	sel := h.router.EditorState().Selection.Range
-	start := min(sel.Start, sel.End) + utf8.RuneCountInString(s)
-	h.router.Queue(
-		key.EditEvent{Range: sel, Text: s},
-		key.SelectionEvent{Start: start, End: start},
-	)
-	h.after(fmt.Sprintf("type %q", s))
-}
-
-// Cursor is the pointer cursor the UI requests at the current pointer position.
-func (h *Harness) Cursor() pointer.Cursor { return h.router.Cursor() }
-
-// ---- queries ----
-
-// Find returns the pixel bounds of the widget tagged with semantic id.
-func (h *Harness) Find(id string) (image.Rectangle, bool) {
-	n, ok := h.node(func(d input.SemanticDesc) bool { return d.Description == id })
-	return n.Desc.Bounds, ok
-}
-
-// Disabled reports whether the widget tagged id is disabled (kit's
-// Theme.Disable), itself or through an ancestor. It fails the test if the id
-// isn't on screen.
-func (h *Harness) Disabled(id string) bool {
-	h.must(id)
-	byID := map[input.SemanticID]input.SemanticNode{}
-	var target input.SemanticNode
-	for _, n := range h.nodes() {
-		byID[n.ID] = n
-		if n.Desc.Description == id {
-			target = n
-		}
-	}
-	for n, ok := target, true; ok; n, ok = byID[n.ParentID] {
-		if n.Desc.Disabled {
-			return true
-		}
-		if n.ParentID == 0 {
-			break
-		}
-	}
-	return false
-}
-
-// focusedTagID is the id of the control holding keyboard focus, as kit
-// recorded it (kit.FocusID), or "" when nothing with an id has focus.
-func (h *Harness) focusedTagID() string {
-	return h.kwin.FocusedID(h.router.Source())
-}
-
-// FocusedID is the id of the focused widget. When focus is on a focus group
-// (a list, tree, table or menu), it is the group's active item if that item
-// is laid out, as a screen reader would announce it; otherwise the group.
-func (h *Harness) FocusedID() string {
-	id := h.focusedTagID()
-	if a := h.kwin.GroupActive()[id]; a != "" {
-		return a
-	}
-	return id
-}
-
-// Role is the role of the widget tagged id: as kit recorded it
-// (kit.SetRole; every kit component does), else derived from its Gio
-// semantic class, else "".
-func (h *Harness) Role(id string) kit.Role {
-	if r, ok := h.kwin.Roles()[id]; ok {
-		return r
-	}
-	n, ok := h.node(func(d input.SemanticDesc) bool { return d.Description == id })
-	if !ok {
-		return ""
-	}
-	return classRole[n.Desc.Class]
-}
-
-var classRole = map[semantic.ClassOp]kit.Role{
-	semantic.Button: kit.RoleButton, semantic.CheckBox: kit.RoleCheckbox,
-	semantic.Editor: kit.RoleTextbox, semantic.RadioButton: kit.RoleRadio, semantic.Switch: kit.RoleSwitch,
-}
-
-// ByRole returns the id of the one control with role and spoken label (as a
-// screen reader announces it: "the Save button", "the Editor tab"), and
-// fails when there is none or several. Querying this way checks the
-// accessibility on the way: an unlabelled control cannot be found.
-func (h *Harness) ByRole(role kit.Role, label string) string {
-	var ids []string
-	for _, n := range h.nodes() {
-		if id := n.Desc.Description; id != "" && n.Desc.Label == label && h.Role(id) == role {
-			ids = append(ids, id)
-		}
-	}
-	switch len(ids) {
-	case 1:
-		return ids[0]
-	case 0:
-		h.fatal(fmt.Sprintf("no %s labelled %q on screen", role, label))
-	default:
-		h.fatal(fmt.Sprintf("%d controls are %s labelled %q: %v (disambiguate by id)", len(ids), role, label, ids))
-	}
-	return ""
-}
-
-// ClickRole clicks the control with role and spoken label (ByRole).
-func (h *Harness) ClickRole(role kit.Role, label string) { h.ClickID(h.ByRole(role, label)) }
-
-// FindText returns the bounds of the first text label exactly equal to s.
-func (h *Harness) FindText(s string) (image.Rectangle, bool) {
-	n, ok := h.node(func(d input.SemanticDesc) bool { return d.Label == s })
-	return n.Desc.Bounds, ok
-}
-
-// TextsIn returns the labels whose origin lies inside the widget tagged id
-// (labels report unbounded heights, so containment would miss them).
-func (h *Harness) TextsIn(id string) []string {
-	r := h.must(id)
-	var out []string
-	for _, n := range h.nodes() {
-		if n.Desc.Label != "" && n.Desc.Bounds.Min.In(r) {
-			out = append(out, n.Desc.Label)
-		}
-	}
-	return out
-}
-
-// Texts returns every label on screen, in draw order.
-func (h *Harness) Texts() []string {
-	var out []string
-	for _, n := range h.nodes() {
-		if n.Desc.Label != "" {
-			out = append(out, n.Desc.Label)
-		}
-	}
-	return out
-}
-
-// IDs returns every semantic id on screen, in draw order.
-func (h *Harness) IDs() []string {
-	var out []string
-	for _, n := range h.nodes() {
-		if n.Desc.Description != "" {
-			out = append(out, n.Desc.Description)
-		}
-	}
-	return out
-}
-
-// mustVisible is the part of the widget tagged id that is on screen: its
-// bounds clipped by its ancestors' (a scrolled list's viewport) and the
-// window. Pointer helpers aim there; none visible fails the test.
-func (h *Harness) mustVisible(id string) image.Rectangle {
-	h.must(id)
-	nodes := h.nodes()
-	byID := make(map[input.SemanticID]input.SemanticNode, len(nodes))
-	for _, n := range nodes {
-		byID[n.ID] = n
-	}
-	screen := image.Rectangle{Max: h.Size}
-	for _, n := range nodes {
-		if n.Desc.Description != id {
-			continue
-		}
-		if v := visible(byID, n, screen); !v.Empty() {
-			return v
-		}
-		h.fatal(fmt.Sprintf("widget %q is not visible: bounds %v are clipped out of view (scroll it into view first)", id, n.Desc.Bounds))
-	}
-	return h.must(id)
-}
-
-func (h *Harness) must(id string) image.Rectangle {
-	r, ok := h.Find(id)
-	if !ok {
-		h.fatal(fmt.Sprintf("no widget %q on screen; ids: %v", id, h.IDs()))
-	}
-	return r
-}
-
-// nodes flattens the semantic tree (pre-order).
-func (h *Harness) nodes() []input.SemanticNode {
-	var out []input.SemanticNode
-	var walk func([]input.SemanticNode)
-	walk = func(ns []input.SemanticNode) {
-		for _, n := range ns {
-			out = append(out, n)
-			walk(n.Children)
-		}
-	}
-	all := h.router.AppendSemantics(nil)
-	if len(all) > 0 {
-		walk(all[:1]) // the root; the rest of the slice repeats its descendants
-	}
-	return out
-}
-
-func (h *Harness) node(match func(input.SemanticDesc) bool) (input.SemanticNode, bool) {
-	for _, n := range h.nodes() {
-		if match(n.Desc) {
-			return n, true
-		}
-	}
-	return input.SemanticNode{}, false
-}
-
-// ---- pixels ----
-
-// Image returns the current frame.
-func (h *Harness) Image() *image.RGBA {
-	img := image.NewRGBA(image.Rectangle{Max: h.Size})
-	if err := h.win.Screenshot(img); err != nil {
-		panic(err)
-	}
-	return img
-}
-
-// Pixel samples the current frame at p.
-func (h *Harness) Pixel(p image.Point) color.NRGBA {
-	c := h.Image().RGBAAt(p.X, p.Y)
-	return color.NRGBA{R: c.R, G: c.G, B: c.B, A: c.A}
-}
-
-// BgColor samples a widget's background 3px inside its left edge at mid
-// height, where content rarely is. Use it to check hover/selection fills.
-func (h *Harness) BgColor(id string) color.NRGBA {
-	r := h.must(id)
-	return h.Pixel(image.Pt(r.Min.X+3, Center(r).Y))
-}
-
-// Save writes the current frame as a PNG.
-func (h *Harness) Save(path string) error {
-	f, err := os.Create(path)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	return png.Encode(f, h.Image())
-}
-
-func Center(r image.Rectangle) image.Point { return r.Min.Add(r.Size().Div(2)) }
-
-// Near reports whether two colors match within tol per channel (GPU rounding).
-func Near(a, b color.NRGBA, tol uint8) bool {
-	d := func(x, y uint8) bool { return max(x, y)-min(x, y) <= tol }
-	return d(a.R, b.R) && d(a.G, b.G) && d(a.B, b.B) && d(a.A, b.A)
-}
-
-var start = time.Now()
-
-func since() time.Duration { return time.Since(start) }
-
-func sanitize(s string) string {
-	b := []byte(s)
-	for i, c := range b {
-		if c == '/' || c == ' ' {
-			b[i] = '_'
-		}
-	}
-	return string(b)
 }

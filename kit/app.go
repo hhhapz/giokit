@@ -3,34 +3,37 @@ package kit
 import (
 	"context"
 	"fmt"
-	"os"
-	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"gioui.org/app"
 	"gioui.org/io/system"
+	"gioui.org/layout"
 	"gioui.org/op"
 	"gioui.org/unit"
 )
 
 // App runs a single-window program. All app state belongs to the UI goroutine
-// (GPUI: the main thread owns entities); other goroutines go through Post/Spawn.
+// (GPUI: the main thread owns entities); other goroutines go through Post and
+// Spawn.
+//
+// Create an App with NewApp: the zero App has no window and is not usable.
+// An App runs one window once; set its fields before calling Run.
 type App struct {
-	ID, Title     string // ID: Wayland app_id / X11 class; match StartupWMClass in .desktop
+	// ID is the Wayland app_id and X11 class; match StartupWMClass in the
+	// app's .desktop file.
+	ID string
+	// Title is the window title.
+	Title string
+	// Width and Height are the initial window size.
 	Width, Height unit.Dp
-	win           *app.Window
 	// OnPanic, if set, receives a panic from a Post callback (Spawn's done
 	// included) instead of letting it crash the program; the other queued
 	// callbacks still run. Log it and keep going, or show an error.
 	OnPanic func(recovered any)
-	// OnClose, if set, runs once the window has closed (by the user or Quit),
-	// just before the process exits: save state, close databases. Deferred
-	// calls in main never run, since Gio's app.Main does not return on every
-	// platform. err is the window's error, if it failed.
-	OnClose func(err error)
 
+	win      *app.Window
 	mu       sync.Mutex
 	posts    []func()
 	running  []func()
@@ -41,6 +44,19 @@ type App struct {
 // goroutine). Harnesses wait for it to reach 0.
 func (a *App) Pending() int { return int(a.inflight.Load()) }
 
+// Queued reports callbacks posted with Post (Spawn's done included) that
+// have not run yet. A window draws a frame for each; a harness that drives
+// frames itself keeps drawing while Queued is above 0. Safe from any
+// goroutine.
+func (a *App) Queued() int {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return len(a.posts)
+}
+
+// NewApp returns an App for a window titled title, of initial size w by h,
+// with id as its Wayland app_id and X11 class (see App.ID). The window
+// opens when Run is called.
 func NewApp(id, title string, w, h unit.Dp) *App {
 	return &App{ID: id, Title: title, Width: w, Height: h, win: new(app.Window)}
 }
@@ -56,8 +72,7 @@ func (a *App) Post(f func()) {
 	a.win.Invalidate()
 }
 
-// Quit closes the window; OnClose runs, then the process exits. Safe from
-// any goroutine.
+// Quit closes the window, which makes Run return. Safe from any goroutine.
 func (a *App) Quit() { a.win.Perform(system.ActionClose) }
 
 // Invalidate requests a frame. Safe from any goroutine: wire a
@@ -94,7 +109,9 @@ func (a *App) call(f func()) {
 //	v.search = kit.Spawn(app, func(ctx context.Context) ([]Hit, error) { return find(ctx, q) },
 //		func(hits []Hit, err error) { v.hits = hits })
 //
-// The UI goroutine owns a Task, like all state.
+// Tasks come from Spawn. The zero Task is not running and has no work to
+// cancel; Cancel on it does nothing. The UI goroutine owns a Task, like all
+// state: Cancel and Running are not safe from the work function.
 type Task struct {
 	cancel    context.CancelFunc
 	cancelled bool
@@ -104,7 +121,7 @@ type Task struct {
 // Cancel cancels the work's context and drops its result: done never runs
 // after Cancel. Safe on a nil or finished Task.
 func (t *Task) Cancel() {
-	if t == nil || t.finished {
+	if t == nil || t.finished || t.cancel == nil {
 		return
 	}
 	t.cancelled = true
@@ -112,7 +129,9 @@ func (t *Task) Cancel() {
 }
 
 // Running reports whether the work has neither finished nor been cancelled.
-func (t *Task) Running() bool { return t != nil && !t.finished && !t.cancelled }
+func (t *Task) Running() bool {
+	return t != nil && t.cancel != nil && !t.finished && !t.cancelled
+}
 
 // Spawn runs work off the UI goroutine and delivers its result to done on the
 // UI goroutine (GPUI: cx.spawn), unless the returned Task was cancelled
@@ -143,96 +162,62 @@ func Spawn[T any](a *App, work func(context.Context) (T, error), done func(T, er
 	return t
 }
 
-// Run opens the window and calls frame for every frame. It does not return.
+// Run opens the window and calls frame for every frame, on the calling
+// goroutine, which becomes the UI goroutine. It returns once the window has
+// closed (by the user or Quit), with the window's error, or nil after a
+// normal close. Run it on its own goroutine and hand the main goroutine to
+// Main; when Run returns, save state and exit the process:
+//
+//	go func() {
+//		if err := a.Run(v.Frame); err != nil {
+//			log.Fatal(err)
+//		}
+//		os.Exit(0)
+//	}()
+//	kit.Main()
 //
 // Set GIOKIT_TRACE=1 to log frame pacing to stderr: one line per second with
 // frame count, interval stats and build time, plus a line for every frame
 // that arrived late (> 1.5× the median interval). Use it to diagnose stutter
 // the headless harness can't see (compositor pacing, vsync, scaling).
-func (a *App) Run(frame func(gtx C)) {
+func (a *App) Run(frame func(gtx layout.Context)) error {
 	app.ID = a.ID
-	trace := traceEnabled
-	var tr tracer
-	if trace {
-		go func() { // lines between frames (input, idle) still reach the log
-			for range time.Tick(250 * time.Millisecond) {
-				traceFlush()
-			}
-		}()
+	if traceEnabled {
+		stop := flushTraceEvery(traceFlushInterval)
+		defer stop()
 	}
-	go func() {
-		a.win.Option(app.Title(a.Title), app.Size(a.Width, a.Height))
-		var ops op.Ops
-		var win Window
-		for {
-			switch e := a.win.Event().(type) {
-			case app.DestroyEvent:
-				traceFlush()
-				if a.OnClose != nil {
-					a.OnClose(e.Err)
-				}
-				if e.Err != nil {
-					fmt.Fprintln(os.Stderr, e.Err)
-					os.Exit(1)
-				}
-				os.Exit(0)
-			case app.FrameEvent:
-				t0 := time.Now()
-				if trace {
-					traceFrame()
-					tracef("frame", "now_ms", ms(e.Now.Sub(trc.start)), "lag_ms", ms(t0.Sub(e.Now)),
-						"size", fmt.Sprintf("%dx%d", e.Size.X, e.Size.Y), "dpi", e.Metric.PxPerDp)
-				}
-				a.Drain()
-				gtx := win.Begin(app.NewContext(&ops, e))
-				frame(gtx)
-				win.End(gtx)
-				t1 := time.Now()
-				e.Frame(gtx.Ops)
-				if trace {
-					tracef("frame_end", "build_ms", ms(t1.Sub(t0)), "submit_ms", ms(time.Since(t1)))
-					tr.frame(e.Now, t1.Sub(t0))
-				}
+	a.win.Option(app.Title(a.Title), app.Size(a.Width, a.Height))
+	var ops op.Ops
+	var win Window
+	var pacing framePacing
+	for {
+		switch e := a.win.Event().(type) {
+		case app.DestroyEvent:
+			traceFlush()
+			return e.Err
+		case app.FrameEvent:
+			start := time.Now()
+			if traceEnabled {
+				traceFrame()
+				tracef("frame", "now_ms", ms(e.Now.Sub(trc.start)), "lag_ms", ms(start.Sub(e.Now)),
+					"size", fmt.Sprintf("%dx%d", e.Size.X, e.Size.Y), "dpi", e.Metric.PxPerDp)
+			}
+			a.Drain()
+			gtx := win.Begin(app.NewContext(&ops, e))
+			frame(gtx)
+			win.End(gtx)
+			built := time.Now()
+			e.Frame(gtx.Ops)
+			if traceEnabled {
+				tracef("frame_end", "build_ms", ms(built.Sub(start)), "submit_ms", ms(time.Since(built)))
+				pacing.frame(e.Now, built.Sub(start))
 			}
 		}
-	}()
-	app.Main()
-}
-
-// tracer collects frame timings for GIOKIT_TRACE.
-type tracer struct {
-	last, window time.Time
-	gaps, builds []time.Duration
-}
-
-func (t *tracer) frame(now time.Time, build time.Duration) {
-	if !t.last.IsZero() {
-		gap := now.Sub(t.last)
-		if len(t.gaps) > 8 {
-			s := append([]time.Duration(nil), t.gaps...)
-			sort.Slice(s, func(i, j int) bool { return s[i] < s[j] })
-			if med := s[len(s)/2]; gap > med*3/2 && gap < time.Second {
-				tracef("LATE_FRAME", "gap_ms", ms(gap), "median_ms", ms(med), "build_ms", ms(build))
-			}
-		}
-		if gap < time.Second { // idle periods are not stutter
-			t.gaps = append(t.gaps, gap)
-		}
-	}
-	t.builds = append(t.builds, build)
-	t.last = now
-	if t.window.IsZero() {
-		t.window = now
-	}
-	if now.Sub(t.window) >= time.Second && len(t.gaps) > 0 {
-		s := append([]time.Duration(nil), t.gaps...)
-		sort.Slice(s, func(i, j int) bool { return s[i] < s[j] })
-		b := append([]time.Duration(nil), t.builds...)
-		sort.Slice(b, func(i, j int) bool { return b[i] < b[j] })
-		tracef("pacing", "frames", len(t.builds), "gap_med_ms", ms(s[len(s)/2]), "gap_max_ms", ms(s[len(s)-1]),
-			"build_med_ms", ms(b[len(b)/2]), "build_max_ms", ms(b[len(b)-1]))
-		t.window, t.gaps, t.builds = now, t.gaps[:0], t.builds[:0]
 	}
 }
 
-func ms(d time.Duration) float64 { return float64(d.Microseconds()) / 1000 }
+// Main hands the main goroutine to the platform's event loop (Gio's
+// app.Main). Call it at the end of main, after starting App.Run on another
+// goroutine. It does not return on every platform, so deferred calls in
+// main may never run: exit from the goroutine that ran Run.
+func Main() { app.Main() }

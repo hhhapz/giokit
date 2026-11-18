@@ -3,7 +3,6 @@ package bench
 import (
 	"image"
 	"testing"
-	"time"
 
 	"gioui.org/layout"
 	"gioui.org/op/clip"
@@ -12,14 +11,16 @@ import (
 	"github.com/hhhapz/giokit/kittest"
 )
 
-// Video baselines: a full-window video frame per UI frame.
-//
-//	go test -run x -bench Video -benchtime 200x ./internal/bench
-//
-// StreamNew uploads into one reused texture (paint.Stream); ImageOpNew is
-// the old way (an ImageOp per frame: new texture, upload, mipmaps);
-// StreamSame redraws without a new frame (the cost of the redraw alone).
+// videoMode is how a video benchmark puts a frame on screen.
+type videoMode int
 
+const (
+	streamNew  videoMode = iota // submit a new frame to a paint.Stream each UI frame
+	streamSame                  // redraw the stream's current frame
+	imageOpNew                  // a new paint.ImageOp each UI frame
+)
+
+// frames makes two distinct w×h frames to alternate between.
 func frames(w, h int) [2]*image.RGBA {
 	var fs [2]*image.RGBA
 	for k := range fs {
@@ -31,27 +32,35 @@ func frames(w, h int) [2]*image.RGBA {
 	return fs
 }
 
-func runVideo(b *testing.B, w, h int, mode string) {
+// runVideo draws a full-window w×h video frame each UI frame in mode: the
+// video baselines.
+//
+//	go test -run x -bench Video -benchtime 200x ./internal/bench
+//
+// StreamNew uploads into one reused texture (paint.Stream); ImageOpNew is
+// the old way (an ImageOp per frame: new texture, upload, mipmaps);
+// StreamSame redraws without a new frame (the cost of the redraw alone).
+func runVideo(b *testing.B, w, h int, mode videoMode) {
 	fs := frames(w, h)
 	s := paint.NewStream()
 	n := 0
 	draw := func(gtx layout.Context) {
 		img := fs[n%2]
 		switch mode {
-		case "stream":
+		case streamNew:
 			s.Submit(paint.StreamFrame{Image: img})
 			fallthrough
-		case "same":
+		case streamSame:
 			defer clip.Rect{Max: img.Rect.Size()}.Push(gtx.Ops).Pop()
 			s.Add(gtx.Ops)
-		case "imageop":
+		case imageOpNew:
 			defer clip.Rect{Max: img.Rect.Size()}.Push(gtx.Ops).Pop()
 			paint.NewImageOp(img).Add(gtx.Ops)
 		}
 		paint.PaintOp{}.Add(gtx.Ops)
 		n++
 	}
-	if mode == "same" {
+	if mode == streamSame {
 		s.Submit(paint.StreamFrame{Image: fs[0]})
 	}
 	hn, err := kittest.New(w, h, 1, draw)
@@ -60,18 +69,12 @@ func runVideo(b *testing.B, w, h int, mode string) {
 	}
 	defer hn.Release()
 	hn.Settle()
-	b.ResetTimer()
-	t0 := time.Now()
-	for i := 0; i < b.N; i++ {
-		hn.Settle()
-	}
-	_ = hn.Pixel(image.Pt(1, 1)) // wait for the GPU
-	b.ReportMetric(float64(time.Since(t0).Microseconds())/float64(b.N)/1000, "ms/frame")
+	measureFrames(b, hn)
 }
 
-func BenchmarkVideo1080StreamNew(b *testing.B)  { runVideo(b, 1920, 1080, "stream") }
-func BenchmarkVideo1080ImageOpNew(b *testing.B) { runVideo(b, 1920, 1080, "imageop") }
-func BenchmarkVideo1080StreamSame(b *testing.B) { runVideo(b, 1920, 1080, "same") }
-func BenchmarkVideoTabStreamNew(b *testing.B)   { runVideo(b, 2960, 1848, "stream") }
-func BenchmarkVideoTabImageOpNew(b *testing.B)  { runVideo(b, 2960, 1848, "imageop") }
-func BenchmarkVideoTabStreamSame(b *testing.B)  { runVideo(b, 2960, 1848, "same") }
+func BenchmarkVideo1080StreamNew(b *testing.B)  { runVideo(b, 1920, 1080, streamNew) }
+func BenchmarkVideo1080ImageOpNew(b *testing.B) { runVideo(b, 1920, 1080, imageOpNew) }
+func BenchmarkVideo1080StreamSame(b *testing.B) { runVideo(b, 1920, 1080, streamSame) }
+func BenchmarkVideoTabStreamNew(b *testing.B)   { runVideo(b, 2960, 1848, streamNew) }
+func BenchmarkVideoTabImageOpNew(b *testing.B)  { runVideo(b, 2960, 1848, imageOpNew) }
+func BenchmarkVideoTabStreamSame(b *testing.B)  { runVideo(b, 2960, 1848, streamSame) }

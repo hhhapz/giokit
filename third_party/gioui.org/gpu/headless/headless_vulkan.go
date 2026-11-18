@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Unlicense OR MIT
 
-// giokit patch: Vulkan is opt-in on desktop Linux/FreeBSD (-tags vulkan); see docs/gio-patches.md.
-//go:build (linux || freebsd) && (vulkan || (android && !novulkan))
+//go:build (linux || freebsd) && !novulkan
 
 package headless
 
@@ -17,10 +16,11 @@ type vkContext struct {
 	inst     vk.Instance
 	dev      vk.Device
 	queueFam int
+	dmabuf   bool // DMA-BUF import extensions enabled (giokit patch)
 }
 
 func init() {
-	newContextFallback = newVulkanContext
+	newContextVulkan = newVulkanContext
 }
 
 func newVulkanContext() (context, error) {
@@ -33,7 +33,13 @@ func newVulkanContext() (context, error) {
 		vk.DestroyInstance(inst)
 		return nil, err
 	}
-	dev, err := vk.CreateDeviceAndQueue(physDev, qFam)
+	// giokit patch: enable DMA-BUF import where the device has it.
+	dmabuf := vk.DMABufDeviceExtensions(physDev)
+	dev, err := vk.CreateDeviceAndQueue(physDev, qFam, dmabuf...)
+	if err != nil && dmabuf != nil {
+		dmabuf = nil
+		dev, err = vk.CreateDeviceAndQueue(physDev, qFam)
+	}
 	if err != nil {
 		vk.DestroyInstance(inst)
 		return nil, err
@@ -43,6 +49,7 @@ func newVulkanContext() (context, error) {
 		inst:     inst,
 		dev:      dev,
 		queueFam: qFam,
+		dmabuf:   dmabuf != nil,
 	}
 	return ctx, nil
 }
@@ -54,6 +61,7 @@ func (c *vkContext) API() gpu.API {
 		Format:      int(vk.FORMAT_R8G8B8A8_SRGB),
 		QueueFamily: c.queueFam,
 		QueueIndex:  0,
+		DMABuf:      c.dmabuf,
 	}
 }
 

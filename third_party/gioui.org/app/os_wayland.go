@@ -2097,16 +2097,27 @@ func (w *window) EditorStateChanged(old, new editorState) {
 	}
 }
 
+// NewContext tries Vulkan first, then EGL. giokit patch: upstream tries EGL
+// first, but Mesa's GL driver costs about 30 MB more RSS per process than
+// its Vulkan driver. EGL remains the fallback where Vulkan is missing or
+// fails to start. GIOKIT_GPU=opengl skips Vulkan, GIOKIT_GPU=vulkan EGL.
 func (w *window) NewContext() (context, error) {
 	var firstErr error
-	if f := newWaylandEGLContext; f != nil {
+	vulkan, egl := newWaylandVulkanContext, newWaylandEGLContext
+	switch os.Getenv("GIOKIT_GPU") {
+	case "opengl":
+		vulkan = nil
+	case "vulkan":
+		egl = nil
+	}
+	if f := vulkan; f != nil {
 		c, err := f(w)
 		if err == nil {
 			return c, nil
 		}
 		firstErr = err
 	}
-	if f := newWaylandVulkanContext; f != nil {
+	if f := egl; f != nil {
 		c, err := f(w)
 		if err == nil {
 			return c, nil

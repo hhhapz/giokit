@@ -27,7 +27,7 @@ Docs: `$(go list -m -f '{{.Dir}}' github.com/hhhapz/giokit)/docs/`. Read only wh
 14. **Outlines are fills, never `clip.Stroke`.** Use `kit.Border` and filled icon polygons; `clip.Stroke` re-tessellates on the CPU every frame.
 15. **Disabled is `th.Disable(gtx, cond, w)`,** never just a gray color: it blocks input, removes controls from `Tab` order, and sets disabled semantics.
 16. **Floating surfaces use kit overlays** (`Popover`, `Menu`, `Select`, `ContextMenu`, `Modal`, `ToastHost`), never raw `op.Defer`: they flip at window edges, trap focus, and dismiss on `Escape`.
-17. **giokit builds on stock Gio** (Linux: `-tags novulkan` or Vulkan headers). The fork (`replace gioui.org => <giokit>/third_party/gioui.org`) is optional and required only by `kit/x/video` and `kit/forktrace`.
+17. **giokit builds on stock Gio** (Linux: Vulkan headers, or `-tags novulkan`). The fork (`replace gioui.org => <giokit>/third_party/gioui.org`) is optional and required only by `kit/x/video` and `kit/forktrace`.
 18. **Custom buttons must be Tab-reachable:** Give icon-only controls a human label (`TagLabel` or `ui.IconButton{Label: ...}`) and verify with `h.ExpectTabReachable()`.
 19. **Alternative text is not painted text:** Tag artwork with `kit.TagImage(gtx, id, label)` (`RoleImage`) so screen readers announce it and the pixel contrast audit skips it.
 20. **Spacing comes from the `kit.SpaceN` scale** (`kit.Space2` = 8dp, `kit.Space3` = 12dp) passed through `th.Space(...)` or `kit.Flex{Gap, Pad}` so `th.Density` applies.

@@ -1,0 +1,50 @@
+--- a/internal/vk/vulkan.go
++++ b/internal/vk/vulkan.go
+@@ -837,13 +837,9 @@
+ 	if err := vkInit(); err != nil {
+ 		return nil, err
+ 	}
+-	// VK_MAKE_API_VERSION macro.
+-	makeVer := func(variant, major, minor, patch int) C.uint32_t {
+-		return ((((C.uint32_t)(variant)) << 29) | (((C.uint32_t)(major)) << 22) | (((C.uint32_t)(minor)) << 12) | ((C.uint32_t)(patch)))
+-	}
+ 	appInf := C.VkApplicationInfo{
+ 		sType:      C.VK_STRUCTURE_TYPE_APPLICATION_INFO,
+-		apiVersion: makeVer(0, 1, 0, 0),
++		apiVersion: instanceAPIVersion(), // giokit patch: 1.1 where available
+ 	}
+ 	inf := C.VkInstanceCreateInfo{
+ 		sType: C.VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO,
+--- a/gpu/headless/headless.go
++++ b/gpu/headless/headless.go
+@@ -8,6 +8,7 @@
+ 	"errors"
+ 	"image"
+ 	"image/color"
++	"os"
+ 
+ 	"gioui.org/gpu"
+ 	"gioui.org/gpu/internal/driver"
+@@ -33,10 +34,21 @@
+ var (
+ 	newContextPrimary  func() (context, error)
+ 	newContextFallback func() (context, error)
++	// newContextVulkan is the Vulkan constructor where Vulkan is built
++	// (giokit patch): tried after the others, as upstream's fallback was.
++	newContextVulkan func() (context, error)
+ )
+ 
+ func newContext() (context, error) {
+-	funcs := []func() (context, error){newContextPrimary, newContextFallback}
++	funcs := []func() (context, error){newContextPrimary, newContextFallback, newContextVulkan}
++	// giokit patch: GIOKIT_GPU=vulkan uses only Vulkan and GIOKIT_GPU=opengl
++	// never does, so tests can cover each backend.
++	switch os.Getenv("GIOKIT_GPU") {
++	case "vulkan":
++		funcs = funcs[2:]
++	case "opengl":
++		funcs = funcs[:2]
++	}
+ 	var firstErr error
+ 	for _, f := range funcs {
+ 		if f == nil {

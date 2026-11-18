@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Unlicense OR MIT
 
-// giokit patch: Vulkan is opt-in on desktop Linux/FreeBSD (-tags vulkan); see docs/gio-patches.md.
-//go:build ((linux && !android) || freebsd) && !nowayland && vulkan
+//go:build ((linux && !android) || freebsd) && !nowayland && !novulkan
 
 package app
 

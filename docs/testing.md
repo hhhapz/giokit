@@ -12,6 +12,8 @@
 
 On a headless Linux machine or container without a hardware GPU, set `LIBGL_ALWAYS_SOFTWARE=1` to run on Mesa `llvmpipe`.
 
+With the Gio fork, Linux windows render with Vulkan where they can, but headless rendering stays on EGL. Run `GIOKIT_GPU=vulkan go test ./...` to cover the Vulkan renderer too (`GIOKIT_GPU=opengl` forces EGL in windows). It is slower for screenshot-heavy suites: Gio reads pixels back through uncached memory on Vulkan.
+
 Fields on `*kittest.Harness`:
 - `h.Theme = th`: attaches the `*kit.Theme` so `Audit` can check for missing font glyphs and measure sub-pixel text contrast against the palette. Set `h.Theme` again if your UI switches themes during a test.
 - `h.Strict`: `true` by default. After each input settles, renders one more frame and fails if anything changes.

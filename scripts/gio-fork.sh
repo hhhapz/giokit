@@ -23,13 +23,13 @@ fork=$root/third_party/gioui.org
 patches=$root/third_party/patches
 
 series=(
-	"0001-vulkan-opt-in:app/vulkan.go app/vulkan_wayland.go app/vulkan_x11.go gpu/headless/headless_vulkan.go gpu/internal/vulkan/vulkan.go"
+	"0001-vulkan:internal/vk/vulkan.go gpu/headless/headless.go"
 	"0002-wayland-cursor-wheel-trace:app/os_wayland.go app/window.go app/giokit_scroll.go app/giokit_scroll_test.go app/giokit_trace.go"
 	"0003-label-clips-to-text:widget/label.go"
 	"0004-source-bounds-focus:io/input/giokit_bounds.go"
 	"0005-semantic-image:io/semantic/semantic.go"
 	"0006-editor-keys:widget/editor.go widget/editor_test.go widget/text.go"
-	"0007-paint-stream-dmabuf:gpu/gpu.go gpu/stream_test.go gpu/internal/driver/driver.go gpu/internal/opengl/opengl.go gpu/internal/opengl/dmabuf_linux.go internal/stream op/paint/stream.go"
+	"0007-paint-stream-dmabuf:gpu/gpu.go gpu/stream_test.go gpu/internal/driver/driver.go gpu/internal/driver/api.go gpu/internal/opengl/opengl.go gpu/internal/opengl/dmabuf_linux.go gpu/internal/vulkan/vulkan.go gpu/internal/vulkan/dmabuf.go internal/vk/giokit_dmabuf.go app/vulkan.go gpu/headless/headless_vulkan.go internal/stream op/paint/stream.go"
 )
 
 upstream() { # the pristine module for version $1

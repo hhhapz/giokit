@@ -57,7 +57,9 @@ type StreamFrame struct {
 // DMABuf describes a single-plane RGBA image in GPU memory (Linux), such as
 // a hardware video decoder's output. Renderers that can import it draw it
 // with no copy; check Stream.ImportState and send Image frames instead when
-// it reports ImportUnsupported. giokit patch.
+// it reports ImportUnsupported. Renderers wait for the buffer's pending
+// writes where the kernel exports them (Linux 6.0); elsewhere the producer
+// must have finished writing before Submit. giokit patch.
 type DMABuf struct {
 	// ID names the buffer across frames. Reuse it when a producer cycles
 	// through a fixed set of buffers (the renderer keeps its import), and

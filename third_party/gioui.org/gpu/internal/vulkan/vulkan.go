@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Unlicense OR MIT
 
-// giokit patch: Vulkan is opt-in on desktop Linux/FreeBSD (-tags vulkan); see docs/gio-patches.md.
-//go:build (linux || freebsd) && (vulkan || (android && !novulkan))
+//go:build (linux || freebsd) && !novulkan
 
 package vulkan
 
@@ -58,6 +57,11 @@ type Backend struct {
 	}
 
 	caps driver.Features
+
+	// giokit patch: DMA-BUF import (dmabuf.go).
+	queueFamily int
+	dmabuf      *vk.DMABufDevice // nil when the device cannot import
+	dmabufUsed  []*Texture       // imported images acquired this frame
 }
 
 type passKey struct {
@@ -82,6 +86,7 @@ type Texture struct {
 	height     int
 	acquire    vk.Semaphore
 	foreign    bool
+	dmabuf     *dmabufImage // set on images imported from a DMA-BUF (giokit patch)
 
 	scope struct {
 		stage  vk.PipelineStageFlags
@@ -144,6 +149,13 @@ func newVulkanDevice(api driver.Vulkan) (driver.Device, error) {
 		outFormat: vk.Format(api.Format),
 		caps:      driver.FeatureCompute,
 		passes:    make(map[passKey]vk.RenderPass),
+
+		queueFamily: api.QueueFamily,
+	}
+	if api.DMABuf {
+		// Without it, ImportDMABuf reports the import unsupported and
+		// producers send CPU frames.
+		b.dmabuf, _ = vk.NewDMABufDevice(b.physDev, b.dev)
 	}
 	b.queue = vk.GetDeviceQueue(b.dev, api.QueueFamily, api.QueueIndex)
 	cmdPool, err := vk.CreateCommandPool(b.dev, api.QueueFamily)
@@ -231,6 +243,7 @@ func (b *Backend) resetPipes() {
 }
 
 func (b *Backend) EndFrame() {
+	b.releaseDMABufs()
 	if b.frameSig != 0 {
 		b.sigSems = append(b.sigSems, b.frameSig)
 		b.frameSig = 0
@@ -273,6 +286,9 @@ func (b *Backend) Release() {
 		vk.DestroyRenderPass(b.dev, rp)
 	}
 	vk.DestroyFence(b.dev, b.fence)
+	if b.dmabuf != nil {
+		b.dmabuf.Release()
+	}
 	vk.FreeCommandBuffers(b.dev, b.cmdPool.pool, b.cmdPool.buffers...)
 	vk.DestroyCommandPool(b.dev, b.cmdPool.pool)
 	*b = Backend{}
@@ -701,6 +717,9 @@ func (t *Texture) Release() {
 	}
 	freet := *t
 	t.backend.deferFunc(func(d vk.Device) {
+		if freet.dmabuf != nil {
+			freet.dmabuf.release()
+		}
 		if freet.fbo != 0 {
 			vk.DestroyFramebuffer(d, freet.fbo)
 		}
@@ -814,6 +833,10 @@ func (t *Texture) imageBarrier(cmdBuf vk.CommandBuffer, layout vk.ImageLayout, s
 func (b *Backend) PrepareTexture(tex driver.Texture) {
 	t := tex.(*Texture)
 	cmdBuf := b.ensureCmdBuf()
+	if t.dmabuf != nil && !t.dmabuf.acquired {
+		b.acquireDMABuf(cmdBuf, t)
+		return
+	}
 	t.imageBarrier(cmdBuf,
 		vk.IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
 		vk.PIPELINE_STAGE_FRAGMENT_SHADER_BIT,

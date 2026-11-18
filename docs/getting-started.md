@@ -9,7 +9,7 @@ require github.com/hhhapz/giokit v0.0.0
 replace github.com/hhhapz/giokit => /path/to/giokit
 ```
 
-`giokit` runs on stock Gio across macOS, Windows, Linux, BSD, and WebAssembly. On Linux with stock Gio, either install `vulkan-headers` or pass `-tags novulkan`.
+`giokit` runs on stock Gio across macOS, Windows, Linux, BSD, and WebAssembly. On Linux, either install `vulkan-headers` or pass `-tags novulkan` (OpenGL only), with stock Gio or the fork. The fork prefers Vulkan on Wayland and falls back to OpenGL.
 
 To use the optional Gio fork in `third_party/gioui.org` (needed for `kit/x/video` and `media`; see [gio-patches.md](gio-patches.md)):
 

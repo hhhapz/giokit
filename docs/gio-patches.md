@@ -16,13 +16,13 @@ The fork is upstream `gioui.org@v0.10.3` plus seven patches managed by `./script
 
 | Patch | Concern |
 |---|---|
-| `0001-vulkan-opt-in` | Gates desktop Linux/FreeBSD Vulkan behind `-tags vulkan` so default builds need no Vulkan headers. |
-| `0002-wayland-cursor-wheel-trace` | Wayland cursor reload on scale change, even high-resolution wheel scaling, and `app.GiokitTrace` hooks. |
+| `0001-vulkan` | Asks for Vulkan 1.1 and adds `GIOKIT_GPU` backend selection to headless rendering. |
+| `0002-wayland-cursor-wheel-trace` | Wayland cursor reload on scale change, even high-resolution wheel scaling, Vulkan before EGL, and `app.GiokitTrace` hooks. |
 | `0003-label-clips-to-text` | Clips `widget.Label` semantic bounds to laid-out text size. |
 | `0004-source-bounds-focus` | Adds `Source.Bounds` and `Source.FocusedTag` on `input.Source`. |
 | `0005-semantic-image` | Adds `semantic.Image` to `io/semantic`. |
 | `0006-editor-keys` | Adds `Ctrl+Backspace`/`Delete` word delete (Windows, Linux), selection collapse on `Left`/`Right`, and single-line `Up`/`Down`. |
-| `0007-paint-stream-dmabuf` | Adds cross-platform `paint.Stream` (Metal, Direct3D 11, OpenGL ES, Vulkan, WebGL) plus zero-copy Linux DMA-BUF texture import. |
+| `0007-paint-stream-dmabuf` | Adds cross-platform `paint.Stream` (Metal, Direct3D 11, OpenGL ES, Vulkan, WebGL) plus zero-copy Linux DMA-BUF texture import (OpenGL ES and Vulkan). |
 
 ### Maintaining the Patches
 
@@ -31,13 +31,18 @@ The fork is upstream `gioui.org@v0.10.3` plus seven patches managed by `./script
 
 ## Patch Details
 
-### 1. Opt-In Vulkan on Desktop Linux and FreeBSD (`0001-vulkan-opt-in`)
+### 1. Vulkan 1.1 and Backend Selection (`0001-vulkan`)
 
-Upstream Gio enables Vulkan on Linux/FreeBSD unless `-tags novulkan` is passed. Because `internal/vk` includes `<vulkan/vulkan.h>` at compile time, builds fail on Linux machines without the `vulkan-headers` package installed.
+Like upstream, the fork builds Vulkan on Linux/FreeBSD, so building needs the system `vulkan-headers` package (`internal/vk` includes `<vulkan/vulkan.h>`); `-tags novulkan` builds OpenGL only. Gio loads `libvulkan` at runtime, so a binary built with Vulkan still starts where Vulkan is missing and uses EGL.
 
-This patch requires `-tags vulkan` on desktop Linux/FreeBSD (`app/vulkan*.go`, `gpu/internal/vulkan/vulkan.go`, `gpu/headless/headless_vulkan.go`). Without the tag, Gio uses OpenGL ES via EGL.
+`vk.CreateInstance` asks for Vulkan 1.1 where the loader has it (DMA-BUF import, patch 7, needs it), else 1.0.
 
-### 2. Wayland Cursor Reload, High-Res Wheel Scaling, and Trace Hooks (`0002-wayland-cursor-wheel-trace`)
+`GIOKIT_GPU` picks the backend: `vulkan` uses only Vulkan, `opengl` never uses it. Headless rendering (`gpu/headless`, which kittest uses) keeps EGL first and Vulkan as the fallback, so `GIOKIT_GPU=vulkan go test ./...` is how to cover the Vulkan renderer. Windows on Wayland honour it too (patch 2).
+
+### 2. Wayland Cursor Reload, High-Res Wheel Scaling, Backend Order, and Trace Hooks (`0002-wayland-cursor-wheel-trace`)
+
+#### Vulkan Before EGL (`app/os_wayland.go`)
+Upstream `NewContext` on Wayland tries EGL first and Vulkan only if EGL fails. The patch tries Vulkan first: on Mesa, the GL driver (`libgallium`) costs about 30 MB more RSS per process than RADV (the gallery idles at about 85 MB on Vulkan and 120 MB on GL). EGL remains the fallback when there is no Vulkan driver or device creation fails; `GIOKIT_GPU=opengl` or `GIOKIT_GPU=vulkan` forces one. X11 keeps upstream's order (Vulkan is disabled there: `vulkanBuggy`, gio#347).
 
 #### Cursor Theme Reload on Scale Change (`app/os_wayland.go`)
 Upstream Gio loads the cursor theme once at the window's creation scale, while `setCursor` divides cursor hotspots by the current output scale. Moving onto a scale-2 monitor leaves cursor images at 1× while halving their hotspots, so the visible tip drifts ~9px from the pointer.
@@ -83,7 +88,14 @@ An `ImageOp` in Gio is immutable: displaying video with `paint.NewImageOp` per f
 
 The stream owns a submitted frame until its `Release` callback runs. Holds on DMA-BUF frames are reference-counted (`Hold`/`Unhold`) so multiple windows or renderers can sample the same stream safely. `Close` releases the current frame and rejects later submissions.
 
-#### Zero-Copy Linux DMA-BUF Import (`gpu/internal/opengl/dmabuf_linux.go`)
+#### Zero-Copy Linux DMA-BUF Import, OpenGL ES (`gpu/internal/opengl/dmabuf_linux.go`)
 When `StreamFrame.DMABuf` (`paint.DMABuf`: ID, fd, offset, pitch, DRM fourcc and modifier, size) is set, the OpenGL ES backend imports the buffer via `eglCreateImageKHR` (`EGL_LINUX_DMA_BUF_EXT`), allocates immutable storage with `glEGLImageTargetTexStorageEXT`, and creates a `glTextureViewOES` with `SRGB8_ALPHA8` so it samples as sRGB like every other Gio texture.
+
+#### Zero-Copy Linux DMA-BUF Import, Vulkan (`internal/vk/giokit_dmabuf.go`, `gpu/internal/vulkan/dmabuf.go`)
+Device creation (`app/vulkan.go`, `gpu/headless/headless_vulkan.go`) enables `VK_KHR_external_memory_fd`, `VK_EXT_external_memory_dma_buf`, `VK_KHR_image_format_list`, `VK_EXT_image_drm_format_modifier` and `VK_EXT_queue_family_foreign` when the device has all of them on Vulkan 1.1, plus `VK_KHR_external_semaphore_fd` where present, and reports it in `gpu.Vulkan.DMABuf`. The backend creates a `VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT` image with the buffer's explicit modifier and plane layout, binds it to dedicated memory imported from a duplicate of the fd, and samples it through an sRGB view of its UNORM storage (`VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT` with a format list). ABGR8888, XBGR8888, ARGB8888 and XRGB8888 are supported (X formats read alpha as 1). Modifiers with more than one memory plane (compression metadata) and `DRM_FORMAT_MOD_INVALID` are refused, which reports `ImportUnsupported`.
+
+The image belongs to the foreign queue family between frames. `PrepareTexture` acquires it (`GENERAL` → `SHADER_READ_ONLY_OPTIMAL`, from `VK_QUEUE_FAMILY_FOREIGN_EXT`) and first exports the buffer's pending write fences as a sync file (`DMA_BUF_IOCTL_EXPORT_SYNC_FILE`, Linux 6.0), which the frame's submission waits on: RADV does not wait on a DMA-BUF's implicit fences the way GL drivers do. `EndFrame` releases every image acquired that frame back to the foreign queue. Without sync file export, the producer must have finished writing before `Submit` (the media decoder calls `vaSyncSurface`). Writes after reads need no fence: Gio waits for a frame's fence before building the next, and a buffer goes back to its producer only once a later frame bound a newer one.
+
+`media`'s zero-copy tests (`TestZeroCopyRender`, `TestZeroCopyColour`, `TestImportFailureDegrades`) pass under `GIOKIT_GPU=vulkan`, and report nothing with `VK_INSTANCE_LAYERS=VK_LAYER_KHRONOS_validation VK_LAYER_VALIDATE_SYNC=1`.
 
 `streamTex` caches up to 12 imported buffer IDs per stream and holds the bound frame until a newer frame is bound or the texture is dropped. If an import fails, the stream sets `ImportUnsupported` and producers fall back to CPU pixel uploads.

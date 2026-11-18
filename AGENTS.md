@@ -1,7 +1,7 @@
 # giokit: agent guide
 
 Cross-platform desktop UI toolkit for Go on Gio, following GPUI's philosophy (see
-`docs/philosophy.md`). Goal: an expansive, accessible, keyboard-first component
+`docs/architecture.md`). Goal: an expansive, accessible, keyboard-first component
 set plus tooling that lets agents verify UIs headlessly.
 
 **Keep this file and `skills/giokit/SKILL.md` small:** every session pays for them.
@@ -19,10 +19,10 @@ Put detail in `docs/`, and add a pitfall here only as a one-line rule.
   exported API, one family per file (`button`, `toggles`, `fields`, `menu`,
   `combobox`, `datefield`, `navigation`, `overlays`, `display`; collections:
   `selection` shared by `list`, `tree`, `datatable`, plus `reorder`). `ui.go`
-  holds the value/event contract. **`kit/x/`:** specialised widgets (LogView,
-  Lyrics); `kit/x/video` draws `paint.Stream`. **`kit/fonts/`:** bundled font
-  sets. **`desktop/`:** file choosers and links (XDG portals), with a `Fake`.
-- **`kittest/`:** headless harness: `kittest.go` (lifecycle, Settle, RunTasks),
+  holds the value/event contract. **`kit/x/`:** specialised widgets (`LogView`,
+  `Lyrics`); **`kit/x/video`:** draws `paint.Stream`. **`kit/fonts/`:** bundled
+  font sets. **`desktop/`:** native file choosers and links (`desktop.Platform`), with a `Fake`.
+- **`kittest/`:** headless harness: `kittest.go` (lifecycle, `Settle`, `RunTasks`),
   `input`, `query`, `assert`, `audit`, `stale` (strict check), `a11y`,
   `contrast`, `golden`, `sheet`; `conform/` is the control contract suite. Its
   `kittest_test.go` recreates each historical bug and proves the harness
@@ -32,21 +32,20 @@ Put detail in `docs/`, and add a pitfall here only as a one-line rule.
   demos into pages and pages into sidebar categories; "All components" shows
   every demo on one page. New components land as a demo with a test.
 - **`third_party/gioui.org/`:** patched Gio v0.10.3 (`docs/gio-patches.md`),
-  used by this repo's builds. kit, kit/ui, kit/x and kittest must also pass on
-  stock Gio (`scripts/stock-gio.sh`): never use a fork-only API outside
+  used by this repo's builds. `kit`, `kit/ui`, `kit/x`, and `kittest` must also
+  pass on stock Gio (`scripts/stock-gio.sh`): never use a fork-only API outside
   `kit/x/video` and `kit/forktrace`.
 - **`skills/giokit/SKILL.md`:** portable skill for projects that use giokit.
-- **`internal/bench`:** rendering baselines (editor/terminal text, video).
+- **`internal/bench/`:** rendering baselines (editor/terminal text, video).
 - **`media/`:** separate module (cgo, FFmpeg): video decoder for `paint.Stream`/
-  `video.Video`, VA-API with zero-copy DMA-BUF import.
-- **`docs/`:** `getting-started.md`, `components.md`, `testing.md`, `pitfalls.md`
-  (full postmortems), `performance.md`, `philosophy.md` (GPUI mapping),
-  `gio-patches.md`.
+  `video.Video`, with hardware decode and optional zero-copy DMA-BUF import.
+- **`docs/`:** `getting-started.md`, `architecture.md`, `components.md`,
+  `testing.md`, `pitfalls.md`, `gio-patches.md`.
 
 ## Commands
 
 ```sh
-go test ./...                        # all tests, headless (EGL), no display
+go test ./...                        # all tests, headless GPU (Metal/D3D11/EGL), no window
 KITTEST_SHOTS=/tmp/shots go test ./... # + final frame per test, gallery contact sheet
 go run ./examples/gallery [-shot x.png]
 ./examples/gallery/web/build.sh        # browser build (wasm) into that folder; it is the site
@@ -61,7 +60,7 @@ touching `kit/`. In short:
 - Notify after a mid-frame mutation.
 - The UI goroutine owns state.
 - Ids on everything interactive.
-- Use Box/Fixed for fixed sizes; spacing from the `kit.SpaceN` scale.
+- Use `Box`/`Fixed` for fixed sizes; spacing from the `kit.SpaceN` scale.
 - Use vector icons.
 - Use bundled fonts only.
 
@@ -70,7 +69,7 @@ Contributing:
   (`ui.X{ID, ...}.Layout(gtx, th, &state)`, events from `state.Update(gtx)`),
   built only from kit's exported API (`th.Press`, `th.Field`, `th.MenuRow`,
   `kit.Layer`, ...). If a component needs something private, export a
-  primitive instead. Colours come only from palette tokens; hover from the
+  primitive instead. Colors come only from palette tokens; hover from the
   callback's `State`; text from `th.Strings`; sizes from `th.Metrics`.
 - **Every component change ships with a gallery test and a conformance row**
   (`kit/ui/conform_test.go`, suite in `kittest/conform`): role, label, hover,
@@ -78,12 +77,12 @@ Contributing:
   layer-opening controls use `conform.Composite`, focus-group collections
   `conform.Group`.
 - **`internal/lint` ratchets:** geometry literals and English strings per file
-  may only go down (`LINT_BASELINE=1` prints counts); colour literals outside
+  may only go down (`LINT_BASELINE=1` prints counts); color literals outside
   token files and `clip.Stroke` anywhere are forbidden.
 - **Prove new checks work.** When a bug escapes, first add a broken-widget case to
   `kittest_test.go` that fails without the fix. Then generalize the detector into
   `Audit`/strict mode if it can be detected structurally. Then add the one-line
-  rule to SKILL.md.
+  rule to `SKILL.md`.
 - **Never assume visual correctness.** Render it (`-shot`, `Snap`/`SaveSheet`) and
   look.
 - **Out of reach headlessly:** compositor-drawn things like cursor images and

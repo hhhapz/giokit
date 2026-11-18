@@ -1,237 +1,78 @@
-# Pitfalls: what went wrong building the first giokit app, and why
+# Pitfalls
 
-Each entry has four parts:
-- **Symptom:** what the user saw.
-- **Cause:** what actually went wrong.
-- **Rule:** how to avoid it.
-- **Detection:** which kittest check catches it.
+Common issues encountered when building on Gio and `giokit`, why they happen, and how to avoid them.
 
-The first app (meetbill) shipped several of these, and its author believed it was
-correct because screenshots looked fine. Static screenshots never exercise input.
+## 1. Clicks lag by one interaction
+Handling clicks after laying out the UI draws pre-click state for the current frame. Because Gio only redraws on input events or explicit invalidation, the updated state stays invisible until the next pointer event. Always handle input at the top of `Frame` before laying out widgets (`kittest` strict mode checks for this after every input).
 
-## 1. Clicks lag ("ridiculous delay")
-- **Symptom:** clicking a stepper did nothing until the mouse moved again.
-- **Cause:** each frame snapshotted state, drew it, and handled clicks *afterwards*.
-  The frame showed old data, and Gio only redraws on events or invalidation, so
-  nothing redrew.
-- **Rule:** `Frame` = handle, then layout. Mutate the model the UI goroutine owns
-  directly. `kit.Clickable` notifies on click, so anything drawn earlier in the
-  frame also refreshes.
-- **Detection:** strict mode (stale-frame). Test: `TestCatchesDrawBeforeHandle`.
-
-## 2. Hover highlights the wrong row
-- **Symptom:** the row highlight trailed the cursor. It showed on the row just left.
-- **Cause:** `hovered := c.Hovered()` was read before `c.Layout` processed this
-  frame's pointer events, so the value was one event old. No further frame
-  followed.
-- **Rule:** read state only inside the callback (`Press`, `Hover.Layout`), which
-  run after the widget's `Update`.
-- **Detection:** strict mode. Test: `TestCatchesLateHoverRead`.
+## 2. Hover highlights trail behind the cursor
+Reading `c.Hovered()` before `c.Layout(gtx)` processes the current frame's pointer events returns the previous frame's state. Read hover and press state only inside the layout callback of `th.Press` or `kit.HoverArea.Layout`, which run after pointer events are processed.
 
 ## 3. Lost clicks
-- **Symptom:** clicks silently ignored.
-- **Cause:** `widget.Clickable.Layout` consumes and **discards** pending clicks.
-  `Clicked` called after layout never sees them.
-- **Rule:** call every `Clicked` in the handle pass, before layout.
-- **Detection:** interaction tests that assert the model changed.
+`widget.Clickable.Layout` and `kit.Clickable` drain unread clicks during layout. Poll every `Clicked(gtx)` and `state.Update(gtx)` in the handle pass before laying out the frame.
 
-## 4. Checkboxes as a single corner, icon buttons as slivers
-- **Cause:** fixed-size boxes were drawn as `layout.Stack` children. Stack resets
-  `Min` for Stacked children, so an empty box returned zero size and only its
-  stroke corner drew.
-- **Rule:** `kit.Box(gtx, size, surface, w)` always reports its size.
-- **Detection:** Audit (tiny-target, MinTarget 16dp). Test:
-  `TestCatchesTinyTarget`.
+## 4. Fixed-size controls collapsing to slivers
+`layout.Stack` resets `Constraints.Min` to zero for `Stacked` children, causing empty fixed-size boxes to return `0×0` dimensions. Use `kit.Box(gtx, size, surface, w)` or `kit.Fixed(width, w)` so fixed-size elements always report their dimensions (`kittest`'s `tiny-target` audit flags interactive targets smaller than `16dp`).
 
-## 5. "Right-aligned" buttons sitting next to the title
-- **Cause:** `layout.Flexed(1, func(gtx layout.Context) layout.Dimensions { return layout.Dimensions{} })`. A zero-size flexed
-  child doesn't claim the space.
-- **Rule:** use `kit.Flexed(1, kit.Grow)`.
-- **Detection:** visual only. Render and look.
+## 5. Right-aligned buttons sitting next to the title
+In `layout.Flex`, a `Flexed` child that returns zero width (`layout.Dimensions{}`) does not consume the space allocated to it. Use `kit.Flexed(1, kit.Grow)` for spacers.
 
-## 6. Table columns not under their headers
-- **Cause:** material.List's default scrollbar *occupies* width, so rows got
-  narrower than the header and every flexible column shifted.
-- **Rule:** use `th.List` (overlay scrollbar), and give the header and the rows the
-  same horizontal inset.
-- **Detection:** compare `Find` bounds of a header label and a cell, or look at a
-  sheet.
+## 6. Table columns misaligned with their headers
+`material.List`'s default scrollbar takes horizontal width inside the list body, making rows narrower than a fixed header outside the list. Use `th.List` (which draws an overlay scrollbar) and apply matching horizontal padding to headers and rows.
 
-## 7. Tofu boxes (↻ rendered as □)
-- **Cause:** the Go fonts lack many symbols. Worse, Gio falls back to *system*
-  fonts by default, so on the dev box ✓ rendered fine, but it is tofu on other
-  machines.
-- **Rule:** `kit.New` disables system fonts. Draw symbols with `kit.Icon`.
-- **Detection:** Audit (missing-glyph, needs `h.Theme`). Test:
-  `TestCatchesMissingGlyph`.
+## 7. Missing glyphs rendering as tofu boxes (`□`)
+Gio's default system font fallback can mask missing Unicode symbols on a developer's machine while rendering `□` on machines without that font. `kit.New` disables system font fallback (`text.NoSystemFonts()`); draw UI symbols as vector icons with `kit.Icon`.
 
-## 8. Hover areas invisible to tests
-- **Cause:** Gio's `pointerQueue.Frame` sets `semantic.valid = gestures != 0` for
-  every area with a handler. A hover-only handler (no click or scroll) wipes that
-  area's semantic description.
-- **Rule:** `kit.HoverArea` puts the id on a nested, handler-free clip area.
-  `kit.TagArea(gtx, id, w)` does the same for any region whose handler is
-  not polled for pointer events (focus groups, keyboard-only canvases).
-- **Detection:** `Find` fails. Run `h.Dump`.
+## 8. Hover-only and keyboard-only areas missing from the semantic tree
+Gio's pointer router discards semantic ops on any clip area whose pointer handler registers for zero click or scroll gestures. Use `kit.HoverArea` for hover regions and `kit.TagArea(gtx, id, w)` for keyboard-only areas, which attach semantics to a nested handler-free clip area.
 
-## 9. Semantic quirks that break naive queries
-- **Text labels:** they report unbounded heights (Max.Y ≈ 1e6), so containment
-  checks fail. Match on the origin, as `TextsIn` does.
-- **`AppendSemantics`:** returns the root followed by a flattened copy of every
-  descendant. Walk from `[0]` only (`nodes()`), or every match appears twice.
+## 9. Semantic label bounds and duplicate traversal nodes
+In upstream Gio, unclipped `widget.Label` areas extend to `Max.Y ≈ 1e6`, and `Router.AppendSemantics` returns the root node at `[0]` followed by a flat copy of every descendant. `th.Text` measures and clips labels to their text bounds, `TextsIn(id)` matches on label origin, and semantic tree walks start from `roots[0]` only.
 
-## 10. Cursor tip drifts from the real pointer (Wayland, scaled output)
-- **Symptom:** the hand cursor "teleports" ~9px when entering a button. Boxes feel
-  misaligned, but the hit areas are correct.
-- **Cause:** Gio loads the cursor theme once at the creation-time scale. After
-  moving to a scale-2 output (niri at 1.25 reports 2), it divides hotspots by 2
-  while still drawing 1× images.
-- **Rule:** keep the `third_party/gioui.org` patch (`reloadCursors`).
-- **Detection:** none headless; the compositor draws the cursor. Ask the user.
+## 10. Wayland cursor tip drifting on scaled displays
+Upstream Gio loads the Wayland cursor theme once at window creation scale and divides cursor hotspots by the current output scale in `setCursor`, leaving 1× cursor bitmaps with halved hotspots on 2× displays. The `0002-wayland-cursor-wheel-trace` patch reloads the cursor theme when output scale changes.
 
-## 11. Redraw loops
-- **Cause:** calling `Notify` unconditionally every frame burns CPU forever.
-- **Detection:** Settle reports no-settle after 120 frames (2s of virtual
-  time). Test: `TestCatchesRedrawLoop`.
+## 11. Redraw loops burning CPU
+Calling `kit.Notify(gtx)` unconditionally on every frame keeps the window rendering at 100% CPU. Call `Notify` only when state changes mid-frame (`kittest`'s `Settle` fails with `no-settle` after 120 consecutive immediate-redraw frames). Use `kit.Tween` for finite transitions and `kit.Loop` for continuous animations.
 
-## 12. Background work racing the UI
-- **Cause:** an early version guarded state with a mutex and drew from snapshots,
-  which made bug 1 possible.
-- **Rule:** one owner. Results come back via `kit.Spawn` / `app.Post`.
+## 12. Background goroutines racing with layout
+Mutating view fields from background goroutines under a mutex or drawing from partial snapshots causes data races and stale frames. Keep all view and theme state on the UI goroutine and deliver background results through `kit.Spawn` or `app.Post`.
 
-## 13. Overlay shows a frame late (layout.Stack order)
-- **Cause:** the LogView "jump to latest" button was a Stacked child; Stack
-  lays those out *before* Expanded ones, so it read the list's scroll state
-  before the list applied the scroll.
-- **Rule:** draw state-dependent overlays after their content.
-- **Detection:** strict mode. Test: `TestCatchesStackOrderLateRead`.
+## 13. Overlays appearing one frame late (`layout.Stack` order)
+`layout.Stack` lays out `Stacked` children before `Expanded` ones. If an overlay button is a `Stacked` child that checks scroll state on an `Expanded` list, it reads the state before the list processes the current frame's scroll input. Lay out state-dependent overlays after their content in sequential code.
 
-## 14. Scrollbar drags drawn a frame late
-- **Cause:** material.List applies scrollbar deltas after laying out the list.
-- **Rule:** `th.List` (kit's scrollbar) applies them before layout.
+## 14. Scrollbar thumb drag lagging by one frame
+`material.List` applies scrollbar drag deltas after laying out the list children. `th.List` applies scrollbar deltas before laying out the list.
 
-## 15. Tab dead whenever a spinner was on screen (harness bug)
-- **Cause:** the stale check drew a frame without consuming the router's
-  wakeup; a scheduled redraw made the next Tab look "handled".
-- **Rule:** the harness consumes the wakeup after every frame, as a window does.
-- **Detection:** `TestLoopSettlesAndTabStillWorks`.
+## 15. Unconsumed router wakeups in headless tests
+A headless harness must call `router.WakeupTime()` after every frame just as `app.Window` does; leaving a scheduled wakeup unconsumed alters how the router processes subsequent `Tab` key events.
 
-## 16. Thin drag handles flagged as tiny targets
-- **Cause:** any press handler (drags included) is a click gesture.
-- **Rule:** handles and scrollbars get a 16dp hit area; the visible line
-  stays thin.
+## 16. Thin resize handles flagged as tiny hit targets
+Any pointer press or drag handler registers an interactive target on its clip area. Give split-pane dividers and scrollbars a `16dp` (`th.HitSize`) interactive clip area while drawing the narrow visual line centered inside it.
 
-## 17. Split divider ran away from the pointer (~2.5×)
-- **Cause:** Gio reports drag positions relative to the handle *as it was at
-  press time*; adding them to the handle's current position compounded.
-- **Rule:** anchor drags to the press-time position (`ui.Split` does).
-- **Detection:** `TestSplitDragAndKeys` asserts the divider moves exactly
-  with the pointer. A "moved right" check missed it: assert amounts.
+## 17. Split divider running away from the pointer
+Gio reports pointer drag coordinates relative to the handler's clip area as positioned at the start of the press. Adding a drag delta to the divider's current position compounds the movement each frame; always anchor drags to the press-time position (`ui.Split`).
 
-## 18. Wheel scrolling skipped (Wayland)
-- **Cause:** Gio turns each wheel notch into one instant ~150px jump.
-  Headless deltas are small, so tests looked smooth.
-- **Rule:** `th.List` takes a `*kit.List` and glides large deltas; small
-  deltas under 8px apply at once. This also glides ~9px mini-steps from a
-  high wheel multiplier. A glide sets `BeforeEnd` so it can leave
-  a `ScrollToEnd` tail.
-- **Detection:** `TestWheelGlides`.
+## 18. Discrete mouse-wheel scrolling jumping in large steps
+Upstream Gio converts each discrete wheel notch into an instant ~150px jump. `th.List` glides wheel deltas >= 8px over a short ease curve while applying small touchpad deltas immediately.
 
-## 19. Focused slider couldn't take the wheel (overlay stole it)
-- **Cause:** kit.List's wheel layer was drawn above the rows with a PassOp,
-  so it claimed every scroll before nested widgets; bubbling ran backwards.
-- **Rule:** the list's wheel handler is the rows' ancestor, and layout.List
-  runs with input disabled (rows get the source back) so its own handler
-  never registers. The range stops at the list's ends (scroll chaining).
-- **Detection:** `TestSliderWheelOnlyWhenFocused`.
+## 19. Scroll container stealing wheel events from a focused slider
+Placing a list's wheel handler in an overlay above its rows with `pointer.PassOp` causes the list to claim wheel events before nested child controls can read them. `th.List` registers its scroll handler on the ancestor container around the rows and bounds its scroll range to the remaining scrollable distance so focused child widgets receive wheel input first.
 
-## 20. Scroll stalled 150–200ms when a spinner entered or left view
-- **Symptom:** the scroll glide "skipped" as content entered or left view.
-  The harness showed continuous positions and cheap frames.
-- **Diagnosis:** `GIOKIT_TRACE=1` showed 165–190ms gaps between frames whose
-  build took 1–2ms (outside the app), and 17.4ms pacing (a timer, not vsync)
-  while the spinner was visible.
-- **Cause (suspected, confirm on hardware):** `kit.Loop` asked for "now+16ms",
-  so Gio switched to timer pacing. The glide's immediate requests switched it
-  back to vsync, and toggling between the two stalled the window.
-- **Rule:** continuous animations ask for "frame time + 1ns": vsync-paced in a
-  window, not chased by kittest.
-- **Result:** after the fix, the trace showed a steady 16.7ms during scrolling
-  (late frames only at startup).
-- **Tool:** `GIOKIT_TRACE=1` separates app cost (build time) from pacing (late
-  frames with small builds), and logs list skips: rows moving by the wrong
-  amount, or unevenly, during a scroll gesture.
+## 20. Scroll stalling 150–200ms when a spinner entered or left view
+Scheduling `kit.Loop` wakeups at `gtx.Now.Add(16ms)` caused Gio's window loop to switch from vsync pacing to timer pacing, stalling when a scroll glide simultaneously requested immediate vsync frames. `kit.Loop` schedules wakeups at `gtx.Now.Add(1)` (1ns after the frame timestamp), which stays vsync-paced in a window without being chased by `kittest`'s `Settle`.
 
 ## 21. Strokes ate half the frame
-- **Cause:** Gio turns every `clip.Stroke` (borders, rings, icons) into
-  geometry on the CPU every frame, with no cache. On Controls that was
-  ~1.5 of 2.9 ms.
-- **Rule:** draw outlines as filled rings (`kit.Border`: outer contour minus
-  reversed inner) and icons as quads plus round dots in one path (nonzero
-  union).
-- **Detection:** `BenchmarkFrame` in the gallery; profile `collectOps`.
+Gio tessellates `clip.Stroke` paths on the CPU on every frame without caching. `giokit` draws borders as filled outer-minus-inner contour rings (`kit.Border`) and icons as filled vector polygons, and forbids `clip.Stroke`.
 
 ## 22. High-resolution wheel skipped ~17px once per click (Wayland)
-- **Symptom:** while slowly wheel-scrolling Controls, content skipped "as a
-  section entered or left view". Same report as #20, which fixed a real
-  stall but not this. kittest (and `List.Jumps`) saw nothing.
-- **Diagnosis:** the `GIOKIT_TRACE` log interleaves Gio's raw `wl_axis*`
-  events with `scroll_flush` and the list's rows. The list moved exactly as
-  asked; `scroll_flush` was wrong: `wl_axis value=1.88` +
-  `wl_axis_discrete=1` → `dy=18.75`.
-- **Cause:** Gio upstream scales a pointer frame's distance ×10 only when it
-  carries a discrete step. A high-res wheel sends an axis event every 1/8
-  click (1.875) and the discrete step only on the 8th, so every 8th event
-  scrolled 10× its neighbours. The coincidence with content entering view
-  was the eye, not the cause.
-- **Rule:** scale a frame ×10 only if it carries a whole click, not because it
-  had a discrete step; high-res wheel sub-steps use the same ×1.2 factor (Gio patch,
-  `docs/gio-patches.md`). A first fix scaled every wheel sub-step ×10 instead:
-  even, but 5× faster per click, and rejected. Input bugs below `pointer.Event` are
-  invisible to kittest; check the trace's raw events against `scroll_flush`.
-- **Detection:** `TestWheelScaleHighResEven` in `third_party/gioui.org/app`.
+High-resolution mouse wheels on Wayland send eight `wl_pointer.axis` events of `1.875` units per detent and attach `wl_pointer.axis_discrete = 1` only to the 8th event. Upstream Gio multiplies a scroll frame by `10` whenever `axis_discrete` is non-zero, making every 8th sub-step jump 10× farther than the previous seven. The `0002-wayland-cursor-wheel-trace` patch applies the `×10` multiplier only when the frame carries a full classic click (>= 5 units per step) and scales high-resolution sub-steps uniformly by `×1.2` ([gio-patches.md](gio-patches.md)).
 
-## 23. Disabled controls vanished from the semantic tree
-- **Symptom:** with `th.Disable`, the save button, checkbox, tabs and slider
-  had no ids (tests couldn't find them; screen readers wouldn't either). The
-  text field kept its id.
-- **Cause:** Gio drops semantics from an area whose handler asks for no
-  gestures, and a disabled handler asks for none. The field's id sat on a
-  handler-free area, so it survived.
-- **Rule:** a disabled component tags a nested, handler-free area
-  (`disabledArea`), as `kit.HoverArea` already does.
-- **Detection:** `TestDisabledFormTakesNoInput` (`h.Disabled(id)` fails on
-  a missing id).
+## 23. Disabled controls vanishing from the semantic tree
+When `th.Disable` disables input via `gtx.Disabled()`, pointer handlers register for zero gestures, causing Gio to drop semantic ops on those areas. Disabled primitives in `kit` attach their semantic ID, role, and `semantic.DisabledOp` to a nested handler-free clip area.
 
-## 24. kittest typed text in front of the caret
-- **Symptom:** typing mid-field in a test inserted text but left the caret
-  before it, so the next keystroke landed in the wrong place. Typing at the
-  end of a field (every earlier test) hid it.
-- **Cause:** `h.Type` sent only the `EditEvent`; a real window's
-  `EditorInsert` follows it with a `SelectionEvent` after the inserted text.
-- **Rule:** harness input must replay what `app.Window` sends, event for
-  event. Read `app/window.go` when adding an input helper.
-- **Detection:** `TestTextFieldNativeKeys`.
+## 24. Synthesizing text input in tests
+In Gio's `app.Window`, inserting text into an editor sends a `key.EditEvent` followed immediately by a `key.SelectionEvent` moving the caret to the end of the inserted text. Sending `EditEvent` alone leaves the caret ahead of the inserted text when typing mid-field.
 
-## 25. A posted follow-up looked like a stale frame (harness bug)
-- **Symptom:** a `Post` callback that posted another callback made strict
-  mode report a stale frame, and `RunTasks` returned before the follow-up
-  ran.
-- **Cause:** a window draws a frame for every `Post`; the harness settled
-  only while the router asked for a redraw, so the follow-up stayed queued
-  until the strict check's extra frame ran it.
-- **Rule:** the harness keeps settling while `App.Queued()` is above 0, and
-  `RunTasks` waits for an empty queue as well as finished work.
-- **Detection:** `TestPostedCallbacksRunInTheSettle`.
-
-## Process lessons
-- **Screenshots aren't tests.** Drive real input (`kittest`) and assert on the
-  model, the semantics and the pixels.
-- **Debug Gio from its source.** When behavior is surprising, read
-  `third_party/gioui.org` (the fork this repo builds with) or
-  `$(go env GOMODCACHE)/gioui.org@…` for stock Gio. Several bugs above were
-  found only there.
-- **Break it on purpose.** After fixing a bug, re-introduce it and confirm the test
-  fails. Otherwise you don't know the test works.
-- **Separate draw from handle in tests too.** `Settle` never synthesizes input, so
-  "one click, then correct" is meaningful.
+## 25. Draining chained `app.Post` callbacks in tests
+A live window draws a frame for every queued `app.Post` callback. `kittest`'s `Settle` and `RunTasks` keep drawing frames while `app.Queued() > 0` so callbacks posted from inside another callback finish before strict mode checks the settled frame.

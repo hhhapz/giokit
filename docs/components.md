@@ -1,281 +1,247 @@
-# giokit reference
+# Components and API Reference
 
-Three packages, plus `kit/fonts`, `kit/x/video` and `desktop`. Signatures use
-Gio's `layout.Context`, `layout.Dimensions` and `layout.Widget` directly. The
-Go doc comments are the full reference; this page is the map.
+`giokit` is split across `kit` (primitives), `kit/ui` (standard components), `kit/x` and `kit/x/video` (specialized widgets), `kit/fonts` (bundled font pairs), `desktop` (native OS dialogs and links), and `media` (FFmpeg video decoding). Layout signatures use Gio's `layout.Context`, `layout.Dimensions`, and `layout.Widget` directly.
 
-- **`kit`**: primitives: theme, layout, drawing, text, interaction, focus and
-  key dispatch, scrolling, layers, app runner. Everything a component is
-  built from.
-- **`kit/ui`**: the components, built only from kit's exported API.
-- **`kit/x`**: specialised widgets (log view, lyrics).
+## Component Conventions
 
-## App
-
-- `NewApp(id, title, w, h)`: `id` is the Wayland app_id / X11 class.
-- `Run(frame) error`: runs the window on the calling goroutine and returns
-  when it closes (nil, or the window's error); the caller saves state and
-  exits. Start it on a goroutine and end `main` with `kit.Main()`, which may
-  never return (`defer` in main may not run). `Quit()` closes the window.
-  `OnPanic` recovers panics in posted callbacks. The zero `App` is unusable:
-  always `NewApp`.
-- `Post(f)`: runs `f` on the UI goroutine before the next frame and triggers
-  that frame. `Pending()` counts Spawn work in flight, `Queued()` posted
-  callbacks not yet run; `Invalidate()` asks for a frame.
-- `Spawn(app, work, done) *Task`: runs `work(ctx)` off-thread, then `done` on
-  the UI goroutine. `task.Cancel()` cancels `ctx` and drops the result (done
-  never runs after it), for superseded queries and closed views. With a nil
-  app it runs inline. In kittest pass `h.App()` and call `h.RunTasks()`.
-- `Notify(gtx)`: requests a redraw (GPUI `cx.notify`).
-- `Pool[T]`: per-item widget state keyed by a stable id (never an index).
-  `Get(id)`, `Each(fn)`, `Delete(id)`, `Sweep()` once a frame for unbounded
-  data.
-
-## Theme
-
-- `Dark()`, `Light()`, `Presets()`, `Generate(Seed)`, `ThemeFromTokens(data,
-  base)`, or `New(Palette)`. A theme belongs to the UI goroutine; `Derive`
-  copies share its shaper.
-- **Tokens:** `Bg Panel Surface Hover Border Divider Fg Muted Dim Accent AccentBg
-  AccentBorder OnAccent Good GoodBg Warn WarnBg Bad BadBg Focus Overlay Scrim`.
-  - `Hover` is the table-row hover fill (it differs from both `Bg` and `Panel`,
-    so hover shows on a card too).
-  - Use `Warn` for "needs attention", and `Good` for done.
-- **Sizes:** `SizeCaption` 11, `SizeSmall` 12, `SizeBody` 13, `SizeText` 14,
-  `SizeStat` 20, `SizeTitle` 22.
-- **Weights:** `Regular Medium SemiBold Bold`.
-- **Metrics:** `th.Metrics` (`DefaultMetrics()`): icon, checkbox, switch and
-  icon-button sizes, hit target, pane minimum, menu/list/overlay/toast/reading/label
-  widths. In tokens as group `size`.
-- **Shape and style knobs** (all exported in `th.Tokens()`):
-  - `Radius`: control corners; `RadiusSm()` (checkboxes, menu rows, tabs),
-    `RadiusLg()` (cards, menus, dialogs, capped at 16), `RadiusFull()`
-    (badges; square when `Radius` is 0). A huge `Radius` gives pill controls.
-  - `Stroke` (border width, 1) and `Ring` (focus ring width, 2). Components
-    build surfaces with `th.Styled(Surface{...})`, which applies both.
-  - `Controls`: `ControlSmall/Medium/Large`. Buttons, fields, selects, tabs and
-    menu rows share the height at each size (`TestControlsLineUp`).
-  - `Elevation`: shadow under floating panels, 0 flat, 1 soft, 2 strong.
-  - `Density` scales spacing (`th.Space`), `Motion` scales durations
-    (`th.Dur`; 0 turns animation off), `DisabledAlpha` dims disabled controls.
-  - `HeadingWeight`; `Type.Scaled(f)` scales every text size.
-  - `Palette.WithContrast(dark, level)`: high contrast for any palette (text
-    toward AAA, borders and focus at 3:1).
-- **Fonts:** bundled only. `kit/fonts` has `Go()` (default), `Inter()` (with
-  JetBrains Mono), `Plex()` (IBM Plex Sans and Mono) and `Atkinson()`
-  (Atkinson Hyperlegible, with JetBrains Mono), all SIL OFL. Apply with
-  `th.UseFonts(fonts.Inter())` once, not per frame (it builds a shaper). Only
-  the sets an app calls are linked in (`All` and `ByName` link every set).
-  Tokens store the set's name in `th.Fonts`; reapply with `fonts.ByName`.
-- **Tokens:** `th.Tokens()` returns DTCG JSON (or an error naming the token
-  that cannot be written); `kit.ThemeFromTokens(data, base)` reads it back and
-  rejects malformed values with a `*kit.TokenError` (`Path`, `Err`).
-- **Escape hatches:**
-  - `MissingGlyphs(s)`: runes the bundled fonts can't draw.
-  - `Material()`: the underlying material theme (for editors and the like).
-
-## Component shape
+Every component in `kit/ui` and `kit/x` is a struct of props laid out with a `*kit.Theme` and a pointer to its state:
 
 ```go
-// handle pass: events first
+// 1. Handle events before laying out the frame.
 if id, ok := v.lang.Update(gtx); ok {
 	v.langID = id
 }
 if v.save.Clicked(gtx) {
-	save()
+	v.saveChanges()
 }
-// layout: props are values, rebuilt every frame
-langs := []ui.Choice{{ID: "en", Label: "English"}, {ID: "fr", Label: "Français"}}
+
+// 2. Build props structs each frame and pass state by pointer.
+langs := []ui.Choice{
+	{ID: "en", Label: "English"},
+	{ID: "fr", Label: "Français"},
+}
 ui.Select{ID: "lang", Options: langs, Selected: v.langID}.Layout(gtx, th, &v.lang)
 ui.Button{ID: "save", Text: "Save", Style: ui.Solid}.Layout(gtx, th, &v.save)
 ```
 
-- **Props** (the struct) carry the value: controlled. **State** (the pointer)
-  holds interaction state: focus, scroll, hover timing, last frame's rows.
-  A few values are state-owned on purpose (`SplitState.Ratio`,
-  `NumberFieldState`'s value, `TreeState` expansion, `DataTableState` sort,
-  `x.LogViewState` filters); `kit/ui`'s package doc lists them. Buttons and
-  toggles take a plain `*kit.Clickable`. States hold event tags: zero value
-  ready, never copied after first use.
-- **Items** are `ui.Choice{ID, Label}`: Select, Combobox, Tabs,
-  SelectableList and ReorderList address items by `ID` (stable, unique,
-  never an index or a translated label) and report IDs.
-- **Events** come from `state.Update(gtx)` in the handle pass, one event per
-  call. A key handled by kit's dispatch during layout is queued and
-  reported by the next `Update`; components call `Notify`, so that frame
-  follows at once. A few components handle their input inside `Layout`
-  (Combobox, CommandPalette, Tooltip, ToastHost, Split) and have no
-  `Update`.
-- **Ids** are props (`ID`); sub-parts are `ID/part` (`kit.Part`).
-  **Labels** (spoken names) default to the visible text; icon-only controls
-  require one.
-- **Size:** buttons and field-like controls (TextField, NumberField, Select,
-  Combobox, DateField) take `Size` (`kit.ControlSmall/Medium/Large`;
-  `ControlDefault` is the theme's), and line up at each size.
-- **Custom content:** strings are the convenience; `Select.Option`,
-  `SelectableList.Item`, `Tree.Node`, `DataTable.Cell` and `ReorderList.Item`
-  draw anything
-  instead (the strings still sort and name the items), via
-  `kit.MenuRow.Content` for menu-like rows.
-- Every component has a conformance row (`kit/ui/conform_test.go`): role,
-  label, hover, click, Tab, Enter/Space, a visible ring, disabled, presets,
-  scale, density, extreme styles; menus and selects run the composite
-  contract (open, key in, pick once, dismiss, focus returns).
+- The props struct carries the controlled value for this frame (`Selected`, `Checked`, `Value`). The state pointer holds persistent interaction state across frames (focus tags, scroll offsets, hover timing, open popups). Zero values of state structs are ready to use; never copy a state struct after its first layout.
+- `Select`, `Combobox`, `Tabs`, `SelectableList`, and `ReorderList` take items as `ui.Choice{ID, Label}`. `ID` is the stable identifier passed to `Selected` and returned by `Update(gtx)`; `Label` is the text shown on screen and announced to screen readers.
+- Every interactive component requires an `ID`. Sub-parts are addressed as `<ID>/<part>` via `kit.Part` (such as `lang/field` or `qty/plus`). Accessibility labels default to the visible `Text` or `Label`; icon-only controls (`ui.IconButton`) require an explicit `Label`.
+- `Button`, `TextField`, `NumberField`, `Select`, `Combobox`, and `DateField` accept a per-instance `Size` (`kit.ControlSmall`, `kit.ControlMedium`, `kit.ControlLarge`, or `kit.ControlDefault` to use `th.Controls`).
+- `Select.Option`, `SelectableList.Item`, `Tree.Node`, `DataTable.Cell`, and `ReorderList.Item` accept optional custom rendering callbacks when plain text is not enough.
 
-## kit: primitives
+## `kit`: Primitives
 
-**Layout.** `kit.Flex{Axis, Gap, Align, Justify, Pad, PadX, PadY, Bg, Border,
-Radius, W, H, MinW, MaxW, MinH, MaxH, FillW, FillH}.Layout(gtx, th, children...)`
-is the styled container (gaps between children, padding, optional surface,
-size limits; zero values: horizontal, Start, packed). Spacing comes from the
-scale: `kit.SpaceN` is N×4dp (`Space0p5`…`Space12`, half steps `0p5` `1p5`
-`2p5` `3p5`), passed through `th.Space` so Density applies; the lint rejects
-numbers. Also `Row` (middle-aligned), `Col`, `Rigid`, `Flexed`, `Grow`,
-`Gap(w, h)`, `Pad(v, h, w)`, `Fixed(dp, w)`, `Stretch(w)`, `Box(gtx, size,
-surface, w)`, `Flow(gtx, hgap, vgap, children...)` (wrapping row).
+### Application Runner and Concurrency
 
-**Drawing.** `Surface{Bg, Border, Radius, Focus, Stroke, Ring}.Layout`;
-`th.Styled(Surface{…})` fills theme stroke and ring widths. `Fill`,
-`Border(gtx, rect, r, width, c)` (a filled ring, never `clip.Stroke`),
-`HLine`, `VLine`, `th.FocusRing(gtx, size, r)`, `th.Card`, `th.Bar`,
-`th.Pill`, `th.FloatingPanel` (overlay surface and shadow). Colours:
-`th.StateColor(base, st)` (control fills: hover half way to a press),
-`th.Highlight(lit)` (rows and cells), `th.Tint`, `th.StatusColors(s)`,
-`LerpColor`, `WithAlpha`. `th.Progress(v)` (v<0 indeterminate),
-`th.Spinner(size)`. **Icons:** `kit.IconCheck`, `IconChevron{Down,Right,Left,Up}`,
-`IconPlus`, `IconMinus`, `IconX`, `IconArrowDown`, `IconSearch`, `IconMenu`,
-`IconInfo`, `IconAlert`, `IconCircleCheck`, `IconCircleX`, `IconSun`,
-`IconLayout`; type `Icon(gtx, size, color)`.
+- `kit.NewApp(id, title string, w, h unit.Dp) *kit.App`: creates a single-window runner where `id` is the platform application identifier (such as `"com.example.app"`).
+- `app.Run(frame func(layout.Context)) error`: runs the window loop on the calling goroutine and returns when the window closes. Start `app.Run` on a goroutine and call `kit.Main()` at the end of `main()`.
+- `app.Post(f func())`: runs `f` on the UI goroutine before the next frame and triggers a redraw. `app.OnPanic` optionally recovers panics in posted callbacks.
+- `app.Quit()` and `app.Invalidate()`: close the window or request a redraw from any goroutine. `app.Pending()` counts running `Spawn` tasks; `app.Queued()` counts queued `Post` callbacks.
+- `kit.Spawn(app, work, done) *kit.Task`: runs `work(ctx)` off the UI goroutine and delivers `(T, error)` to `done` on the UI goroutine. `task.Cancel()` cancels `ctx` and drops the result so `done` never runs. With a `nil` app, `work` runs inline.
+- `kit.Notify(gtx)`: requests an immediate redraw when state changes mid-frame.
+- `kit.Pool[T]`: keeps per-item widget state keyed by a stable string ID (`Get(id)`, `Each(fn)`, `Delete(id)`). Call `Sweep()` once per frame on dynamic data to evict entries unseen for 64 frames.
 
-**Text.** `th.Text(gtx, s, size, color, weight)`, `Paragraph`, `ParagraphLine`,
-`Heading`, `Caption` (uppercase), `Code` (one line), `CodeBlock` (wraps),
-`th.StyledText(gtx, ...TextSpan)`.
+### Theme, Colors, Fonts, and Design Tokens
 
-**Interaction.** `Clickable` (`Clicked(gtx)` in the handle pass, `Click()`,
-`Focus`, `FocusQuiet`, `FocusOnClick`, `Modifiers()`, `Anim()` a per-control
-tween); `th.Press(gtx, c, id, func(gtx, State) layout.Dimensions)` makes any
-drawing a pressable, focusable target (`State{Hovered, Pressed, Focused,
-Hover}`); `HoverArea` for hover-only regions (rows, cards);
-`th.Disable(gtx, cond, w)` (no input, out of the Tab order, semantics say
-disabled, drawn at `th.DisabledAlpha`); `th.WithLabel`.
+Build a theme with `kit.Dark()`, `kit.Light()`, `kit.Presets()`, `kit.Generate(kit.Seed{...})`, `kit.New(palette)`, or `kit.ThemeFromTokens(jsonData, baseTheme)`. Call `th.Derive(func(t *kit.Theme) { ... })` to copy and adjust a theme for a subtree while sharing its text shaper.
 
-**Roles.** `kit.SetRole(gtx, id, kit.RoleTab)`: WAI-ARIA roles beyond
-Gio's five classes (listbox/option, tree/treeitem, grid/row/gridcell,
-tablist/tab, menu/menuitem, combobox, dialog, slider, link, img, status,
-separator…). Every kit component sets them; kittest reads them
-(`h.Role`, `h.ByRole`) and the conformance suite requires one; a desktop
-screen-reader bridge would export them.
+- Palette tokens (`th.Palette`): `Bg`, `Panel`, `Surface`, `Hover`, `Overlay`, `Scrim`, `Border`, `Divider`, `Focus`, `Fg`, `Muted`, `Dim`, `Accent`, `AccentBg`, `AccentBorder`, `OnAccent`, `Good`, `GoodBg`, `Warn`, `WarnBg`, `Bad`, `BadBg`. `p.WithContrast(dark, level)` boosts text contrast toward WCAG AAA and borders/focus toward 3:1.
+- Type scale (`th.Type`): `Caption` (11sp), `Small` (12sp), `Body` (13sp), `Text` (14sp), `Stat` (20sp), `Title` (22sp). `th.Type.Scaled(factor)` scales all text sizes proportionally. Weights: `kit.Regular`, `kit.Medium`, `kit.SemiBold`, `kit.Bold`.
+- Shape, spacing, and motion fields on `Theme`:
+  - `Radius` (control corner radius), with `th.RadiusSm()`, `th.RadiusLg()`, and `th.RadiusFull()`.
+  - `Stroke` (border width, default 1dp) and `Ring` (focus ring width, default 2dp).
+  - `Controls` (`kit.ControlSmall`, `kit.ControlMedium`, `kit.ControlLarge`).
+  - `Density` (scales `th.Space(...)`, default 1.0), `Elevation` (0 flat, 1 soft shadow, 2 strong shadow), `Motion` (scales `th.Dur(...)`; `0` disables animations), and `DisabledAlpha`.
+- Metrics (`th.Metrics`): standard sizes for icons, checkboxes, switches, icon buttons, minimum hit targets (`HitSize`), pane minimums, and overlay widths.
+- Bundled fonts (`kit/fonts`): `fonts.Go()` (default), `fonts.Inter()`, `fonts.Plex()`, and `fonts.Atkinson()`. Apply once at startup with `th.UseFonts(fonts.Inter())`.
+- Design tokens: `th.Tokens()` exports DTCG JSON; `kit.ThemeFromTokens(data, base)` reads and validates DTCG JSON, returning `*kit.TokenError` (`Path`, `Err`) on invalid values.
 
-**Ids and semantics.** `Tag(gtx, id)`, `TagLabel(gtx, id, label)`,
-`TagImage(gtx, id, label)` (artwork: role image, label as alternative text),
-`TagArea(gtx, id, w)` (names a region on a handler-free area: Gio drops the
-semantics of an area whose handler is not polled for pointer events),
-`Group(gtx, id, label, w)`, `Part(id, parts...)`, `Scope(gtx, name, w)`,
-`Path`, `EscapeID`.
+### Layout
 
-**Focus and keys.** `Focus`, `FocusGroup` (`Join`, `Layout`, `Focus`,
-`HasFocus`, `FocusHandle`, `RingVisible`), `FocusVisible` (the
-`:focus-visible` rule for custom focusables), `FocusID(gtx, tag, id)` (every
-focusable calls it), `FocusWithin(gtx, w)`, `KeyContext(gtx, name, w)`,
-`OnAction(gtx, act, fn)` with `ActMoveUp/Down`, `ActFirst/Last`,
-`ActExpand/Collapse`, `ActConfirm`, `ActCancel`, `ActExtendUp/Down`,
-`ActSelectAll`, `ActContextMenu`; `Keymap` (`Bind`, `MustBind`,
-`BindActions`, `Attach`, `Bindings`, `Hint`, `HintFor`); `Actions`. See
-"Keys, focus and actions" below.
+`kit.Flex` is the styled row and column container:
 
-**Scrolling.** `th.List(gtx, l, id, n, item)` (overlay scrollbar, gliding
-wheel; ids `id`, `id/scrollbar`, `id/thumb`), `List.ScrollIntoView(i)`,
-`th.AnchoredList(gtx, a, id, ids, item)` (keeps the first visible id in place
-when items are inserted).
+```go
+kit.Flex{
+	Axis: layout.Vertical, Gap: kit.Space2, Pad: kit.Space4,
+	Align: layout.Start, Justify: layout.SpaceBetween,
+	Bg: th.Panel, Border: th.Border, Radius: th.RadiusLg(),
+	MinW: 200, MaxW: 600, FillW: true,
+}.Layout(gtx, th, kit.Rigid(header), kit.Flexed(1, body))
+```
 
-**Layers.** `Popup` + `th.Popover(gtx, p, id, anchor, content)`: anchored
-panels placed against window edges, a backdrop (`id/backdrop`) that catches
-outside presses, Escape closes the innermost (`Show`, `ShowAt`, `Hide`,
-`Toggle`, `Opened`, `Opening`, `DidDismiss`, `FocusOnOpen`, `PanelFocus`;
-`MatchWidth`, `KeepFocus`). `Dialog` + `th.Modal(gtx, d, id, page, dialog)`:
-the page is laid out disabled and inert while open, Escape and the backdrop
-close unless `Persistent`. `kit.Layer(gtx, offset, w)`: draw above
-everything (tooltips, toasts); components never call `op.Defer` themselves.
+Spacing constants follow a 4dp scale (`Space0p5` = 2dp, `Space1` = 4dp, `Space1p5` = 6dp, `Space2` = 8dp, `Space2p5` = 10dp, `Space3` = 12dp, `Space3p5` = 14dp, `Space4` = 16dp, `Space5` = 20dp, `Space6` = 24dp, `Space8` = 32dp, `Space10` = 40dp, `Space12` = 48dp) and scale with `th.Density` via `th.Space` or `kit.Flex{Gap, Pad}`.
 
-**Building blocks.** `th.Field(gtx, st, w)` (field chrome for any content),
-`th.SizedField(gtx, size, st, w)`, `th.EditorField(gtx, e, id,
-EditorField{Placeholder, Label, Icon, Lines, Size})` (an editor as a field;
-the tagged area is the editor's semantic node), `th.MenuRow(gtx, c, id,
-MenuRow{Icon, Label, Hint, Danger, Checked, Highlighted, Content, Role})`,
-`th.MenuRowWidth`, `th.FieldPad(size)`, `th.ControlPad(size, v)`, `kit.Table{Cols}`
-(aligned columns: `Cells`, `Header`, `Row`), `Image` (`Set`, `Op`),
-`th.Required(id, value)` → `Validation`.
+Additional layout helpers: `kit.Row` (middle-aligned horizontal flex), `kit.Col`, `kit.Rigid`, `kit.Flexed`, `kit.Grow` (horizontal spacer for `Flexed`), `kit.Gap(w, h)`, `kit.Pad(v, h, w)`, `kit.Fixed(dp, w)`, `kit.Stretch(w)`, `kit.Box(gtx, size, surface, w)`, `kit.Flow(gtx, hgap, vgap, children...)` (wrapping row), and `kit.Table{Cols}` (aligned columns).
 
-## kit/ui: components
+### Drawing, Text, and Icons
 
-| Family | Components | Notes |
+- Surfaces and chrome: `kit.Surface{Bg, Border, Radius, Focus, Stroke, Ring}.Layout`, `th.Styled(Surface{...})`, `kit.Fill`, `kit.Border(gtx, rect, r, width, c)`, `kit.HLine`, `kit.VLine`, `th.FocusRing(gtx, size, r)`, `th.Card`, `th.Bar`, `th.Pill`, `th.FloatingPanel`.
+- Color helpers: `th.StateColor(base, st)`, `th.Highlight(lit)`, `th.Tint`, `th.StatusColors(status)`, `kit.LerpColor`, `kit.WithAlpha`.
+- Progress and spinners: `th.Progress(gtx, v)` (`v < 0` draws an indeterminate bar) and `th.Spinner(gtx, size)`.
+- Text: `th.Text(gtx, s, size, color, weight)`, `th.Heading(gtx, s)`, `th.Caption(gtx, s)`, `th.Paragraph(gtx, s, color)`, `th.ParagraphLine(gtx, s, color, weight)`, `th.Code(gtx, s, size, color)`, `th.CodeBlock(gtx, s, size, color)`, and `th.StyledText(gtx, spans...)`.
+- Vector icons (`kit.Icon`): `IconCheck`, `IconChevronDown`, `IconChevronRight`, `IconChevronLeft`, `IconChevronUp`, `IconPlus`, `IconMinus`, `IconX`, `IconArrowDown`, `IconSearch`, `IconMenu`, `IconMore`, `IconInfo`, `IconAlert`, `IconCircleCheck`, `IconCircleX`, `IconSun`, `IconLayout`.
+
+### Interaction, Semantics, Focus, and Key Dispatch
+
+- Click and hover: `kit.Clickable` (`Clicked(gtx)`, `Click()`, `Focus(gtx)`, `FocusQuiet(gtx)`, `FocusOnClick()`, `Modifiers()`, `Anim()`), `th.Press(gtx, c, id, func(gtx, kit.State) layout.Dimensions)`, `kit.HoverArea`, `th.Disable(gtx, cond, w)`, `th.WithLabel`.
+- IDs and WAI-ARIA roles: `kit.Tag(gtx, id)`, `kit.TagLabel(gtx, id, label)`, `kit.TagImage(gtx, id, label)`, `kit.TagArea(gtx, id, w)`, `kit.Group(gtx, id, label, w)`, `kit.SetRole(gtx, id, role)`, `kit.Part(id, parts...)`, `kit.Scope(gtx, name, w)`, `kit.Path(gtx, id)`, `kit.EscapeID(s)`.
+- Focus and actions: `kit.Focus`, `kit.FocusGroup` (`Join`, `Layout`, `Focus`, `HasFocus`, `FocusHandle`, `RingVisible`), `kit.FocusVisible`, `kit.FocusID(gtx, tag, id)`, `kit.FocusWithin(gtx, w)`, `kit.KeyContext(gtx, name, w)`, `kit.OnAction(gtx, act, fn)` (`ActMoveUp`, `ActMoveDown`, `ActFirst`, `ActLast`, `ActExpand`, `ActCollapse`, `ActConfirm`, `ActCancel`, `ActExtendUp`, `ActExtendDown`, `ActSelectAll`, `ActContextMenu`), `kit.Keymap` (`"Shortcut"` maps to `Cmd` on macOS and `Ctrl` on Windows and Linux), and `kit.Actions`.
+
+### Scrolling, Overlays, and Building Blocks
+
+- Scrolling: `th.List(gtx, list, id, count, item)` (overlay scrollbar and smooth wheel glide; exposes `id`, `id/scrollbar`, `id/thumb`), `list.ScrollIntoView(i)`, and `th.AnchoredList(gtx, anchored, id, ids, item)` (keeps the first visible ID anchored when items are inserted or moved).
+- Overlays: `kit.Popup` + `th.Popover(gtx, popup, id, anchor, content)`, `kit.Dialog` + `th.Modal(gtx, dialog, id, page, content)`, and `kit.Layer(gtx, offset, w)`.
+- Building blocks: `th.Field(gtx, st, w)`, `th.SizedField(gtx, size, st, w)`, `th.EditorField(gtx, editor, id, EditorField{...})`, `th.MenuRow(gtx, clickable, id, MenuRow{...})`, `th.MenuRowWidth`, `th.FieldPad(size)`, `th.ControlPad(size, v)`, `kit.Image` (`Set`, `Op`), and `th.Required(id, value)`.
+
+## `kit/ui`: Components
+
+### Buttons and Toolbars
+
+| Component | State | Event | Notes |
+|---|---|---|---|
+| `ui.Button{ID, Text, Icon, Label, Style, Size}` | `*kit.Clickable` | `c.Clicked(gtx)` | Styles are `ui.ButtonStyle` functions: `ui.Secondary` (default), `ui.Primary`, `ui.Solid`, `ui.Ghost`, `ui.Danger`, or a custom function. |
+| `ui.IconButton{ID, Icon, Label, Active}` | `*kit.Clickable` | `c.Clicked(gtx)` | Square icon button. `Label` is required. |
+| `ui.Link{ID, Text}` | `*kit.Clickable` | `c.Clicked(gtx)` | Inline accent link with underline on hover and focus. |
+| `ui.Toolbar{ID, Actions}` | `*ui.ToolbarState` | `st.Update(gtx) (string, bool)` | Wrapping row of `ui.ToolbarAction{ID, Text, Icon, Style, Disabled}`. Sub-IDs: `<ID>/<action.ID>`. |
+
+```go
+if actionID, ok := v.toolbar.Update(gtx); ok {
+	v.handleToolbar(actionID)
+}
+ui.Toolbar{
+	ID: "editor-tools",
+	Actions: []ui.ToolbarAction{
+		{ID: "run", Text: "Run", Icon: kit.IconCheck, Style: ui.Primary},
+		{ID: "clear", Text: "Clear", Style: ui.Ghost},
+	},
+}.Layout(gtx, th, &v.toolbar)
+```
+
+### Toggles, Sliders, and Steppers
+
+| Component | State | Event | Notes |
+|---|---|---|---|
+| `ui.Checkbox{ID, Label, Checked}` | `*kit.Clickable` | `c.Clicked(gtx)` | Controlled boolean checkbox. Flip your bool when `Clicked(gtx)` is true. |
+| `ui.Switch{ID, Label, On}` | `*kit.Clickable` | `c.Clicked(gtx)` | Animated toggle switch. |
+| `ui.Radio{ID, Label, Selected}` | `*kit.Clickable` | `c.Clicked(gtx)` | Single radio button. |
+| `ui.Slider{ID, Label, Value}` | `*ui.SliderState` | `st.Update(gtx) (float32, bool)` | `[0, 1]` slider supporting drag, arrow keys, `Home`/`End`, and mouse wheel while focused. |
+| `ui.Stepper{ID, Label, Value}` | `*ui.StepperState` | `st.Update(gtx) (int, bool)` | Integer step buttons (`<ID>/minus`, `<ID>/plus`), reporting `-1` or `+1`. |
+
+### Text Fields, Number Fields, and Forms
+
+| Component | State | Event | Notes |
+|---|---|---|---|
+| `ui.TextField{ID, Placeholder, Label, Icon, Password, Size}` | `*widget.Editor` | `editor.Text()` | Single-line text input (masked when `Password: true`). |
+| `ui.TextArea{ID, Placeholder, Label, Lines}` | `*widget.Editor` | `editor.Text()` | Multi-line text editor with minimum height scaled to `Lines`. |
+| `ui.NumberField{ID, Placeholder, Label, Min, Max, Step, Size}` | `*ui.NumberFieldState` | `st.Update(gtx) (float64, bool)` | Numeric editor with `<ID>/minus` and `<ID>/plus` buttons, arrow stepping, and bounds validation when `Max > Min`. Set initial value with `st.SetValue(v)`. |
+| `ui.FieldError{Message}` | Stateless | None | Draws a validation error below a field when `Message != ""`. |
+| `ui.Form{ID, Fields}` | Stateless | None | Responsive layout of `ui.FormField{ID, Label, Hint, Error, Widget}`. Stacks labels above fields below `th.NarrowWidth`. |
+
+### Pickers (`Select`, `Combobox`, `DateField`)
+
+| Component | State | Event | Notes |
+|---|---|---|---|
+| `ui.Select{ID, Options, Selected, Option, Size}` | `*ui.SelectState` | `st.Update(gtx) (string, bool)` | Dropdown picker over `[]ui.Choice`. Trigger is `<ID>/field`, list is `<ID>/list`, options are `<ID>/<choice.ID>`. |
+| `ui.Combobox{ID, Placeholder, Options, Size}` | `*ui.ComboboxState` | `st.Editor.Text()` | Free-text editor with filtered suggestions (`<ID>/opt/<choice.ID>`). Typing filters options; arrows and `Enter` complete into `st.Editor`. |
+| `ui.DateField{ID, Value, Placeholder, Format, SundayFirst, Size}` | `*ui.DateFieldState` | `st.Update(gtx) (time.Time, bool)` | Date input with a popover calendar supporting day, month, and year views (`<ID>/view`, `<ID>/prev`, `<ID>/next`, `<ID>/YYYY-MM-DD`). Keeps `Value`'s time zone. |
+
+### Menus and Command Palette
+
+| Component | State | Event | Notes |
+|---|---|---|---|
+| `ui.Menu{ID, Items, Trigger}` | `*ui.MenuState` | `st.Update(gtx) (string, bool)` | Dropdown menu opened by `Trigger(gtx, openFn)`. Items are `ui.MenuItem{ID, Label, Icon, Shortcut, Danger, Disabled, Divider}`. |
+| `ui.ContextMenu{ID, Items, Content}` | `*ui.MenuState` | `st.Update(gtx) (string, bool)` | Wraps `Content` and opens a menu at the pointer on right-click or at the control on `Shift+F10`. |
+| `ui.CommandPalette{ID, Actions, Page}` | `*ui.CommandPaletteState` | Runs `Action.Run` | Modal command picker over a `*kit.Actions` registry. Open with `st.Open()`. |
+
+### Collections (`SelectableList`, `Tree`, `DataTable`, `ReorderList`)
+
+Collections act as a single `Tab` stop via `kit.FocusGroup`. Arrow keys, `Home`/`End`, and alphanumeric type-ahead move selection. Setting `Multiple: true` on `SelectableList`, `Tree`, or `DataTable` enables multi-selection (`Cmd`+click on macOS or `Ctrl`+click on Windows/Linux toggles items; `Shift`+click and `Shift`+Up/Down select ranges; `Cmd`+A or `Ctrl`+A selects all).
+
+| Component | State | Event | Notes |
+|---|---|---|---|
+| `ui.SelectableList{ID, Items, Selected, Chosen, Multiple, Item}` | `*ui.SelectableListState` | `st.Update(gtx) (ui.SelectionEvent, bool)` | Virtualized list of `[]ui.Choice`. Sub-IDs: `<ID>/<choice.ID>`. |
+| `ui.Tree{ID, Roots, Selected, Chosen, Multiple, Node}` | `*ui.TreeState` | `st.Update(gtx) (ui.SelectionEvent, bool)` | Tree of `[]ui.TreeNode{ID, Label, Children}`. `Right`/`Left` expand and collapse nodes; `st.SetExpanded(id, open)` sets expansion in code. |
+| `ui.DataTable{ID, Columns, Rows, Selected, Chosen, Multiple, Cell}` | `*ui.DataTableState` | `st.Update(gtx) (ui.SelectionEvent, bool)` | Virtualized table with sticky sortable headers (`<ID>/sort/<col.ID>`). Custom sorting uses `DataColumn.Compare`. |
+| `ui.ReorderList{ID, Items, Item}` | `*ui.ReorderListState` | `st.Update(gtx) (from, to int, ok bool)` | Drag and keyboard reorderable list (`<ID>/handle/<item.ID>`, `<ID>/up/<item.ID>`, `<ID>/down/<item.ID>`). Apply moves with `ui.Move(slice, from, to)`. |
+
+### Navigation
+
+| Component | State | Event | Notes |
+|---|---|---|---|
+| `ui.Tabs{ID, Items, Selected, Style}` | `*ui.TabsState` | `st.Update(gtx) (string, bool)` | Tab bar (`ui.TabsUnderline` or `ui.TabsSegmented`). Single `Tab` stop; `Left`/`Right`/`Home`/`End` move between tabs. |
+| `ui.Disclosure{ID, Title, Trailing, Open, Body}` | `*ui.Collapsible` | `c.Clicked(gtx)` | Expandable section with animated chevron (`ui.Collapsible` embeds `kit.Clickable`). |
+| `ui.Accordion{ID, Sections, Open}` | `*ui.AccordionState` | `st.Update(gtx) (string, bool)` | Stack of mutually exclusive expandable `ui.AccordionSection{ID, Title, Body}`. |
+| `ui.Breadcrumbs{ID, Path}` | `*ui.BreadcrumbsState` | `st.Update(gtx) (string, bool)` | Trail of `[]ui.Breadcrumb{ID, Label}`; all items except the last crumb are links. |
+| `ui.NavItem{ID, Label, Trailing, Active}` | `*kit.Clickable` | `c.Clicked(gtx)` | Sidebar navigation row with active indicator bar and optional trailing text. |
+
+### Overlays, Display, and Layout
+
+| Component | State | Notes |
 |---|---|---|
-| Buttons | `Button{ID, Text, Icon, Label, Style, Size}`, `IconButton{ID, Icon, Label, Active}`, `Link{ID, Text}`, `Toolbar{ID, Actions}` + `ToolbarState.Update` | Styles are functions: `ui.Secondary` (default), `Primary`, `Ghost`, `Danger`, `Solid`, or your own `ButtonStyle`. `Size` overrides the theme's control size. Buttons take a `*kit.Clickable`; `ToolbarAction{ID, Text, Icon, Style, Disabled}` buttons live in `ToolbarState`, ids `id/<action ID>`. |
-| Toggles | `Checkbox{ID, Label, Checked}`, `Switch{ID, Label, On}`, `Radio{ID, Label, Selected}`, `Slider{ID, Label, Value}` + `SliderState.Update` | Flip your value on click. The slider takes drag, arrows/Home/End, and the wheel while focused. |
-| Fields | `TextField{ID, Placeholder, Label, Icon, Password, Size}`, `TextArea{ID, Placeholder, Label, Lines}`, `NumberField{ID, Placeholder, Label, Min, Max, Step, Size}` + `NumberFieldState` (`Update`, `SetValue`, `Value`, `Valid`, `Error`), `FieldError{Message}`, `Form{ID, Fields}` | Text fields take a `*widget.Editor`. NumberField buttons `id/minus`, `id/plus`; bounds apply when `Max > Min`. Forms stack labels below `th.NarrowWidth`; rows `id/<field ID>`. |
-| Pickers | `Select{ID, Options, Selected, Option, Size}` + `SelectState.Update`, `Combobox{ID, Placeholder, Options, Size}` + `ComboboxState.Editor`, `DateField{ID, Value, Placeholder, Format, SundayFirst, Size}` + `DateFieldState.Update` | Options are `[]ui.Choice`; `Selected` and `Update` use option IDs. Select: field `id/field`, options `id/<option ID>`, list `id/list`. Combobox: free text in `Editor`, suggestions `id/opt/<option ID>`, typing filters, focus stays in the field. DateField: civil dates in `Value`'s zone; day, month and year views (title `id/view` zooms out), `id/prev`/`id/next` step a month, year or decade; days `id/YYYY-MM-DD`, months `id/YYYY-MM`, years `id/YYYY`. |
-| Menus | `Menu{ID, Items, Trigger}`, `ContextMenu{ID, Items, Content}` + `MenuState.Update`, `CommandPalette{ID, Actions, Page}` + `CommandPaletteState.Open` | `MenuItem{ID, Label, Icon, Shortcut, Danger, Disabled, Divider}`; items `id/<item ID>`. The open menu is one focus group: Down/Up enter, Enter picks, Escape/Tab close, focus returns to the trigger. Shift+F10 opens a context menu. |
-| Collections | `SelectableList{ID, Items, Selected, Item}`, `Tree{ID, Roots, Selected, Node}`, `DataTable{ID, Columns, Rows, Selected, Cell}`, `ReorderList{ID, Items, Item}` | One Tab stop each; Up/Down/Home/End move the selection; typing jumps to the item starting with the letters (type-ahead; a table matches its first column). `Update` reports a `SelectionEvent{Selected, Chosen}`; `Multiple` + `Chosen` (lists, trees, tables) select several: Ctrl/Cmd-click toggles, Shift-click and Shift+Up/Down select ranges, Ctrl/Cmd+A all. Tree: `TreeNode{ID, Label, Children}`, Right/Left expand and collapse (WAI-ARIA); expansion is state-owned (`TreeState.SetExpanded`). DataTable: `DataRow{ID, Cells}`, `DataColumn{ID, Title, Width, Align, Compare}`, headers `id/sort/<column ID>` sort (case-insensitive text unless `Compare` is set). ReorderList: `Update` reports `(from, to)`, `ui.Move(items, from, to)` applies it. |
-| Navigation | `Tabs{ID, Items, Selected, Style}` + `TabsState.Update`, `Disclosure{ID, Title, Trailing, Open, Body}` (+ `Collapsible`), `Accordion{ID, Sections, Open}` + `AccordionState.Update`, `Breadcrumbs{ID, Path}` + `BreadcrumbsState.Update`, `NavItem{ID, Label, Trailing, Active}`, `Stepper{ID, Label, Value}` + `StepperState` | Tabs are one Tab stop: Left/Right move, `TabsSegmented` draws a pill; ids `id/<item ID>`. Breadcrumbs: the last crumb is plain text, the others links `id/<crumb ID>`. |
-| Overlays | `Tooltip{ID, Text, Content}` + `TooltipState`, `Toasts` + `ToastHost{ID, Page, Duration}`, `DialogContent{Title, Body, Actions}` | Tooltips show after `TooltipDelay`, or at once while the content is focused; Escape hides them. `toasts.Push(status, title, body)`; toast `n` is `<host ID>/<n>` with `<host ID>/<n>/dismiss` (host ID default `toasts`); auto-dismiss after `ToastDuration` on the frame clock. Dialogs are kit's `Modal` with `DialogContent` inside. |
-| Display | `Badge{Status, Text}`, `Banner{Status, Title, Body}`, `Kbd{Chord}`, `Stat{Title, Value, ValueColor}`, `EmptyState{ID, Title, Body, Action}`, `Artwork{ID, Label, Size}` | Status: `kit.StatusInfo/Good/Warn/Bad`. Artwork draws a `*kit.Image`. `Kbd{Chord: km.HintFor("file.save")}` shows a bound shortcut. |
-| Layout | `Split{ID, Axis, Min, A, B}` + `SplitState{Ratio}` | Drag the divider, or focus it and use arrows. |
+| `ui.Tooltip{ID, Text, Content}` | `*ui.TooltipState` | Shows a floating label after `ui.TooltipDelay` on hover, or immediately when `Content` holds focus; `Escape` hides it. |
+| `ui.ToastHost{ID, Page, Duration}` | `*ui.Toasts` | Draws stacked status notifications pushed via `toasts.Push(status, title, body)` and auto-dismisses them on the frame clock. |
+| `ui.DialogContent{Title, Body, Actions}` | Stateless | Standard dialog layout placed inside `th.Modal`. |
+| `ui.Badge{Status, Text}` | Stateless | Pill status tag (`kit.StatusInfo`, `StatusGood`, `StatusWarn`, `StatusBad`). |
+| `ui.Banner{Status, Title, Body}` | Stateless | Tinted callout box with status icon, title, and body text. |
+| `ui.Kbd{Chord}` | Stateless | Keycap badge (pair with `keymap.HintFor("action.id")`). |
+| `ui.Stat{Title, Value, ValueColor}` | Stateless | Metric card with a caption label and large figure. |
+| `ui.EmptyState{ID, Title, Body, Action}` | `*kit.Clickable` | Centered placeholder card with optional action button (`<ID>/action`). |
+| `ui.Artwork{ID, Label, Size}` | `*kit.Image` | Rounded square image with fallback frame and `kit.RoleImage` alt-text semantics. |
+| `ui.Split{ID, Axis, Min, A, B}` | `*ui.SplitState` | Resizable two-pane container (`st.Ratio` in `[0, 1]`). Divider (`<ID>`) supports pointer drag and arrow keys. |
 
-## kit/x: specialised widgets
+## `kit/x` and `kit/x/video`: Specialized Widgets
 
-| Widget | Notes |
-|---|---|
-| `x.LogView{ID, Buffer}` + `x.LogViewState{Filter, MinLevel, NoTime}` | Virtualized, monospace, coloured by level; follows the tail, `id/jump` returns to it. `x.LogBuffer` is a fixed-capacity ring (`Append`, `At`, `Len`). |
-| `video.Video{ID, Stream, Fit, Label}.Layout(gtx, th, &s)` (`video.State`) | Draws a `paint.Stream` (video, camera, remote screen) filling its constraints; `FitContain/Cover/Fill/None`. No input of its own: `s.ToFrame(pt)` maps a widget point to frame pixels (false in letterbox bars), `s.FromFrame(q)` places overlays on video spots, `s.Content()`, `s.Frame()`. Set the stream's `OnFrame` to `app.Invalidate`; the producer owns the stream and calls `Close` when the source ends. Default label `th.Strings.Video`. Package `kit/x/video`; needs the Gio fork (`paint.Stream`). |
-| `x.Lyrics{ID, Lines, At}` + `x.LyricsState{Follow}` | Timed lines; follows the active line and pauses on manual scroll. `x.ActiveLyric`. |
+### `x.LogView` and `x.LogBuffer`
 
-**Desktop integration (`github.com/hhhapz/giokit/desktop`):** `OpenFile`,
-`SaveFile` and `OpenURL`, through the `desktop.Platform` interface:
-`desktop.System()` in the app (XDG portals over D-Bus on Linux;
-`ErrUnsupported` elsewhere for now), a `*desktop.Fake` in tests (it records
-calls, in order, as `desktop.Choice` records, and returns what you set).
-Calls block: run them in `kit.Spawn`.
-`ErrCancelled` when the user dismisses a chooser.
+`x.LogView` is a virtualized monospace log viewer backed by a fixed-capacity ring buffer (`x.LogBuffer`):
 
-Popups place themselves against the window that `kit.Window` (used by
-`kit.App` and kittest) registers each frame; without a Window they open
-below their anchor and never flip or shift.
+```go
+buf := x.NewLogBuffer(x.DefaultLogCap)
+buf.Append(x.LogInfo, "server", "listening on :8080")
 
-## Keys, focus and actions
+x.LogView{ID: "logs", Buffer: buf}.Layout(gtx, th, &v.logState)
+```
 
-`kit.App` and kittest run every frame inside a `kit.Window`
-(`gtx = w.Begin(gtx)`, frame, `w.End(gtx)`). After layout, `End` resolves the
-keys no widget claimed: from the focused widget outward through
-`kit.KeyContext(gtx, name, w)` nodes, the nearest `Keymap.Attach`ed binding or
-`kit.OnAction(gtx, action, fn)` handler runs. The default keymap binds
-arrows, Home/End, Enter and Escape to `ActMoveUp/Down`, `ActFirst/Last`,
-`ActExpand/Collapse`, `ActConfirm` and `ActCancel`, plus Shift+Up/Down
-(`ActExtendUp/Down`) and Ctrl/Cmd+A (`ActSelectAll`) for multiple selection,
-and Shift+F10 to `ActContextMenu`. `Clickable.Modifiers()` gives the keys
-held during the last click. Popups lay out inside their opener's context, so Escape closes the innermost layer first; a modal
-dialog also catches keys when nothing is focused.
+`v.logState.Filter` and `v.logState.MinLevel` (`x.LogDebug`, `LogInfo`, `LogWarn`, `LogError`) filter lines incrementally, scanning only newly appended entries. The view follows the tail while scrolled to the bottom; scrolling up pauses tailing and shows a floating "Latest" button (`<ID>/jump`).
 
-`kit.FocusGroup` makes a composite one Tab stop with an active item
-(`Join(c, active)` each member in the handle pass, `Layout` the container,
-change which member is active from `OnAction`). SelectableList, Tree,
-DataTable, Menu, Select and Tabs use it; the gallery's sidebar (`keyNav` in
-`examples/gallery/main.go`) shows it from outside kit. kittest's
-`FocusedID` reports the group's active item. Ids are paths: `kit.Part`,
-`kit.Scope`.
+### `x.Lyrics`
 
-## Actions and commands
+`x.Lyrics` renders time-synced lines (`[]x.LyricLine{At, Text}`) for playback position `At`, highlighting the active line (`x.ActiveLyric`) and scrolling to keep it in view while `LyricsState.Follow` is true. Manual scrolling pauses `Follow`.
 
-`Actions.Register(Action{ID, Title, Category, Description, Run, Enabled})`
-gives commands stable IDs. `Actions.Search(query)` feeds pickers, ranked:
-title prefix, a word start, anywhere in the title, category or id, then the
-letters in order ("gtp" finds "Go to page"); the palette shows each
-category beside its title. `Actions.Run(id)` checks Enabled.
-`Keymap.BindActions(actions, defaults, overridesJSON)` binds them to shortcuts;
-the JSON object maps action IDs to replacement chords (empty unbinds).
-`Keymap.Attach(gtx)` inside a `kit.KeyContext` gives a focused view
-precedence over window-wide shortcuts. Wrap the root with
-`ui.CommandPalette{ID, Actions, Page}.Layout(gtx, th, &palette)` and bind an
-action that calls `palette.Open()`.
+### `video.Video` (`github.com/hhhapz/giokit/kit/x/video`)
 
-The gallery's "Lists, trees, tables" page combines the list, tree, table,
-form and command APIs with a small editable in-memory model.
+`video.Video` draws frames from a `*paint.Stream` (requires the Gio fork; see [gio-patches.md](gio-patches.md)):
+
+```go
+video.Video{
+	ID:     "stream",
+	Stream: v.stream,
+	Fit:    video.FitContain,
+	Label:  "Camera feed",
+}.Layout(gtx, th, &v.videoState)
+```
+
+Supports `FitContain` (letterboxed), `FitCover`, `FitFill`, and `FitNone` (1:1 centered). `v.videoState.ToFrame(windowPt)` maps window pixel coordinates to video frame coordinates (returning `false` in letterbox bars), and `FromFrame(framePt)` maps frame coordinates back to widget space for overlays.
+
+## `desktop`: Native OS Integration
+
+Package `github.com/hhhapz/giokit/desktop` provides a cross-platform interface (`desktop.Platform`) for native file choosers and URL opening:
+
+- `OpenFile(ctx, desktop.FileOptions{Title, Filters, Multiple, Directory}) ([]string, error)`
+- `SaveFile(ctx, desktop.SaveOptions{Title, Name, Folder, Filters}) (string, error)`
+- `OpenURL(ctx, url) error`
+
+`desktop.System()` returns the host OS implementation (XDG Desktop Portals on Linux today; returns `desktop.ErrUnsupported` where not yet implemented). Dismissing a dialog returns `desktop.ErrCancelled`. Because native dialogs block waiting for user input, call them inside `kit.Spawn`:
+
+```go
+v.openTask = kit.Spawn(v.app, func(ctx context.Context) ([]string, error) {
+	return v.platform.OpenFile(ctx, desktop.FileOptions{Title: "Open Project"})
+}, func(paths []string, err error) {
+	if err == nil && len(paths) > 0 {
+		v.loadProject(paths[0])
+	}
+})
+```
+
+In tests, pass a `*desktop.Fake` instead of `desktop.System()`. Set `fake.Paths`, `fake.Path`, or `fake.Err`, and inspect `fake.Calls` (`[]desktop.Choice`) after `h.RunTasks()`.

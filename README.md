@@ -1,23 +1,30 @@
 # giokit
 
-Cross-platform desktop UI toolkit for Go, built on [Gio](https://gioui.org). It
-follows GPUI's philosophy: state owned by the UI thread, views redrawn from state
-every frame, and tests that simulate real input.
+> [!WARNING]
+> **Work in progress:** `giokit` is under active development and is not ready for production use. There are no tagged releases yet, consuming it requires a `replace` directive in `go.mod`, and APIs may still change as remaining platform and packaging issues are resolved.
+
+`giokit` is a cross-platform desktop UI toolkit for Go built on [Gio](https://gioui.org) and modeled after [GPUI](https://www.gpui.rs/).
+
+State lives in plain Go structs owned by the UI goroutine. Each frame handles pending input first and then lays out the window from that state. Components are plain structs paired with explicit state values, styled from theme tokens, and tested headlessly.
 
 ![The giokit gallery](docs/img/gallery.png)
 
-- **`kit/`:** primitives: theme, layout, drawing, focus and keyboard dispatch,
-  scrolling, layers, the app runner.
-- **`kit/ui/`:** about forty components (buttons, fields, pickers, menus,
-  lists, trees, tables, tabs, dialogs, toasts…), each a plain struct.
-- **`kit/x/`:** specialised widgets (log view, lyrics).
-- **`kittest/`:** headless test harness. It drives real pointer and keyboard input
-  through Gio's router, renders offscreen, and catches stale frames, unlabeled or
-  tiny or occluded targets, low contrast and missing glyphs automatically.
-- **`examples/`:** `hello` (below), `gallery` (every component, with tests),
-  `music` (a media app).
+## Example
 
 ```go
+package main
+
+import (
+	"fmt"
+	"log"
+	"os"
+
+	"gioui.org/layout"
+	"gioui.org/widget"
+	"github.com/hhhapz/giokit/kit"
+	"github.com/hhhapz/giokit/kit/ui"
+)
+
 type view struct {
 	th         *kit.Theme
 	count      int
@@ -34,6 +41,7 @@ func (v *view) Frame(gtx layout.Context) {
 	if v.greet.Clicked(gtx) {
 		v.toasts.Push(kit.StatusGood, "Hello, "+v.name.Text(), "")
 	}
+
 	// 2. Draw from state.
 	th := v.th
 	kit.Fill(gtx, th.Bg, func(gtx layout.Context) layout.Dimensions {
@@ -69,64 +77,63 @@ func main() {
 }
 ```
 
-And its test, headless, with real input (`examples/hello/main_test.go`):
+Testing it headlessly with `kittest` (`examples/hello/main_test.go`):
 
 ```go
-v := &view{th: kit.Dark()}
-h := kittest.NewT(t, 480, 320, v.Frame)
-h.Theme = v.th
-h.ClickID("inc")
-h.ClickID("inc")
-h.ExpectText("Clicked 2 times")
-h.ClickID("name")
-h.Type("Ada")
-h.ClickID("greet")
-h.ExpectText("Hello, Ada")
-h.ExpectClean()         // no stale frame, unlabeled control, tiny target, low contrast…
-h.ExpectTabReachable()  // every control can be reached with Tab
+func TestHello(t *testing.T) {
+	v := &view{th: kit.Dark()}
+	h := kittest.NewT(t, 480, 320, v.Frame)
+	h.Theme = v.th
+
+	h.ClickID("inc")
+	h.ClickID("inc")
+	h.ExpectText("Clicked 2 times")
+
+	h.ClickID("name")
+	h.Type("Ada")
+	h.ClickID("greet")
+	h.ExpectText("Hello, Ada")
+
+	h.ExpectClean()
+	h.ExpectTabReachable()
+}
 ```
+
+## Running Examples and Tests
 
 ```sh
 go run ./examples/hello
 go run ./examples/gallery
+go run ./examples/music
 go test ./...
-./examples/gallery/web/build.sh  # browser build: copy examples/gallery/web/ to any static host
 ```
 
-Read [docs/getting-started.md](docs/getting-started.md) next, then the
-[reference](docs/components.md).
+## Installation
 
-## Using it from an app
-
-```
+```go
 require github.com/hhhapz/giokit v0.0.0
-replace github.com/hhhapz/giokit => /path/to/giokit   # until there is a tagged release
+replace github.com/hhhapz/giokit => /path/to/giokit
 ```
 
-`kit`, `kit/ui`, `kit/x` and `kittest` build on stock Gio (CI checks it:
-`scripts/stock-gio.sh`; on Linux build with `-tags novulkan` or install the
-Vulkan headers). giokit's Gio fork is optional: it adds Wayland fixes
-(cursor scale, even wheel scrolling) and is required only by `kit/x/video`
-(streaming images) and `kit/forktrace`. To use it:
+`giokit` works with stock Gio. An optional patched Gio fork in `third_party/gioui.org` adds streaming video support (`kit/x/video` and `media`), desktop editor keybindings, and Linux/Wayland fixes (see [docs/gio-patches.md](docs/gio-patches.md)):
 
-```
+```go
 replace gioui.org => /path/to/giokit/third_party/gioui.org
 ```
+
+## Documentation
+
+- [Getting Started](docs/getting-started.md)
+- [Architecture](docs/architecture.md)
+- [Components and API](docs/components.md)
+- [Testing](docs/testing.md)
+- [Pitfalls](docs/pitfalls.md)
+- [Gio Patches](docs/gio-patches.md)
 
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md).
 
-## For AI agents
+## License
 
-`AGENTS.md` is the guide for working on this repo.
-Projects that use giokit should load `skills/giokit/SKILL.md` (Agent Skills
-format). Link or copy it into the agent's skills directory, for example
-`.claude/skills/`, `.codex/skills/`, `.opencode/skills/` or `.agents/skills/`.
-For agents without skills, reference it from that project's `AGENTS.md`.
-Detailed docs are in `docs/`.
-
-## Licence
-
-MIT, see `LICENSE`. The vendored Gio in `third_party/gioui.org` keeps its
-own licence (Unlicense OR MIT).
+MIT, see [LICENSE](LICENSE). The vendored Gio in `third_party/gioui.org` keeps its upstream license (Unlicense OR MIT).

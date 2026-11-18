@@ -1,104 +1,193 @@
-# Getting started
+# Getting Started
 
-## Set up
+## Setup
 
-Until there is a tagged release:
+Add `giokit` to your `go.mod`:
 
-```
+```go
 require github.com/hhhapz/giokit v0.0.0
 replace github.com/hhhapz/giokit => /path/to/giokit
 ```
 
-giokit builds on stock Gio. Linux needs the usual Gio dependencies (Wayland
-or X11, EGL) and either the Vulkan headers or `-tags novulkan`; macOS and
-Windows need nothing extra. Start from `examples/hello`.
+`giokit` runs on stock Gio across macOS, Windows, Linux, BSD, and WebAssembly. On Linux with stock Gio, either install `vulkan-headers` or pass `-tags novulkan`.
 
-Optionally, use giokit's Gio fork for its Wayland fixes (cursor scale, even
-high-resolution wheel scrolling), and for `kit/x/video`, which needs it
-([gio-patches.md](gio-patches.md)):
+To use the optional Gio fork in `third_party/gioui.org` (needed for `kit/x/video` and `media`; see [gio-patches.md](gio-patches.md)):
 
-```
+```go
 replace gioui.org => /path/to/giokit/third_party/gioui.org
 ```
 
-## The frame
+## Opening a Window
 
-Every frame, giokit calls your frame function with a `gtx` (constraints,
-input, the clock). The whole UI is drawn again from your state; nothing is
-retained between frames except the state you keep.
-
-A frame has two halves, in this order:
-
-1. **Handle input.** Read clicks and events for this frame:
-   `if v.save.Clicked(gtx) {...}`, `if id, ok := v.lang.Update(gtx); ok {...}`.
-   Change your state.
-2. **Draw.** Lay out components from that state.
-
-Drawing first and handling after shows stale state until the next frame;
-kittest's strict mode reports it as a stale frame.
-
-## State
-
-Your state is ordinary Go values in your own struct, owned by the UI
-goroutine. Component state (a `kit.Clickable`, a `ui.SelectState`) lives
-there too, one per control, so it persists across frames. For a list of
-rows, keep it in a `kit.Pool[T]` keyed by row id. Background work goes
-through `kit.Spawn(app, work, done)` or `app.Post(f)`; `done` and `f` run on
-the UI goroutine. `Spawn` returns a `*kit.Task`: `Cancel` it when the result
-is no longer wanted.
-
-`App.Run` runs the window on its goroutine and returns the window's error
-when it closes; start it on a goroutine and hand the main goroutine to
-`kit.Main()`, as `examples/hello` does.
-
-## Components
-
-A component is a struct of props laid out with the theme and its state:
+Create a `*kit.App` with `kit.NewApp`, run `app.Run` on a goroutine, and call `kit.Main()` at the end of `main`:
 
 ```go
-langs := []ui.Choice{{ID: "en", Label: "English"}, {ID: "fr", Label: "Français"}}
-ui.Select{ID: "lang", Options: langs, Selected: v.lang}.Layout(gtx, th, &v.langState)
+func main() {
+	v := &view{th: kit.Dark()}
+	app := kit.NewApp("com.example.hello", "Hello", 640, 420)
+	go func() {
+		if err := app.Run(v.Frame); err != nil {
+			log.Fatal(err)
+		}
+		os.Exit(0)
+	}()
+	kit.Main()
+}
 ```
 
-Props are values you pass every frame (the selected option's ID lives in
-your state, not the component's). Items are `ui.Choice{ID, Label}`: the ID
-is stable and is what events report; the label is shown and spoken. Events
-come from the state's `Update` in the handle half. Every interactive
-component takes an `ID`: tests address it by id, and sub-parts are
-`ID/part` (`lang/field`, `lang/en`). The spoken label is the visible text,
-or a `Label` you pass for icon-only controls.
+The first argument to `kit.NewApp` is the platform application identifier (`"com.example.hello"`). `app.Run` runs the window loop and returns when the window closes; `kit.Main()` hands the main OS thread to the platform event loop.
 
-Layout uses `kit.Flex` (rows and columns with gaps, padding, a surface) and
-the spacing scale `kit.Space0p5`…`kit.Space12` (4dp steps, with half
-steps). Colours come from
-the theme (`th.Fg`, `th.Panel`, `th.Accent`…); sizes from `th.Metrics`.
+## The Frame Loop
 
-## Themes
+`giokit` calls your `Frame(gtx layout.Context)` function whenever input arrives, an animation ticks, or background work finishes. The UI is laid out from your Go structs on each frame.
 
-`kit.Dark()`, `kit.Light()`, `kit.Presets()`, or `kit.Generate(seed)` from an
-accent colour (OKLCH, with WCAG contrast enforced). Adjust with
-`th.Derive(func(t *kit.Theme) { t.Radius = 999 })`; fonts with
-`th.UseFonts(fonts.Inter())`; load and save DTCG token files with
-`kit.ThemeFromTokens` and `th.Tokens()`.
+Every frame runs in two steps:
 
-## Keyboard
+1. Read pending clicks and events, and update your state.
+2. Lay out components from that state.
 
-Everything interactive is reachable with Tab and works with Enter/Space.
-Composites (lists, trees, tables, tabs, menus) are one Tab stop moved with
-the arrow keys. App shortcuts go in a `kit.Keymap` bound to `kit.Actions`;
-`ui.CommandPalette` searches them.
+```go
+func (v *view) Frame(gtx layout.Context) {
+	// 1. Handle input.
+	if id, ok := v.langState.Update(gtx); ok {
+		v.lang = id
+	}
+	if v.save.Clicked(gtx) {
+		v.saveChanges()
+	}
+
+	// 2. Lay out from state.
+	th := v.th
+	kit.Fill(gtx, th.Bg, func(gtx layout.Context) layout.Dimensions {
+		langs := []ui.Choice{
+			{ID: "en", Label: "English"},
+			{ID: "fr", Label: "Français"},
+		}
+		return kit.Flex{Axis: layout.Vertical, Gap: kit.Space3, Pad: kit.Space6}.Layout(gtx, th,
+			kit.Rigid(func(gtx layout.Context) layout.Dimensions {
+				return ui.Select{ID: "lang", Options: langs, Selected: v.lang}.Layout(gtx, th, &v.langState)
+			}),
+			kit.Rigid(func(gtx layout.Context) layout.Dimensions {
+				return ui.Button{ID: "save", Text: "Save", Style: ui.Solid}.Layout(gtx, th, &v.save)
+			}),
+		)
+	})
+}
+```
+
+Always handle input before drawing. Laying out a control before checking its input discards unread clicks and draws stale state for the rest of the frame.
+
+## State and Background Work
+
+Application state and component state (`kit.Clickable`, `ui.SelectState`, `widget.Editor`) live on your view struct and belong to the UI goroutine.
+
+For a dynamic list of items where each row needs its own widget state, store that state in a `kit.Pool[T]` keyed by a stable item ID and call `Sweep()` once per frame:
+
+```go
+for _, item := range v.items {
+	if v.deleteBtns.Get(item.ID).Clicked(gtx) {
+		v.removeItem(item.ID)
+	}
+}
+v.deleteBtns.Sweep()
+```
+
+Run blocking I/O or background work off the UI goroutine with `kit.Spawn`:
+
+```go
+v.searchTask.Cancel()
+v.searchTask = kit.Spawn(v.app,
+	func(ctx context.Context) ([]Result, error) {
+		return searchDatabase(ctx, query)
+	},
+	func(results []Result, err error) {
+		v.results = results
+		v.err = err
+	},
+)
+```
+
+`Spawn` runs the work function on a background goroutine and delivers the result to the `done` callback on the UI goroutine before the next frame. Calling `Cancel()` on the returned `*kit.Task` cancels the context and drops the result. You can also post callbacks directly to the UI goroutine with `app.Post(fn)`.
+
+## Components and Layout
+
+A component is a props struct laid out with a theme and a pointer to its state:
+
+```go
+ui.Checkbox{
+	ID:      "notifications",
+	Label:   "Enable desktop notifications",
+	Checked: v.notifications,
+}.Layout(gtx, th, &v.notificationsClick)
+```
+
+Props carry the current value (`Checked`, `Selected`, `Value`); the state pointer holds focus, scroll, and animation state across frames. The zero value of every state struct is ready to use, and state structs must not be copied after their first layout.
+
+Every interactive component takes an `ID` used by tests (`h.ClickID("notifications")`). Composite components name their sub-parts `<ID>/<part>` (`lang/field`, `lang/fr`).
+
+Use `kit.Flex` for row and column layouts with gaps, padding, surfaces, and size constraints:
+
+```go
+kit.Flex{
+	Axis:   layout.Horizontal,
+	Align:  layout.Middle,
+	Gap:    kit.Space2,
+	Pad:    kit.Space3,
+	Bg:     th.Panel,
+	Border: th.Border,
+	Radius: th.RadiusLg(),
+	FillW:  true,
+}.Layout(gtx, th,
+	kit.Rigid(func(gtx layout.Context) layout.Dimensions {
+		return th.Heading(gtx, "Project Settings")
+	}),
+	kit.Flexed(1, kit.Grow),
+	kit.Rigid(func(gtx layout.Context) layout.Dimensions {
+		return ui.Button{ID: "reset", Text: "Reset"}.Layout(gtx, th, &v.reset)
+	}),
+)
+```
+
+Spacing uses the `kit.SpaceN` scale (`kit.Space0p5` = 2dp, `kit.Space1` = 4dp, `kit.Space2` = 8dp, up to `kit.Space12` = 48dp) and scales with `th.Density`.
+
+## Themes and Fonts
+
+Build a theme once at startup with `kit.Dark()`, `kit.Light()`, `kit.Presets()`, or `kit.Generate(seed)`. Use `Derive` to adjust a theme for a subtree:
+
+```go
+compact := th.Derive(func(t *kit.Theme) {
+	t.Density = 0.85
+	t.Controls = kit.ControlSmall
+	t.Radius = 4
+})
+```
+
+To switch to another bundled font pair (`fonts.Go()`, `fonts.Inter()`, `fonts.Plex()`, or `fonts.Atkinson()`), call `th.UseFonts(fonts.Inter())` once at startup. Themes also import and export W3C Design Token JSON files with `kit.ThemeFromTokens` and `th.Tokens()`.
+
+## Keyboard Navigation
+
+Interactive controls are reachable with `Tab` and activated with `Enter` or `Space`. Collections (`SelectableList`, `Tree`, `DataTable`, `Tabs`, `Menu`) act as a single `Tab` stop and use arrow keys, `Home`/`End`, and type-ahead to move inside the group.
+
+Application commands go in a `kit.Actions` registry bound to shortcuts through a `kit.Keymap`, and `ui.CommandPalette` provides a searchable modal picker over those actions. In chord strings such as `"Shortcut+K"`, `"Shortcut"` maps to `Cmd` on macOS and `Ctrl` on Windows and Linux.
 
 ## Testing
 
+`kittest` drives pointer and keyboard input through Gio's router and renders offscreen on a headless GPU context:
+
 ```go
-h := kittest.NewT(t, 800, 600, v.Frame)
-h.ClickID("save")
-h.ExpectText("Saved")
-h.ExpectClean()
+func TestSettingsView(t *testing.T) {
+	v := newSettingsView()
+	h := kittest.NewT(t, 800, 600, v.Frame)
+	h.Theme = v.th
+
+	h.ClickID("lang/field")
+	h.ClickID("lang/fr")
+	h.ClickRole(kit.RoleButton, "Save")
+
+	h.ExpectText("Saved")
+	h.ExpectClean()
+	h.ExpectTabReachable()
+}
 ```
 
-`kittest` drives real pointer and keyboard input through Gio's router and
-renders offscreen (EGL, no display needed). `ExpectClean` runs the audits:
-stale frames, controls without labels, tiny or occluded targets, low
-contrast, missing glyphs. For background work, pass `h.App()` to
-`kit.Spawn` and call `h.RunTasks()`. More in [testing.md](testing.md).
+See [testing.md](testing.md) for the full `kittest` reference.

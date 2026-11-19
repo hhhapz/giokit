@@ -12,11 +12,11 @@ import (
 	"testing"
 	"time"
 
-	"gioui.org/font"
-	"gioui.org/layout"
-	"gioui.org/op"
-	"gioui.org/unit"
-	"gioui.org/widget/material"
+	"github.com/hhhapz/giokit/gio/font"
+	"github.com/hhhapz/giokit/gio/layout"
+	"github.com/hhhapz/giokit/gio/op"
+	"github.com/hhhapz/giokit/gio/unit"
+	"github.com/hhhapz/giokit/gio/widget/material"
 
 	"github.com/hhhapz/giokit/kit"
 	"github.com/hhhapz/giokit/kittest"

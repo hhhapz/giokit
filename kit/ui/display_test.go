@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"gioui.org/io/key"
-	"gioui.org/layout"
+	"github.com/hhhapz/giokit/gio/io/key"
+	"github.com/hhhapz/giokit/gio/layout"
 
 	"github.com/hhhapz/giokit/kit"
 	"github.com/hhhapz/giokit/kit/ui"
@@ -91,4 +91,30 @@ func TestCustomFocusablesReachKeyContext(t *testing.T) {
 			t.Errorf("Enter with %s focused (%q) ran %q", id, h.FocusedID(), confirmed)
 		}
 	}
+}
+
+// A banner's Action is drawn at its end and takes clicks.
+func TestBannerAction(t *testing.T) {
+	th := kit.Dark()
+	var c kit.Clickable
+	clicked := false
+	h := kittest.NewT(t, 500, 120, func(gtx layout.Context) {
+		if c.Clicked(gtx) {
+			clicked = true
+		}
+		ui.Banner{Status: kit.StatusWarn, Title: "Tool missing", Body: "Install it to continue.",
+			Action: func(gtx layout.Context) layout.Dimensions {
+				return ui.Link{ID: "banner/fix", Text: "Download"}.Layout(gtx, th, &c)
+			}}.Layout(gtx, th)
+	})
+	h.Theme = th
+	r := h.ExpectID("banner/fix")
+	if r.Min.X < 300 {
+		t.Errorf("action at %v, want at the banner's end", r)
+	}
+	h.ClickID("banner/fix")
+	if !clicked {
+		t.Fatal("the action did not take the click")
+	}
+	h.ExpectClean()
 }

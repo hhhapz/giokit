@@ -7,9 +7,9 @@ import (
 	"strconv"
 	"strings"
 
-	"gioui.org/io/event"
-	"gioui.org/io/key"
-	"gioui.org/layout"
+	"github.com/hhhapz/giokit/gio/io/event"
+	"github.com/hhhapz/giokit/gio/io/key"
+	"github.com/hhhapz/giokit/gio/layout"
 )
 
 // Keymap binds key chords to functions. Bind once, Attach it every frame
@@ -29,6 +29,9 @@ import (
 // over keymaps further out. Keys bubble like DOM events: the focused widget
 // reads its keys while it is laid out, so it gets first pick (a focused text
 // field keeps Ctrl+A); keys nobody claimed reach the keymaps after layout.
+// While a text field (Theme.EditorField) has focus, chords that type text
+// ("1", "?", "Shift+A") are left to it, so single-key shortcuts never eat
+// typing.
 //
 // Chords: modifiers joined with "+", then a key: "Ctrl+K", "Shift+Ctrl+P",
 // "Alt+Up", "F1", "Escape", "Shortcut+S", "Ctrl++". Shortcut is Cmd on macOS
@@ -204,12 +207,38 @@ func (k *Keymap) HintFor(actionID string) string {
 	return ""
 }
 
-// appendFilters appends the key filters for k's chords to fs.
-func (k *Keymap) appendFilters(fs []event.Filter) []event.Filter {
+// appendFilters appends the key filters for k's chords to fs. While typing
+// (a text editor has focus) it leaves out chords that type text, so those
+// keys reach the editor as text.
+func (k *Keymap) appendFilters(fs []event.Filter, typing bool) []event.Filter {
 	for _, b := range k.binds {
+		if typing && b.keys.types() {
+			continue
+		}
 		fs = append(fs, b.keys.filter())
 	}
 	return fs
+}
+
+// types reports whether c belongs to a focused editor: a key that types
+// or edits text, with no modifier but Shift ("1", "?", "Shift+A", "Space",
+// "Left", "Shift+Home", "Return").
+func (c chord) types() bool { return c.mods&^key.ModShift == 0 && editorKey(c.name) }
+
+// editorKey reports whether a focused editor owns the key name when no
+// modifier but Shift is held: printable characters, Space, and the keys
+// that move the caret, select or delete. Escape, Tab and the function keys
+// are not, so shortcuts bound to them work while typing.
+func editorKey(n key.Name) bool {
+	switch n {
+	case key.NameSpace, key.NameLeftArrow, key.NameRightArrow, key.NameUpArrow,
+		key.NameDownArrow, key.NameHome, key.NameEnd, key.NamePageUp, key.NamePageDown,
+		key.NameDeleteBackward, key.NameDeleteForward, key.NameReturn, key.NameEnter:
+		return true
+	case key.NameEscape, key.NameCommand:
+		return false
+	}
+	return len([]rune(string(n))) == 1
 }
 
 // match returns the enabled binding for the key press e.
@@ -238,7 +267,7 @@ func (k *Keymap) Attach(gtx layout.Context) {
 	if len(k.binds) == 0 {
 		return
 	}
-	filters := k.appendFilters(nil)
+	filters := k.appendFilters(nil, false)
 	for {
 		e, ok := gtx.Event(filters...)
 		if !ok {
@@ -256,7 +285,9 @@ func (k *Keymap) Attach(gtx layout.Context) {
 }
 
 // FormatChord renders a chord for display, with platform names
-// (Shortcut → Cmd on macOS, Ctrl elsewhere).
+// (Shortcut → Cmd on macOS, Ctrl elsewhere). Keys Gio names with symbols
+// the bundled fonts lack (⌦, ⇱) are written as words, as ParseChord
+// spells them, so the result parses back.
 func FormatChord(n key.Name, m key.Modifiers) string {
 	var parts []string
 	mac := runtime.GOOS == "darwin" || runtime.GOOS == "ios"
@@ -293,6 +324,20 @@ func FormatChord(n key.Name, m key.Modifiers) string {
 		name = "Left"
 	case key.NameRightArrow:
 		name = "Right"
+	case key.NameDeleteForward:
+		name = "Delete"
+	case key.NameDeleteBackward:
+		name = "Backspace"
+	case key.NameEnter:
+		name = "Enter"
+	case key.NameHome:
+		name = "Home"
+	case key.NameEnd:
+		name = "End"
+	case key.NamePageUp:
+		name = "PageUp"
+	case key.NamePageDown:
+		name = "PageDown"
 	}
 	return strings.Join(append(parts, name), "+")
 }

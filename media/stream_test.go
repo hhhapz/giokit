@@ -6,9 +6,9 @@ import (
 	"os"
 	"testing"
 
-	"gioui.org/layout"
-	"gioui.org/op/clip"
-	"gioui.org/op/paint"
+	"github.com/hhhapz/giokit/gio/layout"
+	"github.com/hhhapz/giokit/gio/op/clip"
+	"github.com/hhhapz/giokit/gio/op/paint"
 
 	"github.com/hhhapz/giokit/kittest"
 )

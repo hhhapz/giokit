@@ -3,7 +3,7 @@ package kit
 import (
 	"slices"
 
-	"gioui.org/layout"
+	"github.com/hhhapz/giokit/gio/layout"
 )
 
 // AnchoredList keeps the first visible item, by stable id, at the same

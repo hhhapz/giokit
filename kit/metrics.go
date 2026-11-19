@@ -1,6 +1,6 @@
 package kit
 
-import "gioui.org/unit"
+import "github.com/hhhapz/giokit/gio/unit"
 
 // Metrics are the theme's fixed sizes: everything that is neither spacing
 // (the SpaceN scale, through Theme.Space) nor a corner (Theme.Radius).

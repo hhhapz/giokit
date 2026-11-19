@@ -5,10 +5,10 @@ import (
 	"image/color"
 	"time"
 
-	"gioui.org/layout"
-	"gioui.org/op/clip"
-	"gioui.org/op/paint"
-	"gioui.org/unit"
+	"github.com/hhhapz/giokit/gio/layout"
+	"github.com/hhhapz/giokit/gio/op/clip"
+	"github.com/hhhapz/giokit/gio/op/paint"
+	"github.com/hhhapz/giokit/gio/unit"
 )
 
 // Progress bar geometry and timing.

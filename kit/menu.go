@@ -1,9 +1,9 @@
 package kit
 
 import (
-	"gioui.org/io/semantic"
-	"gioui.org/layout"
-	"gioui.org/unit"
+	"github.com/hhhapz/giokit/gio/io/semantic"
+	"github.com/hhhapz/giokit/gio/layout"
+	"github.com/hhhapz/giokit/gio/unit"
 )
 
 // MenuRow is one row of a menu-like list: menu items, select options,

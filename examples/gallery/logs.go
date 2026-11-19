@@ -6,9 +6,9 @@ import (
 	"slices"
 	"time"
 
-	"gioui.org/layout"
-	"gioui.org/op"
-	"gioui.org/widget"
+	"github.com/hhhapz/giokit/gio/layout"
+	"github.com/hhhapz/giokit/gio/op"
+	"github.com/hhhapz/giokit/gio/widget"
 
 	"github.com/hhhapz/giokit/kit"
 	"github.com/hhhapz/giokit/kit/ui"

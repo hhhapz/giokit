@@ -14,6 +14,8 @@ On a headless Linux machine or container without a hardware GPU, set `LIBGL_ALWA
 
 With the Gio fork, Linux windows render with Vulkan where they can, but headless rendering stays on EGL. Run `GIOKIT_GPU=vulkan go test ./...` to cover the Vulkan renderer too (`GIOKIT_GPU=opengl` forces EGL in windows). It is slower for screenshot-heavy suites: Gio reads pixels back through uncached memory on Vulkan.
 
+Video decoding in `media` has three paths: software, GPU decode with readback to RGBA (VA-API, D3D11VA or VideoToolbox), and GPU decode with zero-copy DMA-BUF export (VA-API on Linux). `media`'s `TestPaths` decodes every test clip on each path the machine has and skips the rest with the reason; `Frame.Path()` reports which path produced a frame. `GIOKIT_VIDEO` (`software`, `readback`, `zerocopy`, `vaapi`, `d3d11va`, `videotoolbox`) forces a path for decoders left on `media.HardwareAuto`, such as an app's video under test.
+
 Fields on `*kittest.Harness`:
 - `h.Theme = th`: attaches the `*kit.Theme` so `Audit` can check for missing font glyphs and measure sub-pixel text contrast against the palette. Set `h.Theme` again if your UI switches themes during a test.
 - `h.Strict`: `true` by default. After each input settles, renders one more frame and fails if anything changes.

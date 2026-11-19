@@ -9,8 +9,8 @@ import (
 	"strconv"
 	"strings"
 
-	"gioui.org/font"
-	"gioui.org/unit"
+	"github.com/hhhapz/giokit/gio/font"
+	"github.com/hhhapz/giokit/gio/unit"
 )
 
 // TokenError reports a design token that ThemeFromTokens could not read or

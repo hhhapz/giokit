@@ -19,8 +19,8 @@ import (
 	"log"
 	"os"
 
-	"gioui.org/layout"
-	"gioui.org/widget"
+	"github.com/hhhapz/giokit/gio/layout"
+	"github.com/hhhapz/giokit/gio/widget"
 	"github.com/hhhapz/giokit/kit"
 	"github.com/hhhapz/giokit/kit/ui"
 )
@@ -115,11 +115,7 @@ require github.com/hhhapz/giokit v0.0.0
 replace github.com/hhhapz/giokit => /path/to/giokit
 ```
 
-`giokit` works with stock Gio. An optional patched Gio fork in `third_party/gioui.org` adds streaming video support (`kit/x/video` and `media`), desktop editor keybindings, and Linux/Wayland fixes (see [docs/gio-patches.md](docs/gio-patches.md)):
-
-```go
-replace gioui.org => /path/to/giokit/third_party/gioui.org
-```
+`giokit` includes its own fork of Gio in `gio/` (`github.com/hhhapz/giokit/gio/...`), with streaming video, desktop editor keybindings, and Linux/Wayland fixes. Import Gio from there, never `gioui.org`; no `replace` is needed (see [docs/gio-patches.md](docs/gio-patches.md)).
 
 ## Documentation
 
@@ -128,6 +124,7 @@ replace gioui.org => /path/to/giokit/third_party/gioui.org
 - [Components and API](docs/components.md)
 - [Testing](docs/testing.md)
 - [Pitfalls](docs/pitfalls.md)
+- [Static FFmpeg](docs/static-ffmpeg.md)
 - [Gio Patches](docs/gio-patches.md)
 
 ## Contributing
@@ -136,4 +133,4 @@ See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 
-MIT, see [LICENSE](LICENSE). The vendored Gio in `third_party/gioui.org` keeps its upstream license (Unlicense OR MIT).
+MIT, see [LICENSE](LICENSE). The Gio fork in `gio/` keeps its upstream license (Unlicense OR MIT).

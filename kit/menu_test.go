@@ -4,10 +4,10 @@ import (
 	"image"
 	"testing"
 
-	"gioui.org/io/input"
-	"gioui.org/layout"
-	"gioui.org/op"
-	"gioui.org/unit"
+	"github.com/hhhapz/giokit/gio/io/input"
+	"github.com/hhhapz/giokit/gio/layout"
+	"github.com/hhhapz/giokit/gio/op"
+	"github.com/hhhapz/giokit/gio/unit"
 )
 
 // TestMenuRowWidthMatchesRow: a row laid out at MenuRowWidth gives its

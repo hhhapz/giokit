@@ -5,8 +5,6 @@
 version: "2"
 
 run:
-  # The patched Gio module is vendored under third_party and is linted
-  # upstream, not here.
   relative-path-mode: gomod
 
 linters:
@@ -48,7 +46,7 @@ linters:
         - (*github.com/godbus/dbus/v5.Conn).Close
   exclusions:
     paths:
-      - third_party
+      - gio # the Gio fork: upstream's code, linted by upstream's standards
       - media
 
 issues:

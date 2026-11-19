@@ -31,16 +31,16 @@ Put detail in `docs/`, and add a pitfall here only as a one-line rule.
 - **`examples/gallery/`:** every component, plus its tests. `nav.go` groups
   demos into pages and pages into sidebar categories; "All components" shows
   every demo on one page. New components land as a demo with a test.
-- **`third_party/gioui.org/`:** patched Gio v0.10.3 (`docs/gio-patches.md`),
-  used by this repo's builds. `kit`, `kit/ui`, `kit/x`, and `kittest` must also
-  pass on stock Gio (`scripts/stock-gio.sh`): never use a fork-only API outside
-  `kit/x/video` and `kit/forktrace`.
+- **`gio/`:** our hard fork of Gio (`github.com/hhhapz/giokit/gio/...`), synced
+  from upstream by `gio: upstream` snapshot commits (`scripts/gio-sync.sh`,
+  `docs/gio-patches.md`). Commits touch `gio/` or the rest, never both.
 - **`skills/giokit/SKILL.md`:** portable skill for projects that use giokit.
 - **`internal/bench/`:** rendering baselines (editor/terminal text, video).
 - **`media/`:** separate module (cgo, FFmpeg): video decoder for `paint.Stream`/
   `video.Video`, with hardware decode and optional zero-copy DMA-BUF import.
 - **`docs/`:** `getting-started.md`, `architecture.md`, `components.md`,
-  `testing.md`, `pitfalls.md`, `gio-patches.md`.
+  `testing.md`, `pitfalls.md`, `gio-patches.md`, `static-ffmpeg.md` (`-tags
+  ffmpeg_static`, `scripts/ffmpeg-static.sh`).
 
 ## Commands
 

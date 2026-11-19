@@ -2,19 +2,14 @@ module github.com/hhhapz/giokit/media
 
 go 1.24.0
 
-replace (
-	gioui.org => ../third_party/gioui.org
-	github.com/hhhapz/giokit => ../
-)
+replace github.com/hhhapz/giokit => ../
 
 require (
-	gioui.org v0.10.3
+	github.com/gen2brain/malgo v0.11.27
 	github.com/hhhapz/giokit v0.0.0
 )
 
 require (
-	gioui.org/shader v1.0.9 // indirect
-	gioui.org/x v0.10.3 // indirect
 	github.com/go-text/typesetting v0.3.5 // indirect
 	github.com/godbus/dbus/v5 v5.2.2 // indirect
 	golang.org/x/exp v0.0.0-20250408133849-7e4ce0ab07d0 // indirect

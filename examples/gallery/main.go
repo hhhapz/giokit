@@ -15,7 +15,7 @@ import (
 	"os"
 	"slices"
 
-	"gioui.org/layout"
+	"github.com/hhhapz/giokit/gio/layout"
 
 	"github.com/hhhapz/giokit/kit"
 	_ "github.com/hhhapz/giokit/kit/forktrace" // Gio window events in GIOKIT_TRACE

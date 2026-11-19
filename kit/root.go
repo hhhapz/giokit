@@ -3,10 +3,10 @@ package kit
 import (
 	"image"
 
-	"gioui.org/io/event"
-	"gioui.org/io/pointer"
-	"gioui.org/layout"
-	"gioui.org/op"
+	"github.com/hhhapz/giokit/gio/io/event"
+	"github.com/hhhapz/giokit/gio/io/pointer"
+	"github.com/hhhapz/giokit/gio/layout"
+	"github.com/hhhapz/giokit/gio/op"
 )
 
 // rootTag is the window's area, registered by Window.Begin. Every pointer

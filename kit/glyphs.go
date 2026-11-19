@@ -3,7 +3,7 @@ package kit
 import (
 	"unicode"
 
-	"gioui.org/text"
+	"github.com/hhhapz/giokit/gio/text"
 	"golang.org/x/image/math/fixed"
 )
 

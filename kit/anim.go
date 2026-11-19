@@ -4,10 +4,10 @@ import (
 	"image"
 	"time"
 
-	"gioui.org/layout"
-	"gioui.org/op"
-	"gioui.org/op/paint"
-	"gioui.org/unit"
+	"github.com/hhhapz/giokit/gio/layout"
+	"github.com/hhhapz/giokit/gio/op"
+	"github.com/hhhapz/giokit/gio/op/paint"
+	"github.com/hhhapz/giokit/gio/unit"
 )
 
 // Easing maps linear progress 0..1 to eased progress.

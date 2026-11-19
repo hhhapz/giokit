@@ -3,15 +3,15 @@ package ui
 import (
 	"image"
 
-	"gioui.org/gesture"
-	"gioui.org/io/event"
-	"gioui.org/io/key"
-	"gioui.org/io/pointer"
-	"gioui.org/io/semantic"
-	"gioui.org/layout"
-	"gioui.org/op/clip"
-	"gioui.org/op/paint"
-	"gioui.org/unit"
+	"github.com/hhhapz/giokit/gio/gesture"
+	"github.com/hhhapz/giokit/gio/io/event"
+	"github.com/hhhapz/giokit/gio/io/key"
+	"github.com/hhhapz/giokit/gio/io/pointer"
+	"github.com/hhhapz/giokit/gio/io/semantic"
+	"github.com/hhhapz/giokit/gio/layout"
+	"github.com/hhhapz/giokit/gio/op/clip"
+	"github.com/hhhapz/giokit/gio/op/paint"
+	"github.com/hhhapz/giokit/gio/unit"
 
 	"github.com/hhhapz/giokit/kit"
 )

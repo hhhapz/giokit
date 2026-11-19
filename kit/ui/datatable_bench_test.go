@@ -1,7 +1,7 @@
 package ui_test
 
 import (
-	"gioui.org/layout"
+	"github.com/hhhapz/giokit/gio/layout"
 
 	"fmt"
 	"testing"

@@ -5,9 +5,9 @@ import (
 	"image/color"
 	"testing"
 
-	"gioui.org/f32"
-	"gioui.org/layout"
-	"gioui.org/op/paint"
+	"github.com/hhhapz/giokit/gio/f32"
+	"github.com/hhhapz/giokit/gio/layout"
+	"github.com/hhhapz/giokit/gio/op/paint"
 
 	"github.com/hhhapz/giokit/kit"
 	"github.com/hhhapz/giokit/kit/x/video"

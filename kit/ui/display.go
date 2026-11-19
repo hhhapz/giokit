@@ -5,16 +5,16 @@ import (
 	"image/color"
 	"strings"
 
-	"gioui.org/gesture"
-	"gioui.org/io/event"
-	"gioui.org/io/key"
-	"gioui.org/io/pointer"
-	"gioui.org/layout"
-	"gioui.org/op"
-	"gioui.org/op/clip"
-	"gioui.org/op/paint"
-	"gioui.org/unit"
-	"gioui.org/widget"
+	"github.com/hhhapz/giokit/gio/gesture"
+	"github.com/hhhapz/giokit/gio/io/event"
+	"github.com/hhhapz/giokit/gio/io/key"
+	"github.com/hhhapz/giokit/gio/io/pointer"
+	"github.com/hhhapz/giokit/gio/layout"
+	"github.com/hhhapz/giokit/gio/op"
+	"github.com/hhhapz/giokit/gio/op/clip"
+	"github.com/hhhapz/giokit/gio/op/paint"
+	"github.com/hhhapz/giokit/gio/unit"
+	"github.com/hhhapz/giokit/gio/widget"
 
 	"github.com/hhhapz/giokit/kit"
 )
@@ -39,6 +39,9 @@ const statusIconNudge unit.Dp = 1
 type Banner struct {
 	Status      kit.Status // picks the icon, tint and border
 	Title, Body string     // a bold line, then an optional wrapped paragraph
+	// Action, if set, draws a control at the banner's end, such as a Link
+	// or a small Button that resolves the message. It keeps its own state.
+	Action layout.Widget
 }
 
 // bannerBorderAlpha is the opacity of a Banner's border in its status
@@ -46,7 +49,7 @@ type Banner struct {
 const bannerBorderAlpha = 60
 
 // Layout draws the banner stretched to the available width. It takes no
-// input; put actions beside it.
+// input itself; Action, if set, handles its own.
 func (b Banner) Layout(gtx layout.Context, th *kit.Theme) layout.Dimensions {
 	fg, bg, icon := th.StatusColors(b.Status)
 	return th.Styled(kit.Surface{Bg: bg, Border: kit.WithAlpha(fg, bannerBorderAlpha), Radius: th.Radius}).Layout(gtx, kit.Stretch(kit.Pad(th.Space(kit.Space2p5), th.Space(kit.Space3), func(gtx layout.Context) layout.Dimensions {
@@ -66,6 +69,13 @@ func (b Banner) Layout(gtx layout.Context, th *kit.Theme) layout.Dimensions {
 						return layout.Inset{Top: th.Space(kit.Space0p5)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions { return th.Paragraph(gtx, b.Body, th.Muted) })
 					}),
 				)
+			}),
+			kit.Rigid(func(gtx layout.Context) layout.Dimensions {
+				if b.Action == nil {
+					return layout.Dimensions{}
+				}
+				gtx.Constraints.Min.X = 0
+				return layout.Inset{Left: th.Space(kit.Space3)}.Layout(gtx, b.Action)
 			}),
 		)
 	})))

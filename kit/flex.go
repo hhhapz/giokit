@@ -3,8 +3,8 @@ package kit
 import (
 	"image/color"
 
-	"gioui.org/layout"
-	"gioui.org/unit"
+	"github.com/hhhapz/giokit/gio/layout"
+	"github.com/hhhapz/giokit/gio/unit"
 )
 
 // Flex is the styled flex container: a row or column with gaps, padding, an

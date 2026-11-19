@@ -299,12 +299,16 @@ func PresetSeeds() []Seed {
 	}
 }
 
-// Presets returns the bundled themes in display order (Dark first). They
+// Presets returns the bundled themes in display order (Dark first, then
+// the seeded ones, then Black, the Catppuccin flavors and Pink). They
 // share one font shaper, so switching between them keeps text caches warm.
 func Presets() []*Theme {
 	out := []*Theme{Dark()}
 	for _, s := range PresetSeeds() {
 		out = append(out, out[0].Derive(func(t *Theme) { t.Palette, t.Name, t.Dark = GeneratePalette(s), s.Name, s.Dark }))
+	}
+	for _, n := range namedPalettes() {
+		out = append(out, out[0].Derive(func(t *Theme) { t.Palette, t.Name, t.Dark = n.p, n.name, n.dark }))
 	}
 	return out
 }

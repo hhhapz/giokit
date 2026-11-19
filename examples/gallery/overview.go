@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"slices"
 
-	"gioui.org/layout"
-	"gioui.org/unit"
+	"github.com/hhhapz/giokit/gio/layout"
+	"github.com/hhhapz/giokit/gio/unit"
 
 	"github.com/hhhapz/giokit/kit"
 	"github.com/hhhapz/giokit/kit/ui"

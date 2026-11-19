@@ -6,11 +6,11 @@ import (
 	"strconv"
 	"time"
 
-	"gioui.org/gesture"
-	"gioui.org/layout"
-	"gioui.org/op"
-	"gioui.org/op/clip"
-	"gioui.org/op/paint"
+	"github.com/hhhapz/giokit/gio/gesture"
+	"github.com/hhhapz/giokit/gio/layout"
+	"github.com/hhhapz/giokit/gio/op"
+	"github.com/hhhapz/giokit/gio/op/clip"
+	"github.com/hhhapz/giokit/gio/op/paint"
 
 	"github.com/hhhapz/giokit/kit"
 )

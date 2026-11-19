@@ -1,17 +1,16 @@
 // Package video draws streaming images (video, camera, remote screens) with
-// Video. It needs giokit's Gio fork (third_party/gioui.org) for paint.Stream
-// until that lands upstream; kit and kit/ui build on stock Gio without it.
+// Video, from a paint.Stream (in giokit's Gio fork).
 package video
 
 import (
 	"image"
 	"math"
 
-	"gioui.org/f32"
-	"gioui.org/layout"
-	"gioui.org/op"
-	"gioui.org/op/clip"
-	"gioui.org/op/paint"
+	"github.com/hhhapz/giokit/gio/f32"
+	"github.com/hhhapz/giokit/gio/layout"
+	"github.com/hhhapz/giokit/gio/op"
+	"github.com/hhhapz/giokit/gio/op/clip"
+	"github.com/hhhapz/giokit/gio/op/paint"
 
 	"github.com/hhhapz/giokit/kit"
 )

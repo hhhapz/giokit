@@ -4,12 +4,12 @@ import (
 	"image"
 	"time"
 
-	"gioui.org/io/event"
-	"gioui.org/io/key"
-	"gioui.org/io/pointer"
-	"gioui.org/layout"
-	"gioui.org/op"
-	"gioui.org/op/clip"
+	"github.com/hhhapz/giokit/gio/io/event"
+	"github.com/hhhapz/giokit/gio/io/key"
+	"github.com/hhhapz/giokit/gio/io/pointer"
+	"github.com/hhhapz/giokit/gio/layout"
+	"github.com/hhhapz/giokit/gio/op"
+	"github.com/hhhapz/giokit/gio/op/clip"
 )
 
 // Window holds the state that outlives a frame for one window: the key
@@ -44,6 +44,9 @@ type frame struct {
 	root     clip.Stack           // the window area, pushed for the whole frame (Begin to End)
 	ids      map[event.Tag]string // focusable tag → id path, for FocusedID
 	roles    map[string]Role      // id path → role (SetRole)
+	// typing is set when a text editor laid out this frame holds focus:
+	// keymaps then leave plain printable keys to it (see Keymap).
+	typing bool
 }
 
 // pointerSeen is a pointer event as the root saw it: popups compare it with
@@ -101,6 +104,7 @@ func (w *Window) Begin(gtx layout.Context) layout.Context {
 	clear(f.active)
 	clear(f.ids)
 	clear(f.roles)
+	f.typing = false
 	if gtx.Values == nil {
 		if w.values == nil {
 			w.values = map[string]any{}
@@ -219,7 +223,7 @@ func (w *Window) End(gtx layout.Context) {
 	}
 	for _, n := range f.nodes {
 		for _, km := range n.keymaps {
-			filters = km.appendFilters(filters)
+			filters = km.appendFilters(filters, f.typing)
 		}
 	}
 	for {
@@ -260,6 +264,9 @@ func (f *frame) dispatch(gtx layout.Context, ke key.Event) bool {
 	for ; node >= 0; node = f.nodes[node].parent {
 		n := &f.nodes[node]
 		for _, km := range n.keymaps {
+			if f.typing && ke.Modifiers&^key.ModShift == 0 && editorKey(ke.Name) {
+				break // text for the focused editor, never a shortcut
+			}
 			if b, ok := km.match(ke); ok {
 				b.Run()
 				return true

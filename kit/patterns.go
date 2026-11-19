@@ -3,9 +3,9 @@ package kit
 import (
 	"image"
 
-	"gioui.org/layout"
-	"gioui.org/op"
-	"gioui.org/op/clip"
+	"github.com/hhhapz/giokit/gio/layout"
+	"github.com/hhhapz/giokit/gio/op"
+	"github.com/hhhapz/giokit/gio/op/clip"
 )
 
 // Group names a region: id for tests, label for screen readers, sized to

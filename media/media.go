@@ -5,10 +5,12 @@
 // apps that show video link it. (This is about FFmpeg, not cgo in general:
 // Gio's desktop backends may use cgo in any giokit app.)
 //
-// Decoding prefers the GPU (VA-API on Linux) and falls back to software.
-// A hardware frame can leave the decoder two ways: copied to RGBA in system
-// memory (works everywhere), or converted to RGBA on the GPU and exported as
-// a DMA-BUF (Linux), which a renderer that can import it draws with no copy.
+// Decoding can run on the GPU through VA-API (Linux), D3D11VA (Windows) or
+// VideoToolbox (macOS), or in software. A hardware frame can leave the
+// decoder two ways: copied back to RGBA in system memory (works with every
+// API), or converted to RGBA on the GPU and exported as a DMA-BUF (VA-API on
+// Linux), which a renderer that can import it draws with no copy. Frame.Path
+// says which of the three paths produced a frame.
 //
 //	d, err := media.NewDecoder(media.H264, media.Options{})
 //	if err != nil {
@@ -31,11 +33,26 @@
 // hand it to a paint.Stream with StreamFrame, which releases it (on the
 // renderer's goroutine) once it has drawn a newer frame. Frames remain
 // valid after their decoder is closed.
+//
+// # GIOKIT_VIDEO
+//
+// The environment variable GIOKIT_VIDEO, read once per process, steers
+// decoders whose Options.Hardware is HardwareAuto (an explicit Hardware in
+// code wins), so that users and tests can force a path:
+//
+//	auto              the default policy (as if unset)
+//	off, software     decode in software
+//	readback          the platform's GPU API, frames copied back to RGBA
+//	                  even when Options.DMABuf asks for DMA-BUFs
+//	zerocopy          the platform's GPU API with DMA-BUF output
+//	vaapi, d3d11va,   that API (output as Options.DMABuf says)
+//	videotoolbox
+//
+// Forced GPU modes make NewDecoder fail where the API is missing, rather
+// than silently decoding in software. Other values are ignored.
 package media
 
 /*
-#cgo pkg-config: libavcodec libavformat libavutil libswscale
-#cgo linux pkg-config: libva
 #include <stdlib.h>
 #include "av.h"
 */
@@ -46,10 +63,11 @@ import (
 	"fmt"
 	"image"
 	"io"
+	"os"
 	"sync"
 	"unsafe"
 
-	"gioui.org/op/paint"
+	"github.com/hhhapz/giokit/gio/op/paint"
 )
 
 // Codec is a video codec.
@@ -86,26 +104,85 @@ type Hardware int
 
 const (
 	// HardwareAuto decodes on the GPU when frames can stay there
-	// (Options.DMABuf), else in software: copying a decoded frame back from
-	// video memory costs more than decoding it on the CPU (2960×1848 H.264
-	// on an RX 6700 XT: 17.8 ms/frame through VA-API and a copy, 5.7 ms in
-	// software, 3.0 ms through VA-API and a DMA-BUF).
-	HardwareAuto  Hardware = C.GK_HW_AUTO
-	HardwareOff   Hardware = C.GK_HW_OFF   // always software
-	HardwareVAAPI Hardware = C.GK_HW_VAAPI // VA-API or fail, whatever the output
+	// (Options.DMABuf on a build with zero-copy export: VA-API on Linux),
+	// else in software: copying a decoded frame back from video memory
+	// costs more than decoding it on the CPU (2960×1848 H.264 on an RX 6700
+	// XT: 17.8 ms/frame through VA-API and a copy, 5.7 ms in software,
+	// 3.0 ms through VA-API and a DMA-BUF). If the GPU decoder cannot open,
+	// it decodes in software. GIOKIT_VIDEO overrides it (see the package
+	// doc).
+	HardwareAuto Hardware = C.GK_HW_AUTO
+	HardwareOff  Hardware = C.GK_HW_OFF // always software
+	// HardwareGPU decodes through the platform's API (VA-API on Linux,
+	// D3D11VA on Windows, VideoToolbox on macOS) or fails, whatever the
+	// output. With Options.DMABuf off, frames take the readback path.
+	HardwareGPU          Hardware = C.GK_HW_GPU
+	HardwareVAAPI        Hardware = C.GK_HW_VAAPI        // VA-API or fail, whatever the output
+	HardwareD3D11VA      Hardware = C.GK_HW_D3D11VA      // Direct3D 11 video or fail; readback only
+	HardwareVideoToolbox Hardware = C.GK_HW_VIDEOTOOLBOX // VideoToolbox or fail; readback only
 )
+
+// String returns the mode's lower-case name ("auto", "vaapi"), the same
+// names GIOKIT_VIDEO takes, or "hardware(n)" for an unknown value.
+func (h Hardware) String() string {
+	switch h {
+	case HardwareAuto:
+		return "auto"
+	case HardwareOff:
+		return "off"
+	case HardwareGPU:
+		return "gpu"
+	case HardwareVAAPI:
+		return "vaapi"
+	case HardwareD3D11VA:
+		return "d3d11va"
+	case HardwareVideoToolbox:
+		return "videotoolbox"
+	}
+	return fmt.Sprintf("hardware(%d)", int(h))
+}
+
+// PlatformHardware is the API HardwareAuto and HardwareGPU use on this
+// build: HardwareD3D11VA on Windows, HardwareVideoToolbox on macOS,
+// HardwareVAAPI elsewhere.
+func PlatformHardware() Hardware { return Hardware(C.gk_hw_platform()) }
+
+// Path is the way a frame left the decoder.
+type Path int
+
+const (
+	PathSoftware Path = iota // decoded on the CPU, RGBA in memory
+	PathReadback             // decoded on the GPU, copied back to RGBA in memory
+	PathZeroCopy             // decoded on the GPU, exported as a DMA-BUF
+)
+
+// String returns "software", "hw-readback" or "zero-copy".
+func (p Path) String() string {
+	switch p {
+	case PathSoftware:
+		return "software"
+	case PathReadback:
+		return "hw-readback"
+	case PathZeroCopy:
+		return "zero-copy"
+	}
+	return fmt.Sprintf("path(%d)", int(p))
+}
 
 // Options configure a Decoder. The zero value is right for live streams.
 type Options struct {
 	Hardware Hardware // where to decode; HardwareAuto is the zero value
-	// Device is the VA-API render node; "" picks the default.
+	// Device picks the GPU: the VA-API render node (/dev/dri/renderD129)
+	// or the D3D11 adapter index ("1"); VideoToolbox ignores it. ""
+	// picks the default.
 	Device string
 	// Buffered allows frame threading and reordering: more throughput, more
 	// latency. Leave it off for live video.
 	Buffered bool
 	// DMABuf asks for hardware frames as DMA-BUFs (GPU conversion, no copy)
 	// instead of RGBA in memory. Frames fall back to RGBA whenever export is
-	// not possible; check Frame.DMABuf.
+	// not possible (always, outside VA-API); check Frame.DMABuf. Leave it
+	// off to force the readback path.
 	DMABuf bool
 }
 
@@ -132,6 +209,18 @@ type Frame struct {
 	release       func()
 }
 
+// Path reports how the frame was produced: PathZeroCopy when DMABuf is set,
+// else PathReadback for a GPU-decoded frame, else PathSoftware.
+func (f Frame) Path() Path {
+	switch {
+	case f.DMABuf != nil:
+		return PathZeroCopy
+	case f.Hardware:
+		return PathReadback
+	}
+	return PathSoftware
+}
+
 // Release returns the frame's buffer for reuse; stop using Image or DMABuf
 // after it. It may run on any goroutine, also after the decoder is closed.
 // Calls after the first do nothing.
@@ -151,6 +240,47 @@ type DMABuf struct {
 	Fourcc        uint32 // DRM format, e.g. 'AB24' (ABGR8888: bytes R,G,B,A)
 	Modifier      uint64 // DRM format modifier (tiling)
 	Width, Height int    // image size in pixels
+}
+
+// zeroCopyBuild reports whether this build can export DMA-BUFs (for tests,
+// which cannot use cgo).
+func zeroCopyBuild() bool { return C.gk_zero_copy() != 0 }
+
+// failHardwareDevices makes every hardware device creation fail while
+// fail is set, for tests of the software fallback. Not for concurrent use
+// with decoders being opened.
+func failHardwareDevices(fail bool) {
+	f := C.int(0)
+	if fail {
+		f = 1
+	}
+	C.gk_set_fail_hwdevice(f)
+}
+
+// videoEnv is GIOKIT_VIDEO, read once.
+var videoEnv = sync.OnceValue(func() string { return os.Getenv("GIOKIT_VIDEO") })
+
+// applyEnv returns opt as the GIOKIT_VIDEO value env changes it. Only
+// HardwareAuto is overridden; unknown values change nothing.
+func applyEnv(opt Options, env string) Options {
+	if opt.Hardware != HardwareAuto {
+		return opt
+	}
+	switch env {
+	case "off", "software":
+		opt.Hardware = HardwareOff
+	case "readback":
+		opt.Hardware, opt.DMABuf = HardwareGPU, false
+	case "zerocopy":
+		opt.Hardware, opt.DMABuf = HardwareGPU, true
+	case "vaapi":
+		opt.Hardware = HardwareVAAPI
+	case "d3d11va":
+		opt.Hardware = HardwareD3D11VA
+	case "videotoolbox":
+		opt.Hardware = HardwareVideoToolbox
+	}
+	return opt
 }
 
 // ErrClosed is returned by a Decoder or File used after Close.
@@ -211,11 +341,13 @@ type Decoder struct {
 	size image.Point
 }
 
-// NewDecoder opens a decoder for codec.
+// NewDecoder opens a decoder for codec. Under HardwareAuto, GIOKIT_VIDEO
+// may change opt (see the package doc).
 func NewDecoder(codec Codec, opt Options) (*Decoder, error) {
+	opt = applyEnv(opt, videoEnv())
 	d := &Decoder{codec: codec, opt: opt}
 	hw := opt.Hardware
-	if hw == HardwareAuto && !opt.DMABuf {
+	if hw == HardwareAuto && !(opt.DMABuf && zeroCopyBuild()) {
 		hw = HardwareOff
 	}
 	if err := d.open(hw); err != nil {
@@ -251,7 +383,17 @@ func (d *Decoder) Codec() Codec { return d.codec }
 // Hardware reports whether the decoder runs on the GPU. A hardware decoder
 // may still hand out software frames for a stream the GPU cannot decode.
 // It is false after Close.
-func (d *Decoder) Hardware() bool { return d.c != nil && C.gk_dec_hw(d.c) != 0 }
+func (d *Decoder) Hardware() bool { return d.HardwareAPI() != HardwareOff }
+
+// HardwareAPI is the GPU API the decoder opened (HardwareVAAPI,
+// HardwareD3D11VA or HardwareVideoToolbox), or HardwareOff for a software
+// decoder and after Close.
+func (d *Decoder) HardwareAPI() Hardware {
+	if d.c == nil {
+		return HardwareOff
+	}
+	return Hardware(C.gk_dec_hw(d.c))
+}
 
 // DisableDMABuf stops DMA-BUF output, for a renderer that reported it
 // cannot import (paint.ImportUnsupported). Under HardwareAuto the decoder

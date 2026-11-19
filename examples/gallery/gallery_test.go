@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"gioui.org/io/key"
-	"gioui.org/io/pointer"
-	"gioui.org/layout"
+	"github.com/hhhapz/giokit/gio/io/key"
+	"github.com/hhhapz/giokit/gio/io/pointer"
+	"github.com/hhhapz/giokit/gio/layout"
 
 	"github.com/hhhapz/giokit/kit"
 	"github.com/hhhapz/giokit/kit/ui"
@@ -556,7 +556,9 @@ func TestThemeKnobs(t *testing.T) {
 		}
 		// leave the default selected for the next knob
 		def := map[string]int{"corners": 2, "ring": 1, "text": 1, "heading": 2, "elevation": 1, "controls": 1}[k.id]
-		h.ClickID(kit.Part("knob:"+k.id, k.options[def].label))
+		defID := kit.Part("knob:"+k.id, k.options[def].label)
+		scrollTo(t, h, g, defID)
+		h.ClickID(defID)
 	}
 	knobs := &g.theme.knobs
 	for _, c := range []struct {

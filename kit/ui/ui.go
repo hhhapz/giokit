@@ -62,8 +62,8 @@
 package ui
 
 import (
-	"gioui.org/io/semantic"
-	"gioui.org/layout"
+	"github.com/hhhapz/giokit/gio/io/semantic"
+	"github.com/hhhapz/giokit/gio/layout"
 
 	"github.com/hhhapz/giokit/kit"
 )

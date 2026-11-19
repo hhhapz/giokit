@@ -5,7 +5,7 @@ import (
 	"strings"
 	"time"
 
-	"gioui.org/layout"
+	"github.com/hhhapz/giokit/gio/layout"
 )
 
 // slowItem is the item layout time GIOKIT_TRACE reports as slow.

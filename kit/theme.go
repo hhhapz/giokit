@@ -4,11 +4,11 @@ import (
 	"image/color"
 	"time"
 
-	"gioui.org/font"
-	"gioui.org/font/gofont"
-	"gioui.org/text"
-	"gioui.org/unit"
-	"gioui.org/widget/material"
+	"github.com/hhhapz/giokit/gio/font"
+	"github.com/hhhapz/giokit/gio/font/gofont"
+	"github.com/hhhapz/giokit/gio/text"
+	"github.com/hhhapz/giokit/gio/unit"
+	"github.com/hhhapz/giokit/gio/widget/material"
 )
 
 // TypeScale is the theme's text sizes. Components read sizes from here, so a

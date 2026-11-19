@@ -19,8 +19,8 @@ import (
 	"path"
 	"sync"
 
-	"gioui.org/font"
-	"gioui.org/font/opentype"
+	"github.com/hhhapz/giokit/gio/font"
+	"github.com/hhhapz/giokit/gio/font/opentype"
 
 	"github.com/hhhapz/giokit/kit"
 )

@@ -3,8 +3,8 @@ package ui_test
 import (
 	"testing"
 
-	"gioui.org/io/key"
-	"gioui.org/layout"
+	"github.com/hhhapz/giokit/gio/io/key"
+	"github.com/hhhapz/giokit/gio/layout"
 
 	"github.com/hhhapz/giokit/kit"
 	"github.com/hhhapz/giokit/kit/ui"

@@ -29,11 +29,11 @@ import (
 	"sort"
 	"time"
 
-	"gioui.org/app"
-	"gioui.org/layout"
-	"gioui.org/op/clip"
-	"gioui.org/op/paint"
-	"gioui.org/unit"
+	"github.com/hhhapz/giokit/gio/app"
+	"github.com/hhhapz/giokit/gio/layout"
+	"github.com/hhhapz/giokit/gio/op/clip"
+	"github.com/hhhapz/giokit/gio/op/paint"
+	"github.com/hhhapz/giokit/gio/unit"
 
 	"github.com/hhhapz/giokit/kit"
 	_ "github.com/hhhapz/giokit/kit/forktrace" // Gio window events in GIOKIT_TRACE

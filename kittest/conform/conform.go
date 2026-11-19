@@ -26,10 +26,10 @@ import (
 	"image/color"
 	"testing"
 
-	"gioui.org/io/key"
-	"gioui.org/io/semantic"
-	"gioui.org/layout"
-	"gioui.org/op/paint"
+	"github.com/hhhapz/giokit/gio/io/key"
+	"github.com/hhhapz/giokit/gio/io/semantic"
+	"github.com/hhhapz/giokit/gio/layout"
+	"github.com/hhhapz/giokit/gio/op/paint"
 
 	"github.com/hhhapz/giokit/kit"
 	"github.com/hhhapz/giokit/kit/fonts"

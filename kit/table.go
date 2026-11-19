@@ -1,8 +1,8 @@
 package kit
 
 import (
-	"gioui.org/layout"
-	"gioui.org/unit"
+	"github.com/hhhapz/giokit/gio/layout"
+	"github.com/hhhapz/giokit/gio/unit"
 )
 
 // Column describes one table column. Width 0 means flexible (shares leftover space).

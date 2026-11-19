@@ -3,10 +3,10 @@ package kit
 import (
 	"image"
 
-	"gioui.org/io/semantic"
-	"gioui.org/layout"
-	"gioui.org/op"
-	"gioui.org/op/clip"
+	"github.com/hhhapz/giokit/gio/io/semantic"
+	"github.com/hhhapz/giokit/gio/layout"
+	"github.com/hhhapz/giokit/gio/op"
+	"github.com/hhhapz/giokit/gio/op/clip"
 )
 
 // Tag attaches a semantic description to the current clip area: the stable id

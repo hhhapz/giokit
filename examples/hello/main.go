@@ -7,8 +7,8 @@ import (
 	"log"
 	"os"
 
-	"gioui.org/layout"
-	"gioui.org/widget"
+	"github.com/hhhapz/giokit/gio/layout"
+	"github.com/hhhapz/giokit/gio/widget"
 
 	"github.com/hhhapz/giokit/kit"
 	"github.com/hhhapz/giokit/kit/ui"

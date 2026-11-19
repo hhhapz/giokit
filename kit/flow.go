@@ -3,9 +3,9 @@ package kit
 import (
 	"image"
 
-	"gioui.org/layout"
-	"gioui.org/op"
-	"gioui.org/unit"
+	"github.com/hhhapz/giokit/gio/layout"
+	"github.com/hhhapz/giokit/gio/op"
+	"github.com/hhhapz/giokit/gio/unit"
 )
 
 // Flow lays children out left to right, wrapping onto new lines when the

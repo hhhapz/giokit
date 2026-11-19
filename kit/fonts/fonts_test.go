@@ -3,7 +3,7 @@ package fonts
 import (
 	"testing"
 
-	"gioui.org/font"
+	"github.com/hhhapz/giokit/gio/font"
 )
 
 // Every set's UI and Mono typefaces must exist in its faces under exactly

@@ -3,10 +3,10 @@ package kit
 import (
 	"image"
 
-	"gioui.org/gesture"
-	"gioui.org/layout"
-	"gioui.org/op"
-	"gioui.org/op/clip"
+	"github.com/hhhapz/giokit/gio/gesture"
+	"github.com/hhhapz/giokit/gio/layout"
+	"github.com/hhhapz/giokit/gio/op"
+	"github.com/hhhapz/giokit/gio/op/clip"
 )
 
 // HoverArea tracks whether the pointer is over an area, including its

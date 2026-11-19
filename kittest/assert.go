@@ -6,7 +6,7 @@ import (
 	"image/color"
 	"slices"
 
-	"gioui.org/io/key"
+	"github.com/hhhapz/giokit/gio/io/key"
 )
 
 // bgTolerance is how far, per channel, ExpectBg lets a sampled colour stray

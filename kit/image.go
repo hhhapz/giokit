@@ -3,7 +3,7 @@ package kit
 import (
 	"image"
 
-	"gioui.org/op/paint"
+	"github.com/hhhapz/giokit/gio/op/paint"
 )
 
 // Image holds an uploaded image operation across frames, so the image is

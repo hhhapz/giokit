@@ -6,6 +6,7 @@
 #include <errno.h>
 #include <libavutil/error.h>
 
+int gk_vpp_available(void) { return 0; }
 gk_vpp *gk_vpp_open(AVBufferRef *hwdev, int w, int h, int *err) {
 	*err = AVERROR(ENOSYS);
 	return NULL;

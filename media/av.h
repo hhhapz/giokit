@@ -10,13 +10,31 @@ typedef struct gk_demux gk_demux;
 
 // Codec ids match media.Codec.
 enum { GK_H264 = 1, GK_H265 = 2, GK_AV1 = 3, GK_VP8 = 4, GK_VP9 = 5 };
-// Hardware modes match media.Hardware.
-enum { GK_HW_AUTO = 0, GK_HW_OFF = 1, GK_HW_VAAPI = 2 };
+// Hardware modes match media.Hardware. AUTO uses the platform's API and
+// falls back to software; GPU uses it or fails; VAAPI, D3D11VA and
+// VIDEOTOOLBOX force one API or fail with AVERROR(ENODEV).
+enum {
+	GK_HW_AUTO = 0,
+	GK_HW_OFF = 1,
+	GK_HW_VAAPI = 2,
+	GK_HW_D3D11VA = 3,
+	GK_HW_VIDEOTOOLBOX = 4,
+	GK_HW_GPU = 5,
+};
+// gk_hw_platform is the API AUTO and GPU use on this build: D3D11VA on
+// Windows, VideoToolbox on macOS, VA-API elsewhere.
+int gk_hw_platform(void);
+// gk_zero_copy is 1 if this build can export hardware frames as DMA-BUFs
+// (VA-API on Linux).
+int gk_zero_copy(void);
 
 // Decoder. Errors are negative AVERROR codes; gk_err formats them.
 gk_dec *gk_dec_open(int codec, int hw, const char *device, int low_delay, int *err);
+void gk_set_fail_hwdevice(int fail); // tests: every hwdevice creation fails
 void gk_dec_close(gk_dec *d);
-int gk_dec_hw(gk_dec *d); // 1 if frames come from the hardware decoder
+// gk_dec_hw is the hardware API the decoder opened (GK_HW_VAAPI, ...), or
+// GK_HW_OFF in software.
+int gk_dec_hw(gk_dec *d);
 int gk_dec_send(gk_dec *d, const uint8_t *data, int size, int64_t pts, int key);
 int gk_dec_flush(gk_dec *d); // signal end of stream
 // gk_dec_receive returns 0 with a frame ready, AVERROR(EAGAIN) when it needs
@@ -26,7 +44,7 @@ void gk_dec_frame_info(gk_dec *d, int *w, int *h, int64_t *pts, int *hw);
 // gk_dec_frame_rgba converts the received frame to RGBA in dst (w*h, stride).
 int gk_dec_frame_rgba(gk_dec *d, uint8_t *dst, int stride);
 // gk_dec_frame_dmabuf maps the received hardware frame as one RGBA DMA-BUF
-// plane, converting on the GPU. It fills the descriptor and returns an
+// plane, converting on the GPU (VA-API only). It fills the descriptor and returns an
 // opaque handle to release with gk_dmabuf_release once the buffer is no
 // longer sampled. Returns NULL (and *err) if unavailable.
 typedef struct {

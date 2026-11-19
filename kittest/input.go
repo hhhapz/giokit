@@ -6,10 +6,10 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"gioui.org/f32"
-	"gioui.org/io/input"
-	"gioui.org/io/key"
-	"gioui.org/io/pointer"
+	"github.com/hhhapz/giokit/gio/f32"
+	"github.com/hhhapz/giokit/gio/io/input"
+	"github.com/hhhapz/giokit/gio/io/key"
+	"github.com/hhhapz/giokit/gio/io/pointer"
 
 	"github.com/hhhapz/giokit/kit"
 )
@@ -182,6 +182,21 @@ func (h *Harness) Key(name key.Name, mods key.Modifiers) {
 	}
 	h.router.Queue(key.Event{Name: name, Modifiers: mods, State: key.Release})
 	h.after(fmt.Sprintf("key %v%v", mods, name))
+}
+
+// KeyDown presses a key and holds it: a held modifier ("Ctrl" while
+// testing a hint that shows during the hold). Release it with KeyUp.
+func (h *Harness) KeyDown(name key.Name, mods key.Modifiers) {
+	h.tb.Helper()
+	h.router.Queue(key.Event{Name: name, Modifiers: mods, State: key.Press})
+	h.after(fmt.Sprintf("key down %v%v", mods, name))
+}
+
+// KeyUp releases a key KeyDown pressed.
+func (h *Harness) KeyUp(name key.Name, mods key.Modifiers) {
+	h.tb.Helper()
+	h.router.Queue(key.Event{Name: name, Modifiers: mods, State: key.Release})
+	h.after(fmt.Sprintf("key up %v%v", mods, name))
 }
 
 // Keys presses and releases each key in turn, delivering them all to the

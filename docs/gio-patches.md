@@ -1,45 +1,56 @@
-# Gio Patches (`third_party/gioui.org`)
+# Gio Fork (`gio/`)
 
-`giokit` works with stock upstream Gio (`gioui.org@v0.10.3`) and also maintains an optional patch series in `third_party/gioui.org`.
+`giokit` carries a hard fork of [Gio](https://gioui.org) in `gio/`, imported as `github.com/hhhapz/giokit/gio/...`: `go get github.com/hhhapz/giokit` brings it along, with no `replace` directive. Apps import `github.com/hhhapz/giokit/gio/app`, `.../gio/layout` and so on instead of `gioui.org/...`. It holds upstream `gioui.org`, the `gioui.org/shader` packages Gio uses (`shader`, `shader/gio`, `cmd/convertshaders`) and `gioui.org/x/styledtext`; `gio/UPSTREAM` records the upstream versions. Gio's license (Unlicense OR MIT) stays in `gio/LICENSE`.
 
-To use the patched fork in an application, add a `replace` directive to your `go.mod`:
+Nothing in an app's dependency graph may import upstream `gioui.org`: two Gios cannot link into one binary (their cgo exports collide), and their types never mix. Bring a Gio library into `gio/` (add it to `modules` in `scripts/gio-sync.sh`) rather than depending on it.
 
-```go
-replace gioui.org => /path/to/giokit/third_party/gioui.org
-```
+Linker flags name the fork's path: `-ldflags="-X 'github.com/hhhapz/giokit/gio/app.ID=com.example.App'"`.
 
-The fork is required by `kit/x/video` and `media` (which use `paint.Stream`) and `kit/forktrace` (which uses window trace hooks), and is optional for other packages.
+## Working With Upstream (`scripts/gio-sync.sh`)
 
-## The Patch Series (`third_party/patches`)
+The rewrite is one text substitution on Go files, `"gioui.org/` to `"github.com/hhhapz/giokit/gio/`; doc comments keep upstream names. Because it is a pure substitution, whole trees and single patches rewrite identically:
 
-The fork is upstream `gioui.org@v0.10.3` plus seven patches managed by `./scripts/gio-fork.sh`:
+- **Snapshot commits** (`gio: upstream gioui.org@… gioui.org/shader@… gioui.org/x@…`) hold pristine rewritten upstream and change nothing but `gio/`. Each new one is parented on the previous one. The newest reachable from `HEAD` is the **base**: our changes are what came after it. No branch holds upstream. Squash anything else freely, but never squash a snapshot commit into another commit, or the base is lost.
+- **Bump Gio:** `scripts/gio-sync.sh update v0.11.0 [shader] [x]` commits a snapshot of those versions on top of the base and merges it into `HEAD`. Conflicts appear only where we changed Gio. Drop our changes that upstream merged, and remove skips or workarounds they made unnecessary. Versions are anything `go mod download` takes, so a commit hash tracks upstream `main`.
+- **Take one upstream fix early:** `scripts/gio-sync.sh pick <sha>` applies that upstream commit to master (`git am`, rewritten).
+- **Send a change upstream:** `scripts/gio-sync.sh export [rev-range]` writes our `gio/` commits (by default everything since the base) as patches against upstream paths, for `git send-email` to `~eliasnaur/gio-patches@lists.sr.ht`.
+- **Check:** `scripts/gio-sync.sh check` (in CI) rebuilds the snapshot of the base's versions and compares it with the base, and fails if a module requires upstream `gioui.org`.
+- **Our differences:** `git diff <base> -- gio/`, where the base is `git log -1 --format=%h --grep='^gio: upstream '`.
 
-| Patch | Concern |
+Rules for changes in `gio/`:
+1. A commit touches either `gio/` or the rest of the repository, never both, so every Gio change can be exported or reverted on its own.
+2. Subjects start with `gio`; to send one concern upstream, export its commit, or split it out of a larger one first.
+3. Prefer new files (`giokit_*.go`) over edits to upstream files; keep edits to upstream files small. Merge conflicts grow with the lines changed in upstream's files, not with what we add.
+4. Mark edits inside upstream files with a `giokit:` comment saying why.
+
+`go test ./...` runs Gio's tests too. `TestIndexPositionRunes/many_newlines` is skipped: it fails on upstream v0.10.3.
+
+## Changes
+
+Our changes to upstream v0.10.3, by area:
+
+| Area | Change |
 |---|---|
-| `0001-vulkan` | Asks for Vulkan 1.1 and adds `GIOKIT_GPU` backend selection to headless rendering. |
-| `0002-wayland-cursor-wheel-trace` | Wayland cursor reload on scale change, even high-resolution wheel scaling, Vulkan before EGL, and `app.GiokitTrace` hooks. |
-| `0003-label-clips-to-text` | Clips `widget.Label` semantic bounds to laid-out text size. |
-| `0004-source-bounds-focus` | Adds `Source.Bounds` and `Source.FocusedTag` on `input.Source`. |
-| `0005-semantic-image` | Adds `semantic.Image` to `io/semantic`. |
-| `0006-editor-keys` | Adds `Ctrl+Backspace`/`Delete` word delete (Windows, Linux), selection collapse on `Left`/`Right`, and single-line `Up`/`Down`. |
-| `0007-paint-stream-dmabuf` | Adds cross-platform `paint.Stream` (Metal, Direct3D 11, OpenGL ES, Vulkan, WebGL) plus zero-copy Linux DMA-BUF texture import (OpenGL ES and Vulkan). |
-
-### Maintaining the Patches
-
-- After editing `third_party/gioui.org`, run `./scripts/gio-fork.sh diff` to regenerate the patch files and `./scripts/gio-fork.sh check` to verify that applying the patches to a clean v0.10.3 tree reproduces `third_party/gioui.org`.
-- To upgrade Gio to a new tag, run `./scripts/gio-fork.sh apply vX.Y.Z`, resolve any conflicts, drop any patches merged upstream, and run `diff` and `check`.
+| Vulkan | Asks for Vulkan 1.1 and adds `GIOKIT_GPU` backend selection to headless rendering. |
+| Wayland | Wayland cursor reload on scale change, even high-resolution wheel scaling, Vulkan before EGL, and `app.GiokitTrace` hooks. |
+| Labels | Clips `widget.Label` semantic bounds to laid-out text size. |
+| Input | Adds `Source.Bounds` and `Source.FocusedTag` on `input.Source`. |
+| Semantics | Adds `semantic.Image` to `io/semantic`. |
+| Editor | Adds `Ctrl+Backspace`/`Delete` word delete (Windows, Linux), selection collapse on `Left`/`Right`, and single-line `Up`/`Down`. |
+| Streams | Adds cross-platform `paint.Stream` (Metal, Direct3D 11, OpenGL ES, Vulkan, WebGL) plus zero-copy Linux DMA-BUF texture import (OpenGL ES and Vulkan). |
+| Headless | Falls back to WARP on Direct3D 11 without a GPU; `GIOKIT_GPU=warp` forces it. |
 
 ## Patch Details
 
-### 1. Vulkan 1.1 and Backend Selection (`0001-vulkan`)
+### 1. Vulkan 1.1 and Backend Selection 
 
-Like upstream, the fork builds Vulkan on Linux/FreeBSD, so building needs the system `vulkan-headers` package (`internal/vk` includes `<vulkan/vulkan.h>`); `-tags novulkan` builds OpenGL only. Gio loads `libvulkan` at runtime, so a binary built with Vulkan still starts where Vulkan is missing and uses EGL.
+Like upstream, giokit builds Vulkan on Linux/FreeBSD, so building needs the system `vulkan-headers` package (`internal/vk` includes `<vulkan/vulkan.h>`); `-tags novulkan` builds OpenGL only. Gio loads `libvulkan` at runtime, so a binary built with Vulkan still starts where Vulkan is missing and uses EGL.
 
-`vk.CreateInstance` asks for Vulkan 1.1 where the loader has it (DMA-BUF import, patch 7, needs it), else 1.0.
+`vk.CreateInstance` asks for Vulkan 1.1 where the loader has it (DMA-BUF import needs it), else 1.0.
 
-`GIOKIT_GPU` picks the backend: `vulkan` uses only Vulkan, `opengl` never uses it. Headless rendering (`gpu/headless`, which kittest uses) keeps EGL first and Vulkan as the fallback, so `GIOKIT_GPU=vulkan go test ./...` is how to cover the Vulkan renderer. Windows on Wayland honour it too (patch 2).
+`GIOKIT_GPU` picks the backend: `vulkan` uses only Vulkan, `opengl` never uses it. Headless rendering (`gpu/headless`, which kittest uses) keeps EGL first and Vulkan as the fallback, so `GIOKIT_GPU=vulkan go test ./...` is how to cover the Vulkan renderer. Windows on Wayland honour it too (the Wayland change).
 
-### 2. Wayland Cursor Reload, High-Res Wheel Scaling, Backend Order, and Trace Hooks (`0002-wayland-cursor-wheel-trace`)
+### 2. Wayland Cursor Reload, High-Res Wheel Scaling, Backend Order, and Trace Hooks 
 
 #### Vulkan Before EGL (`app/os_wayland.go`)
 Upstream `NewContext` on Wayland tries EGL first and Vulkan only if EGL fails. The patch tries Vulkan first: on Mesa, the GL driver (`libgallium`) costs about 30 MB more RSS per process than RADV (the gallery idles at about 85 MB on Vulkan and 120 MB on GL). EGL remains the fallback when there is no Vulkan driver or device creation fails; `GIOKIT_GPU=opengl` or `GIOKIT_GPU=vulkan` forces one. X11 keeps upstream's order (Vulkan is disabled there: `vulkanBuggy`, gio#347).
@@ -57,19 +68,19 @@ In `app/giokit_scroll.go` (`wheelScale`), a frame with a discrete step is scaled
 #### Debug Trace Hooks (`app/giokit_trace.go`)
 Adds `app.GiokitTrace`, called from `os_wayland.go` and `window.go` on axis events, frame callbacks, draw passes, and GPU presentation. Importing `_ "github.com/hhhapz/giokit/kit/forktrace"` installs the hook when `GIOKIT_TRACE` is set.
 
-### 3. Labels Clip to Their Text (`0003-label-clips-to-text`)
+### 3. Labels Clip to Their Text 
 
 Upstream `widget.Label.LayoutDetailed` clips glyphs to `gtx.Constraints.Max`, causing semantic bounds for labels to span the full container height. The patch clips to the laid-out text size plus glyph padding.
 
-### 4. Area Bounds and Focus Queries (`0004-source-bounds-focus`)
+### 4. Area Bounds and Focus Queries 
 
 Adds `Source.Bounds(tag)` and `Source.FocusedTag()` in `io/input/giokit_bounds.go`.
 
-### 5. Semantic Image Role (`0005-semantic-image`)
+### 5. Semantic Image Role 
 
 Appends `semantic.Image` in `io/semantic/semantic.go`.
 
-### 6. Native Editing Keys (`0006-editor-keys`)
+### 6. Native Editing Keys 
 
 Adds three desktop editing behaviors to `widget/editor.go` and `widget/text.go`:
 
@@ -79,7 +90,7 @@ Adds three desktop editing behaviors to `widget/editor.go` and `widget/text.go`:
 | `Left` / `Right` with a selection | Collapses caret to the left / right edge of the selection | Clears selection and moves caret one character from its old end |
 | `Up` / `Down` in a single-line editor | Moves caret to the start / end of the line | Calls `MoveLines` on the single line, leaving the caret in place |
 
-### 7. Streaming Images and DMA-BUF Import (`0007-paint-stream-dmabuf`)
+### 7. Streaming Images and DMA-BUF Import 
 
 #### `paint.Stream` (`op/paint/stream.go`, `internal/stream`, `gpu/gpu.go`)
 An `ImageOp` in Gio is immutable: displaying video with `paint.NewImageOp` per frame creates a new cache key, allocates a new texture, uploads CPU pixels, and builds mipmaps every frame.

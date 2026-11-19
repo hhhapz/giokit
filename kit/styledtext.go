@@ -4,13 +4,13 @@ import (
 	"image"
 	"strings"
 
-	"gioui.org/font"
-	"gioui.org/io/semantic"
-	"gioui.org/layout"
-	"gioui.org/op"
-	"gioui.org/op/clip"
-	"gioui.org/unit"
-	"gioui.org/x/styledtext"
+	"github.com/hhhapz/giokit/gio/font"
+	"github.com/hhhapz/giokit/gio/io/semantic"
+	"github.com/hhhapz/giokit/gio/layout"
+	"github.com/hhhapz/giokit/gio/op"
+	"github.com/hhhapz/giokit/gio/op/clip"
+	"github.com/hhhapz/giokit/gio/unit"
+	"github.com/hhhapz/giokit/gio/x/styledtext"
 )
 
 // TextSpan is a themed run in one wrapping paragraph. The zero-valued size

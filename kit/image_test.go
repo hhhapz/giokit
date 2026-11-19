@@ -4,7 +4,7 @@ import (
 	"image"
 	"testing"
 
-	"gioui.org/op/paint"
+	"github.com/hhhapz/giokit/gio/op/paint"
 )
 
 // TestImageSetNilReleases: clearing an Image must not keep the old image

@@ -4,7 +4,7 @@ import (
 	"image"
 	"iter"
 
-	"gioui.org/io/input"
+	"github.com/hhhapz/giokit/gio/io/input"
 )
 
 // semanticRoot returns the root of the router's semantic tree as a

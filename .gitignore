@@ -16,3 +16,6 @@
 /docs/roadmap.md
 /docs/design/
 CLAUDE.md
+
+# Static FFmpeg from scripts/ffmpeg-static.sh.
+/build/

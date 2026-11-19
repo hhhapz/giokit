@@ -42,7 +42,7 @@ jobs:
             libffi-dev libxcursor-dev libvulkan-dev libegl-mesa0 mesa-utils
       - name: gofmt
         run: test -z "$(gofmt -l kit kittest examples desktop internal media)" || { gofmt -l kit kittest examples desktop internal media; exit 1; }
-      - run: go vet ./...
+      - run: ./scripts/vet.sh
       - name: Test (final frame per test and contact sheets saved)
         run: KITTEST_SHOTS=${{ runner.temp }}/shots go test ./...
       - uses: actions/upload-artifact@v4
@@ -52,51 +52,20 @@ jobs:
           path: ${{ runner.temp }}/shots
           if-no-files-found: ignore
 
-  # kit, kit/ui, kit/x and kittest must build and pass on stock Gio: apps
-  # can depend on giokit without the fork (only kit/x/video and
-  # kit/forktrace need it).
-  stock-gio:
-    runs-on: ubuntu-24.04
-    env:
-      LIBGL_ALWAYS_SOFTWARE: "1"
-      KITTEST_REQUIRE_GPU: "1"
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-      - name: Gio build deps and Mesa
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            gcc pkg-config libwayland-dev libx11-dev libx11-xcb-dev \
-            libxkbcommon-x11-dev libgles2-mesa-dev libegl1-mesa-dev \
-            libffi-dev libxcursor-dev libegl-mesa0 mesa-utils
-      - run: ./scripts/stock-gio.sh
-
-  # third_party/gioui.org is a nested module, outside the root's ./...:
-  # prove the patch series rebuilds it exactly, and run the tests of the
-  # packages the patches touch.
-  gio-fork:
+  # gio/ is our Gio fork. Prove its base, the newest "gio: upstream"
+  # snapshot commit, is exactly the rewritten upstream at its versions, and
+  # that nothing requires upstream gioui.org (gio's tests run in linux).
+  # The full history is needed to find the base.
+  gio-sync:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-      - name: Gio build deps
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            gcc pkg-config patch libwayland-dev libx11-dev libx11-xcb-dev \
-            libxkbcommon-x11-dev libgles2-mesa-dev libegl1-mesa-dev \
-            libffi-dev libxcursor-dev
-      - name: Patch series reproduces the fork
-        run: ./scripts/gio-fork.sh check
-      - name: Test patched packages
-        working-directory: third_party/gioui.org
-        # TestIndexPositionRunes fails on unpatched upstream v0.10.3 too.
-        run: go test -skip '^TestIndexPositionRunes$' ./app/ ./gpu/ ./internal/stream/ ./io/input/ ./widget/
+      - run: ./scripts/gio-sync.sh check
 
   # media is a separate module (cgo, FFmpeg), outside the root's ./...
   # Tests that need a codec, a GPU context or VA-API/DMA-BUF export skip
@@ -117,7 +86,7 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             gcc pkg-config libwayland-dev libx11-dev libx11-xcb-dev \
             libxkbcommon-x11-dev libgles2-mesa-dev libegl1-mesa-dev \
-            libffi-dev libxcursor-dev libegl-mesa0 mesa-utils \
+            libffi-dev libxcursor-dev libvulkan-dev libegl-mesa0 mesa-utils \
             libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libva-dev
       - working-directory: media
         run: go vet ./...
@@ -127,6 +96,213 @@ jobs:
       - name: Report skipped media tests
         if: always()
         run: grep -- '--- SKIP' ${{ runner.temp }}/media-test.log || true
+
+  # The root module on Windows: headless rendering through Direct3D 11 (the
+  # runner has no GPU; its default adapter is the Microsoft Basic Render
+  # Driver, i.e. WARP). Gio needs no cgo here.
+  windows:
+    runs-on: windows-latest
+    env:
+      KITTEST_REQUIRE_GPU: "1"
+    defaults:
+      run:
+        shell: bash
+    steps:
+      # Keep LF: tests compare text files byte for byte.
+      - run: git config --global core.autocrlf false
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: ./scripts/vet.sh
+      - run: go test ./...
+
+  # The root module on macOS: headless rendering through Metal (runners are
+  # VMs with a paravirtual GPU); Gio's macOS backend uses cgo (Xcode clang).
+  # The Intel entry only builds and vets: it proves amd64 compiles.
+  macos:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            test: true
+          - os: macos-15-intel
+            test: false
+    env:
+      KITTEST_REQUIRE_GPU: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: ./scripts/vet.sh
+      - if: matrix.test
+        run: go test ./...
+      - if: ${{ !matrix.test }}
+        name: Build tests
+        run: go test -run '^$' ./...
+
+  # media against MSYS2's FFmpeg (mingw-w64, UCRT). Hardware tests skip
+  # themselves; the software decode and stream (D3D11) tests run.
+  media-windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - run: git config --global core.autocrlf false
+        shell: bash
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: media/go.mod
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          path-type: inherit # keep setup-go's Go on PATH
+          install: >-
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-pkgconf
+            mingw-w64-ucrt-x86_64-ffmpeg
+      - name: Test
+        working-directory: media
+        env:
+          CGO_ENABLED: "1"
+          CC: gcc
+        run: |
+          set -eo pipefail
+          go env CC GOOS
+          which gcc pkg-config
+          go vet ./...
+          go test -v ./... 2>&1 | tee media-test.log
+      - name: Report skipped media tests
+        if: always()
+        run: grep -- '--- SKIP' media/media-test.log || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: media-test-windows
+          path: media/media-test.log
+          if-no-files-found: ignore
+
+  # media against Homebrew's FFmpeg; the stream tests render through Metal.
+  media-macos:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: media/go.mod
+      - run: brew install ffmpeg pkgconf
+      - name: Test
+        working-directory: media
+        shell: bash
+        run: |
+          set -eo pipefail
+          go vet ./...
+          go test -v ./... 2>&1 | tee media-test.log
+      - name: Report skipped media tests
+        if: always()
+        run: grep -- '--- SKIP' media/media-test.log || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: media-test-macos
+          path: media/media-test.log
+          if-no-files-found: ignore
+
+  # The opt-in static FFmpeg: scripts/ffmpeg-static.sh builds it (cached on
+  # the script's hash), media's tests pass linked against it, and the test
+  # binary does not load FFmpeg dynamically (libva stays shared on Linux).
+  ffmpeg-static:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            shell: bash
+          - os: windows-latest
+            shell: msys2 {0}
+          - os: macos-14
+            shell: bash
+    defaults:
+      run:
+        shell: ${{ matrix.shell }}
+    env:
+      LIBGL_ALWAYS_SOFTWARE: "1"
+    steps:
+      - if: runner.os == 'Windows'
+        run: git config --global core.autocrlf false
+        shell: bash
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: media/go.mod
+      - if: runner.os == 'Linux'
+        name: Build tools, Gio deps, libva, Mesa
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            gcc make nasm meson ninja-build pkg-config libva-dev \
+            libwayland-dev libx11-dev libx11-xcb-dev libxkbcommon-x11-dev \
+            libgles2-mesa-dev libegl1-mesa-dev libffi-dev libxcursor-dev libvulkan-dev \
+            libegl-mesa0 mesa-utils
+      - if: runner.os == 'macOS'
+        run: brew install meson ninja pkgconf
+      - if: runner.os == 'Windows'
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          path-type: inherit
+          install: >-
+            make diffutils tar xz
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-pkgconf
+            mingw-w64-ucrt-x86_64-nasm
+            mingw-w64-ucrt-x86_64-meson
+            mingw-w64-ucrt-x86_64-ninja
+      - id: cache
+        uses: actions/cache@v4
+        with:
+          path: build/ffmpeg
+          key: ffmpeg-static-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/ffmpeg-static.sh') }}
+      - if: steps.cache.outputs.cache-hit != 'true'
+        run: ./scripts/ffmpeg-static.sh
+      - name: Test
+        working-directory: media
+        env:
+          CGO_ENABLED: "1"
+        run: |
+          set -eo pipefail
+          go vet -tags ffmpeg_static ./...
+          go test -v -tags ffmpeg_static ./... 2>&1 | tee media-test.log
+      - name: FFmpeg is linked statically
+        working-directory: media
+        env:
+          CGO_ENABLED: "1"
+        run: |
+          set -eo pipefail
+          go test -c -tags ffmpeg_static -o media.test.exe .
+          case "$RUNNER_OS" in
+          Linux) deps=$(ldd media.test.exe) ;;
+          Windows) deps=$(objdump -p media.test.exe | grep 'DLL Name') ;;
+          macOS) deps=$(otool -L media.test.exe) ;;
+          esac
+          echo "$deps"
+          if grep -Eiq 'avcodec|avformat|avutil|swscale|dav1d' <<<"$deps"; then
+            echo "FFmpeg is linked dynamically" >&2
+            exit 1
+          fi
+          if [ "$RUNNER_OS" = Linux ] && ! grep -q 'libva\.so' <<<"$deps"; then
+            echo "libva must stay a shared library" >&2
+            exit 1
+          fi
+      - name: Report skipped media tests
+        if: always()
+        run: grep -- '--- SKIP' media/media-test.log || true
 
   cross:
     runs-on: ubuntu-24.04

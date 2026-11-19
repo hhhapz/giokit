@@ -6,9 +6,9 @@ import (
 	"io"
 	"strings"
 
-	"gioui.org/f32"
-	"gioui.org/io/input"
-	"gioui.org/io/semantic"
+	"github.com/hhhapz/giokit/gio/f32"
+	"github.com/hhhapz/giokit/gio/io/input"
+	"github.com/hhhapz/giokit/gio/io/semantic"
 
 	"github.com/hhhapz/giokit/kit"
 )

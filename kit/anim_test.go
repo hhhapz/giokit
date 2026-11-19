@@ -4,8 +4,8 @@ import (
 	"testing"
 	"time"
 
-	"gioui.org/layout"
-	"gioui.org/op"
+	"github.com/hhhapz/giokit/gio/layout"
+	"github.com/hhhapz/giokit/gio/op"
 )
 
 // TestTweenFromKeepsEasing: replaying a transition with From keeps the

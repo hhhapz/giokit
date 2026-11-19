@@ -232,7 +232,16 @@ Package `github.com/hhhapz/giokit/desktop` provides a cross-platform interface (
 - `SaveFile(ctx, desktop.SaveOptions{Title, Name, Folder, Filters}) (string, error)`
 - `OpenURL(ctx, url) error`
 
-`desktop.System()` returns the host OS implementation (XDG Desktop Portals on Linux today; returns `desktop.ErrUnsupported` where not yet implemented). Dismissing a dialog returns `desktop.ErrCancelled`. Because native dialogs block waiting for user input, call them inside `kit.Spawn`:
+`desktop.System()` returns the host OS implementation:
+
+- **Linux:** XDG desktop portals over D-Bus. Without a FileChooser portal (no session bus, or no portal implementing it), the choosers run `zenity`, then `kdialog` (`kdialog` first on KDE Plasma).
+- **Windows:** the Common Item Dialog (`IFileOpenDialog`/`IFileSaveDialog`) through COM, without cgo; links through `ShellExecute`.
+- **macOS:** `NSOpenPanel`/`NSSavePanel` through cgo (macOS 11+); links through `open`. Built with `CGO_ENABLED=0`, the choosers return `desktop.ErrUnsupported`.
+- **Elsewhere:** `desktop.ErrUnsupported`.
+
+Every system answers the same way: dismissing a dialog returns `desktop.ErrCancelled`, and when `ctx` ends the call returns `ctx.Err()` at once and closes the dialog as if cancelled. Dialogs have no parent window, so the app keeps drawing while one is open. macOS panels take one set of extensions rather than a filter list, so there the filters' `*.ext` patterns are merged (any other pattern shows every file).
+
+Native dialogs block waiting for user input, so call them inside `kit.Spawn`, never on the UI goroutine. On macOS that would deadlock: the panel runs on the main thread, which may be waiting for the UI goroutine's frame.
 
 ```go
 v.openTask = kit.Spawn(v.app, func(ctx context.Context) ([]string, error) {
@@ -244,4 +253,4 @@ v.openTask = kit.Spawn(v.app, func(ctx context.Context) ([]string, error) {
 })
 ```
 
-In tests, pass a `*desktop.Fake` instead of `desktop.System()`. Set `fake.Paths`, `fake.Path`, or `fake.Err`, and inspect `fake.Calls` (`[]desktop.Choice`) after `h.RunTasks()`.
+In tests, pass a `*desktop.Fake` instead of `desktop.System()`. Set `fake.Open`, `fake.Save`, or `fake.Err`, and inspect `fake.Choices` (`[]desktop.Choice`) and `fake.Opened` after `h.RunTasks()`.

@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"testing"
 
-	"gioui.org/io/key"
+	"github.com/hhhapz/giokit/gio/io/key"
 
 	"github.com/hhhapz/giokit/kit"
 )

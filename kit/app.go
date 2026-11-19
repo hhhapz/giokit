@@ -7,11 +7,11 @@ import (
 	"sync/atomic"
 	"time"
 
-	"gioui.org/app"
-	"gioui.org/io/system"
-	"gioui.org/layout"
-	"gioui.org/op"
-	"gioui.org/unit"
+	"github.com/hhhapz/giokit/gio/app"
+	"github.com/hhhapz/giokit/gio/io/system"
+	"github.com/hhhapz/giokit/gio/layout"
+	"github.com/hhhapz/giokit/gio/op"
+	"github.com/hhhapz/giokit/gio/unit"
 )
 
 // App runs a single-window program. All app state belongs to the UI goroutine

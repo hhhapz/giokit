@@ -5,11 +5,11 @@ import (
 	"image/color"
 	"math"
 
-	"gioui.org/f32"
-	"gioui.org/layout"
-	"gioui.org/op/clip"
-	"gioui.org/op/paint"
-	"gioui.org/unit"
+	"github.com/hhhapz/giokit/gio/f32"
+	"github.com/hhhapz/giokit/gio/layout"
+	"github.com/hhhapz/giokit/gio/op/clip"
+	"github.com/hhhapz/giokit/gio/op/paint"
+	"github.com/hhhapz/giokit/gio/unit"
 )
 
 // Icon draws a vector glyph in a size×size square and returns that size.
@@ -215,6 +215,18 @@ func IconSun(gtx layout.Context, size unit.Dp, c color.NRGBA) layout.Dimensions 
 		a := float64(i) * math.Pi / 4
 		cs, sn := float32(math.Cos(a)), float32(math.Sin(a))
 		stroke(gtx, size, c, 2, f32.Pt(12+7*cs, 12+7*sn), f32.Pt(12+9.5*cs, 12+9.5*sn))
+	}
+	return layout.Dimensions{Size: image.Pt(gtx.Dp(size), gtx.Dp(size))}
+}
+
+// IconSettings is a gear: settings or preferences.
+func IconSettings(gtx layout.Context, size unit.Dp, c color.NRGBA) layout.Dimensions {
+	arc(gtx, size, c, 2, 12, 12, 6, 0, 360)
+	arc(gtx, size, c, 2, 12, 12, 2.5, 0, 360)
+	for i := 0; i < 8; i++ {
+		a := float64(i)*math.Pi/4 + math.Pi/8
+		cs, sn := float32(math.Cos(a)), float32(math.Sin(a))
+		stroke(gtx, size, c, 3, f32.Pt(12+7.2*cs, 12+7.2*sn), f32.Pt(12+9*cs, 12+9*sn))
 	}
 	return layout.Dimensions{Size: image.Pt(gtx.Dp(size), gtx.Dp(size))}
 }

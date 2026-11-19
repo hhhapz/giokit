@@ -5,16 +5,51 @@ package desktop
 import (
 	"context"
 	"crypto/rand"
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
+	"slices"
 	"strings"
 
 	"github.com/godbus/dbus/v5"
 )
 
-// system is the Linux desktop through the XDG portals.
-type system struct{}
+// system is the Linux desktop through the XDG portals. Where the session
+// has no FileChooser portal (no session bus, or no portal service
+// implementing it), the choosers fall back to the zenity or kdialog
+// programs (helper_linux.go). The zero value runs real processes.
+type system struct {
+	cmds commands // the fallback's process seam
+}
+
+// errNoPortal marks an error that means the portal is missing, not that it
+// failed: the session bus is unreachable, or nothing on it implements the
+// method.
+var errNoPortal = errors.New("portal unavailable")
+
+// missingNames are the D-Bus errors that mean nothing serves a method.
+var missingNames = []string{
+	"org.freedesktop.DBus.Error.ServiceUnknown",
+	"org.freedesktop.DBus.Error.NameHasNoOwner",
+	"org.freedesktop.DBus.Error.UnknownMethod",
+	"org.freedesktop.DBus.Error.UnknownInterface",
+	"org.freedesktop.DBus.Error.UnknownObject",
+}
+
+// missing reports whether err, from a method call, means nothing on the
+// bus serves the method, including a service that failed to activate.
+func missing(err error) bool {
+	var e dbus.Error
+	if !errors.As(err, &e) {
+		var p *dbus.Error
+		if !errors.As(err, &p) || p == nil {
+			return false
+		}
+		e = *p
+	}
+	return slices.Contains(missingNames, e.Name) || strings.HasPrefix(e.Name, "org.freedesktop.DBus.Error.Spawn.")
+}
 
 // D-Bus names of the portal service and the methods giokit calls.
 const (
@@ -100,8 +135,32 @@ func paths(method string, res map[string]dbus.Variant) ([]string, error) {
 	return out, nil
 }
 
-// OpenFile uses the FileChooser portal's OpenFile.
-func (system) OpenFile(ctx context.Context, o FileOptions) ([]string, error) {
+// OpenFile uses the FileChooser portal's OpenFile, or zenity or kdialog
+// without the portal.
+func (s system) OpenFile(ctx context.Context, o FileOptions) ([]string, error) {
+	ps, err := portalOpenFile(ctx, o)
+	if errors.Is(err, errNoPortal) {
+		return s.cmds.choose(ctx, err, o.Multiple, func(h helper) []string { return h.open(o) })
+	}
+	return ps, err
+}
+
+// SaveFile uses the FileChooser portal's SaveFile, or zenity or kdialog
+// without the portal.
+func (s system) SaveFile(ctx context.Context, o SaveOptions) (string, error) {
+	p, err := portalSaveFile(ctx, o)
+	if errors.Is(err, errNoPortal) {
+		var ps []string
+		if ps, err = s.cmds.choose(ctx, err, false, func(h helper) []string { return h.save(o) }); err != nil {
+			return "", err
+		}
+		return ps[0], nil
+	}
+	return p, err
+}
+
+// portalOpenFile calls the FileChooser portal's OpenFile.
+func portalOpenFile(ctx context.Context, o FileOptions) ([]string, error) {
 	opts := map[string]dbus.Variant{
 		"multiple":  dbus.MakeVariant(o.Multiple),
 		"directory": dbus.MakeVariant(o.Directory),
@@ -116,8 +175,8 @@ func (system) OpenFile(ctx context.Context, o FileOptions) ([]string, error) {
 	return paths(methodOpenFile, res)
 }
 
-// SaveFile uses the FileChooser portal's SaveFile.
-func (system) SaveFile(ctx context.Context, o SaveOptions) (string, error) {
+// portalSaveFile calls the FileChooser portal's SaveFile.
+func portalSaveFile(ctx context.Context, o SaveOptions) (string, error) {
 	opts := map[string]dbus.Variant{}
 	if o.Name != "" {
 		opts["current_name"] = dbus.MakeVariant(o.Name)
@@ -168,11 +227,12 @@ func openLocal(ctx context.Context, u *url.URL) error {
 
 // request calls a portal method that answers asynchronously through a
 // Request object, and waits for its Response signal. args precede opts in
-// the call; request adds opts' "handle_token".
+// the call; request adds opts' "handle_token". Its error wraps errNoPortal
+// when there is no session bus or nothing on it serves method.
 func request(ctx context.Context, method string, opts map[string]dbus.Variant, args ...any) (map[string]dbus.Variant, error) {
 	conn, err := dbus.ConnectSessionBus()
 	if err != nil {
-		return nil, fmt.Errorf("desktop: %s: %w", method, err)
+		return nil, fmt.Errorf("desktop: %s: %w: %w", method, errNoPortal, err)
 	}
 	// Closing is best effort: by then the call has succeeded or failed, and
 	// a close error leaves the caller nothing to act on.
@@ -202,6 +262,9 @@ func request(ctx context.Context, method string, opts map[string]dbus.Variant, a
 	obj := conn.Object(portalService, portalPath)
 	var handle dbus.ObjectPath
 	if err := obj.CallWithContext(ctx, method, 0, append(args, opts)...).Store(&handle); err != nil {
+		if missing(err) {
+			return nil, fmt.Errorf("desktop: %s: %w: %w", method, errNoPortal, err)
+		}
 		return nil, fmt.Errorf("desktop: %s: %w", method, err)
 	}
 	if !inNamespace(handle, requests) {

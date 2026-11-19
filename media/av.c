@@ -14,10 +14,19 @@
 
 #include "vpp.h"
 
+// gk_fail_hwdevice makes every hardware device creation fail, so tests can
+// check the fallback where no device name can make it fail (D3D11VA takes
+// an adapter index and falls back to the default adapter).
+static int gk_fail_hwdevice;
+
+void gk_set_fail_hwdevice(int fail) { gk_fail_hwdevice = fail; }
+
+
 struct gk_dec {
 	AVCodecContext *ctx;
-	AVBufferRef *hw;          // VA-API device, or NULL
-	enum AVPixelFormat hwfmt; // AV_PIX_FMT_VAAPI when hw
+	AVBufferRef *hw;          // hardware device, or NULL
+	int hwkind;               // GK_HW_VAAPI, _D3D11VA, _VIDEOTOOLBOX, or GK_HW_OFF
+	enum AVPixelFormat hwfmt; // the device's frame format (AV_PIX_FMT_VAAPI...) when hw
 	AVFrame *frame, *sw;
 	AVPacket *pkt;
 	struct SwsContext *sws;
@@ -45,6 +54,35 @@ static enum AVPixelFormat get_format(AVCodecContext *ctx, const enum AVPixelForm
 		}
 	}
 	return AV_PIX_FMT_NONE;
+}
+
+int gk_hw_platform(void) {
+#if defined(_WIN32)
+	return GK_HW_D3D11VA;
+#elif defined(__APPLE__)
+	return GK_HW_VIDEOTOOLBOX;
+#else
+	return GK_HW_VAAPI;
+#endif
+}
+
+int gk_zero_copy(void) { return gk_vpp_available(); }
+
+// hw_kind resolves AUTO and GPU to the platform's API.
+static int hw_kind(int hw) {
+	return hw == GK_HW_AUTO || hw == GK_HW_GPU ? gk_hw_platform() : hw;
+}
+
+// device_type maps an API to FFmpeg's device type. The enum values exist in
+// every FFmpeg build; creating a device of a type the build or platform
+// lacks fails at run time. Readback needs no platform headers.
+static enum AVHWDeviceType device_type(int kind) {
+	switch (kind) {
+	case GK_HW_VAAPI: return AV_HWDEVICE_TYPE_VAAPI;
+	case GK_HW_D3D11VA: return AV_HWDEVICE_TYPE_D3D11VA;
+	case GK_HW_VIDEOTOOLBOX: return AV_HWDEVICE_TYPE_VIDEOTOOLBOX;
+	}
+	return AV_HWDEVICE_TYPE_NONE;
 }
 
 static enum AVCodecID codec_id(int codec) {
@@ -95,27 +133,32 @@ static int open_ctx(gk_dec *d, const AVCodec *codec, int hw, const char *device,
 		d->ctx->thread_type = FF_THREAD_SLICE;
 	}
 	d->ctx->thread_count = 0;
+	d->hwkind = GK_HW_OFF;
 	if (hw != GK_HW_OFF) {
-		for (int i = 0;; i++) {
+		int kind = hw_kind(hw);
+		enum AVHWDeviceType type = device_type(kind);
+		for (int i = 0; type != AV_HWDEVICE_TYPE_NONE; i++) {
 			const AVCodecHWConfig *cfg = avcodec_get_hw_config(codec, i);
 			if (!cfg) {
 				break;
 			}
-			if ((cfg->methods & AV_CODEC_HW_CONFIG_METHOD_HW_DEVICE_CTX) &&
-			    cfg->device_type == AV_HWDEVICE_TYPE_VAAPI) {
-				if (av_hwdevice_ctx_create(&d->hw, AV_HWDEVICE_TYPE_VAAPI,
-				                           device && *device ? device : NULL, NULL, 0) == 0) {
+			// The config that decodes into the device's own frames
+			// (AV_PIX_FMT_VAAPI, _D3D11, _VIDEOTOOLBOX): they stay on the
+			// GPU until gk_dec_frame_rgba transfers or vpp exports them.
+			if ((cfg->methods & AV_CODEC_HW_CONFIG_METHOD_HW_DEVICE_CTX) && cfg->device_type == type) {
+				if (!gk_fail_hwdevice && av_hwdevice_ctx_create(&d->hw, type, device && *device ? device : NULL, NULL, 0) == 0) {
+					d->hwkind = kind;
 					d->hwfmt = cfg->pix_fmt;
 					d->ctx->hw_device_ctx = av_buffer_ref(d->hw);
 				}
 				break;
 			}
 		}
-		if (!d->hw && hw == GK_HW_VAAPI) {
+		if (!d->hw) {
+			// No device, or the codec has no decoder for it. AUTO retries
+			// in software (gk_dec_open); a forced API fails.
 			return AVERROR(ENODEV);
 		}
-	}
-	if (d->hw) {
 		d->ctx->get_format = get_format;
 	}
 	return avcodec_open2(d->ctx, codec, NULL);
@@ -166,7 +209,7 @@ void gk_dec_close(gk_dec *d) {
 	free(d);
 }
 
-int gk_dec_hw(gk_dec *d) { return d->hw != NULL; }
+int gk_dec_hw(gk_dec *d) { return d->hwkind; }
 
 int gk_dec_send(gk_dec *d, const uint8_t *data, int size, int64_t pts, int key) {
 	av_packet_unref(d->pkt);
@@ -238,7 +281,7 @@ int gk_dec_frame_rgba(gk_dec *d, uint8_t *dst, int stride) {
 }
 
 void *gk_dec_frame_dmabuf(gk_dec *d, gk_dmabuf *out, int *err) {
-	if (!d->hw || d->frame->format != d->hwfmt) {
+	if (d->hwkind != GK_HW_VAAPI || d->frame->format != d->hwfmt) {
 		*err = AVERROR(ENOSYS);
 		return NULL;
 	}

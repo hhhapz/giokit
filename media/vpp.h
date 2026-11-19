@@ -10,6 +10,10 @@
 
 typedef struct gk_vpp gk_vpp;
 
+// gk_vpp_available is 1 where this file has a real implementation (Linux).
+int gk_vpp_available(void);
+// gk_vpp_open needs a VA-API device.
+
 gk_vpp *gk_vpp_open(AVBufferRef *hwdev, int w, int h, int *err);
 int gk_vpp_fits(gk_vpp *v, int w, int h);
 // gk_vpp_convert converts f into a free output surface and describes it in

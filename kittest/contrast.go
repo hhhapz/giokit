@@ -6,7 +6,7 @@ import (
 	"image/color"
 	"math"
 
-	"gioui.org/f32"
+	"github.com/hhhapz/giokit/gio/f32"
 
 	"github.com/hhhapz/giokit/kit"
 )

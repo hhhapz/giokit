@@ -6,7 +6,7 @@ import (
 	"slices"
 	"testing"
 
-	"gioui.org/io/key"
+	"github.com/hhhapz/giokit/gio/io/key"
 	"github.com/hhhapz/giokit/kit"
 	"github.com/hhhapz/giokit/kit/ui"
 	"github.com/hhhapz/giokit/kittest"

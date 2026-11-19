@@ -1,7 +1,7 @@
 // Package forktrace adds Gio's low-level window events (wl_*, scroll_flush,
 // gpu_frame, present) to GIOKIT_TRACE output, in order with kit's own
-// lines. It needs giokit's Gio fork (third_party/gioui.org), which carries
-// the hook; import it for its side effect from a program built on the fork:
+// lines, through the fork's app.GiokitTrace hook. Import it for its side
+// effect:
 //
 //	import _ "github.com/hhhapz/giokit/kit/forktrace"
 //
@@ -12,11 +12,11 @@
 // goroutines without synchronization, so nothing may reassign it once a
 // window is running.
 //
-// kit itself builds on stock Gio and traces frame pacing without it.
+// Without it, kit still traces its own frame pacing.
 package forktrace
 
 import (
-	"gioui.org/app"
+	"github.com/hhhapz/giokit/gio/app"
 
 	"github.com/hhhapz/giokit/kit"
 )

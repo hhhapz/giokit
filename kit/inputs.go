@@ -4,16 +4,16 @@ import (
 	"cmp"
 	"image"
 
-	"gioui.org/io/event"
-	"gioui.org/io/key"
-	"gioui.org/io/pointer"
-	"gioui.org/io/semantic"
-	"gioui.org/layout"
-	"gioui.org/op"
-	"gioui.org/op/clip"
-	"gioui.org/unit"
-	"gioui.org/widget"
-	"gioui.org/widget/material"
+	"github.com/hhhapz/giokit/gio/io/event"
+	"github.com/hhhapz/giokit/gio/io/key"
+	"github.com/hhhapz/giokit/gio/io/pointer"
+	"github.com/hhhapz/giokit/gio/io/semantic"
+	"github.com/hhhapz/giokit/gio/layout"
+	"github.com/hhhapz/giokit/gio/op"
+	"github.com/hhhapz/giokit/gio/op/clip"
+	"github.com/hhhapz/giokit/gio/unit"
+	"github.com/hhhapz/giokit/gio/widget"
+	"github.com/hhhapz/giokit/gio/widget/material"
 )
 
 // WithLabel lays out a control followed by an optional text label.
@@ -96,6 +96,11 @@ type EditorField struct {
 // are built on it.
 func (t *Theme) EditorField(gtx layout.Context, e *widget.Editor, id string, f EditorField) layout.Dimensions {
 	trackFocus(gtx, e) // keys the editor leaves resolve from this context
+	if gtx.Focused(e) {
+		if f := frameOf(gtx); f != nil {
+			f.typing = true // printable keys are text, not shortcuts
+		}
+	}
 	// A press anywhere in the field, padding included, focuses the editor:
 	// the target is the whole field, not just the text line. Read it before
 	// drawing (rule 1). The tag is an address inside the editor, so it is

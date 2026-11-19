@@ -6,7 +6,7 @@ import (
 	"slices"
 	"time"
 
-	"gioui.org/op/paint"
+	"github.com/hhhapz/giokit/gio/op/paint"
 
 	"github.com/hhhapz/giokit/kit"
 	"github.com/hhhapz/giokit/kit/ui"

@@ -1,6 +1,6 @@
 package kit
 
-import "gioui.org/unit"
+import "github.com/hhhapz/giokit/gio/unit"
 
 // The spacing scale, GPUI/Tailwind style: SpaceN is N×4dp, with half steps
 // spelled 0p5, 1p5, 2p5, 3p5. Use these instead of hand-picked dp values; pass

@@ -214,6 +214,7 @@ func fourccString(v uint32) string {
 }
 
 func TestAutoPolicy(t *testing.T) {
+	skipIfEnvForced(t)
 	d, err := NewDecoder(H264, Options{})
 	if err != nil {
 		t.Fatal(err)

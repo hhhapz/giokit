@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"gioui.org/unit"
+	"github.com/hhhapz/giokit/gio/unit"
 )
 
 // Every malformed value giokit reads is an error naming the token's path,

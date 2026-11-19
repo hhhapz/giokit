@@ -9,13 +9,9 @@ require github.com/hhhapz/giokit v0.0.0
 replace github.com/hhhapz/giokit => /path/to/giokit
 ```
 
-`giokit` runs on stock Gio across macOS, Windows, Linux, BSD, and WebAssembly. On Linux, either install `vulkan-headers` or pass `-tags novulkan` (OpenGL only), with stock Gio or the fork. The fork prefers Vulkan on Wayland and falls back to OpenGL.
+`giokit` runs on macOS, Windows, Linux, BSD, and WebAssembly. It carries its own Gio fork: import Gio as `github.com/hhhapz/giokit/gio/...` (for example `github.com/hhhapz/giokit/gio/layout`), never `gioui.org`, which would link a second, incompatible Gio (see [gio-patches.md](gio-patches.md)). On Linux, either install `vulkan-headers` or pass `-tags novulkan` (OpenGL only). Wayland prefers Vulkan and falls back to OpenGL.
 
-To use the optional Gio fork in `third_party/gioui.org` (needed for `kit/x/video` and `media`; see [gio-patches.md](gio-patches.md)):
-
-```go
-replace gioui.org => /path/to/giokit/third_party/gioui.org
-```
+`media` links the system FFmpeg through `pkg-config` (on Windows, from MSYS2; on macOS, from Homebrew). To ship a binary without that dependency, build with `-tags ffmpeg_static` against the minimal static FFmpeg from `scripts/ffmpeg-static.sh` ([static-ffmpeg.md](static-ffmpeg.md)).
 
 ## Opening a Window
 

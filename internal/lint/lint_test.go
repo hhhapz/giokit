@@ -36,7 +36,7 @@ const kitRoot = "../../kit/"
 var kitDirs = []string{"", "ui/", "x/", "x/video/"}
 
 // tokenFiles may define colours: they are the palette and token tables.
-var tokenFiles = []string{"color.go", "palette.go", "theme.go", "tokens.go"}
+var tokenFiles = []string{"color.go", "palette.go", "theme.go", "themes.go", "tokens.go"}
 
 // dpBaseline is the number of geometry literals per file today. They move
 // into Theme metrics.
@@ -424,7 +424,7 @@ var coverageExempt = map[string]string{
 	// display only: no input of their own
 	"Artwork": "display", "Badge": "display", "Banner": "display", "DialogContent": "display",
 	"EmptyState": "display", "FieldError": "display", "Form": "layout of other controls",
-	"Kbd": "display", "Stat": "display", "ToastHost": "host; its close buttons are IconButtons",
+	"Kbd": "display", "ShortcutList": "display", "Stat": "display", "ToastHost": "host; its close buttons are IconButtons",
 	"Tooltip": "no input of its own: it shows on its Content's hover or focus (TestTooltipKeyboard)",
 	// interactive, covered by gallery tests until their contract exists
 	"Combobox":       "its trigger is an editor: typing opens the list",

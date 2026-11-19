@@ -3,7 +3,7 @@ package kit
 import (
 	"strings"
 
-	"gioui.org/layout"
+	"github.com/hhhapz/giokit/gio/layout"
 )
 
 // Part is the id of a named part inside the component with id, one segment

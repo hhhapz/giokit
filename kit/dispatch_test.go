@@ -6,14 +6,15 @@ import (
 	"testing"
 	"time"
 
-	"gioui.org/f32"
-	"gioui.org/io/event"
-	"gioui.org/io/input"
-	"gioui.org/io/key"
-	"gioui.org/io/pointer"
-	"gioui.org/layout"
-	"gioui.org/op"
-	"gioui.org/op/clip"
+	"github.com/hhhapz/giokit/gio/f32"
+	"github.com/hhhapz/giokit/gio/io/event"
+	"github.com/hhhapz/giokit/gio/io/input"
+	"github.com/hhhapz/giokit/gio/io/key"
+	"github.com/hhhapz/giokit/gio/io/pointer"
+	"github.com/hhhapz/giokit/gio/layout"
+	"github.com/hhhapz/giokit/gio/op"
+	"github.com/hhhapz/giokit/gio/op/clip"
+	"github.com/hhhapz/giokit/gio/widget"
 )
 
 // windowRunner drives frames through a Window and a Gio router, the way
@@ -282,5 +283,88 @@ func TestFocusVisible(t *testing.T) {
 	v.Show()
 	if !v.Visible(true) {
 		t.Fatal("Show did not show the ring")
+	}
+}
+
+// While a text field has focus, single-key shortcuts leave their keys to
+// it, and chords with Ctrl still work; unfocused, the single key runs.
+func TestTypingKeepsPrintableKeys(t *testing.T) {
+	var wr windowRunner
+	ran := ""
+	var km Keymap
+	km.MustBind("1", "One", func() { ran += "1" })
+	km.MustBind("Shift+/", "Help", func() { ran += "?" })
+	km.MustBind("Ctrl+S", "Save", func() { ran += "s" })
+	var e widget.Editor
+	var c Clickable
+	th := Dark()
+	draw := func(gtx layout.Context) {
+		km.Attach(gtx)
+		th.EditorField(gtx, &e, "field", EditorField{})
+		c.Layout(gtx, func(gtx layout.Context) layout.Dimensions { return layout.Dimensions{Size: image.Pt(10, 10)} })
+	}
+	wr.focus(draw, &e)
+	wr.press(draw, "1", 0)
+	wr.press(draw, "/", key.ModShift)
+	wr.press(draw, "S", key.ModCtrl)
+	if ran != "s" {
+		t.Fatalf("typing in a field ran %q, want only the Ctrl chord", ran)
+	}
+	ran = ""
+	wr.focus(draw, &c)
+	wr.press(draw, "1", 0)
+	if ran != "1" {
+		t.Fatalf("outside a field ran %q, want 1", ran)
+	}
+}
+
+// Escape and F-keys reach shortcuts while an editor has focus; the keys
+// that edit text stay the editor's. Escape is a one-rune key name ("⎋"),
+// which was once taken for a printable character (audit 16, CP-03).
+func TestTypingPassesSpecialKeys(t *testing.T) {
+	var wr windowRunner
+	ran := ""
+	var km Keymap
+	km.MustBind("Escape", "Close", func() { ran += "esc " })
+	km.MustBind("F2", "Rename", func() { ran += "f2 " })
+	km.MustBind("Left", "Back", func() { ran += "left " })
+	km.MustBind("Backspace", "Up", func() { ran += "bs " })
+	var e widget.Editor
+	th := Dark()
+	draw := func(gtx layout.Context) {
+		km.Attach(gtx)
+		th.EditorField(gtx, &e, "field", EditorField{})
+	}
+	wr.focus(draw, &e)
+	wr.press(draw, key.NameEscape, 0)
+	wr.press(draw, key.NameF2, 0)
+	wr.press(draw, key.NameLeftArrow, 0)
+	wr.press(draw, key.NameDeleteBackward, 0)
+	if ran != "esc f2 " {
+		t.Fatalf("typing in a field ran %q, want esc f2", ran)
+	}
+}
+
+// Display chords use words for keys Gio names with symbols the bundled
+// fonts lack, and parse back to the same chord.
+func TestFormatChordWords(t *testing.T) {
+	for spec, want := range map[string]string{
+		"Ctrl+Delete": "Ctrl+Delete", "Backspace": "Backspace", "Shift+Home": "Shift+Home",
+		"End": "End", "PageUp": "PageUp", "Ctrl+PageDown": "Ctrl+PageDown", "Ctrl+Enter": "Ctrl+Enter",
+	} {
+		n, m, err := ParseChord(spec)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := FormatChord(n, m)
+		if got != want {
+			t.Errorf("FormatChord(%q) = %q, want %q", spec, got, want)
+		}
+		if n2, m2, err := ParseChord(got); err != nil || n2 != n || m2 != m {
+			t.Errorf("%q does not parse back: %v", got, err)
+		}
+	}
+	if got := FormatChord(key.NameEnter, 0); got != "Enter" {
+		t.Errorf("keypad Enter: %q", got)
 	}
 }

@@ -5,11 +5,11 @@ import (
 	"strings"
 	"time"
 
-	"gioui.org/io/event"
-	"gioui.org/io/key"
-	"gioui.org/io/semantic"
-	"gioui.org/layout"
-	"gioui.org/unit"
+	"github.com/hhhapz/giokit/gio/io/event"
+	"github.com/hhhapz/giokit/gio/io/key"
+	"github.com/hhhapz/giokit/gio/io/semantic"
+	"github.com/hhhapz/giokit/gio/layout"
+	"github.com/hhhapz/giokit/gio/unit"
 
 	"github.com/hhhapz/giokit/kit"
 )

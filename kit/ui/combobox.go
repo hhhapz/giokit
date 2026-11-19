@@ -3,9 +3,9 @@ package ui
 import (
 	"strings"
 
-	"gioui.org/io/key"
-	"gioui.org/layout"
-	"gioui.org/widget"
+	"github.com/hhhapz/giokit/gio/io/key"
+	"github.com/hhhapz/giokit/gio/layout"
+	"github.com/hhhapz/giokit/gio/widget"
 
 	"github.com/hhhapz/giokit/kit"
 )

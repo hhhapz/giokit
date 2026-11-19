@@ -4,7 +4,7 @@ import (
 	"sort"
 	"time"
 
-	"gioui.org/layout"
+	"github.com/hhhapz/giokit/gio/layout"
 
 	"github.com/hhhapz/giokit/kit"
 )

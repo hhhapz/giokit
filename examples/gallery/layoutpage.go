@@ -3,7 +3,7 @@ package main
 import (
 	"fmt"
 
-	"gioui.org/layout"
+	"github.com/hhhapz/giokit/gio/layout"
 
 	"github.com/hhhapz/giokit/kit"
 	"github.com/hhhapz/giokit/kit/ui"

@@ -24,12 +24,12 @@ import (
 	"path/filepath"
 	"time"
 
-	"gioui.org/f32"
-	"gioui.org/gpu/headless"
-	"gioui.org/io/input"
-	"gioui.org/layout"
-	"gioui.org/op"
-	"gioui.org/unit"
+	"github.com/hhhapz/giokit/gio/f32"
+	"github.com/hhhapz/giokit/gio/gpu/headless"
+	"github.com/hhhapz/giokit/gio/io/input"
+	"github.com/hhhapz/giokit/gio/layout"
+	"github.com/hhhapz/giokit/gio/op"
+	"github.com/hhhapz/giokit/gio/unit"
 
 	"github.com/hhhapz/giokit/kit"
 )

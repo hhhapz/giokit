@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"slices"
 
-	"gioui.org/layout"
-	"gioui.org/unit"
-	"gioui.org/widget"
+	"github.com/hhhapz/giokit/gio/layout"
+	"github.com/hhhapz/giokit/gio/unit"
+	"github.com/hhhapz/giokit/gio/widget"
 
 	"github.com/hhhapz/giokit/kit"
 	"github.com/hhhapz/giokit/kit/ui"
@@ -342,21 +342,16 @@ func (g *gallery) demoBanners(gtx C) D {
 
 func (g *gallery) demoKeyboard(gtx C) D {
 	th := g.th
-	var rows []layout.FlexChild
-	for _, b := range g.keys.Bindings() {
-		rows = append(rows, kit.Rigid(func(gtx C) D {
-			return layout.Inset{Bottom: 6}.Layout(gtx, func(gtx C) D {
-				return kit.Row(gtx,
-					kit.Rigid(kit.Fixed(200, func(gtx C) D { return th.Text(gtx, b.Title, th.Type.Body, th.Fg, kit.Regular) })),
-					kit.Rigid(func(gtx C) D { return ui.Kbd{Chord: b.Chord}.Layout(gtx, th) }),
-				)
-			})
-		}))
-	}
-	rows = append(rows, kit.Rigid(func(gtx C) D {
-		return th.Text(gtx, "Tab / Shift+Tab move focus; arrows move inside lists and menus; Enter activates. Ctrl+P finds any page.", th.Type.Small, th.Dim, kit.Regular)
-	}))
-	return kit.Col(gtx, rows...)
+	return kit.Col(gtx,
+		kit.Rigid(func(gtx C) D {
+			gtx.Constraints.Max.X = min(gtx.Constraints.Max.X, gtx.Dp(420))
+			return ui.ShortcutList{Groups: []ui.ShortcutGroup{{Items: ui.ShortcutsFrom(&g.keys)}}}.Layout(gtx, th)
+		}),
+		kit.Rigid(kit.Gap(0, 10)),
+		kit.Rigid(func(gtx C) D {
+			return th.Text(gtx, "Tab / Shift+Tab move focus; arrows move inside lists and menus; Enter activates. Ctrl+P finds any page.", th.Type.Small, th.Dim, kit.Regular)
+		}),
+	)
 }
 
 // slider is a ui.Slider that keeps its own value: update applies input in

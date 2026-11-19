@@ -4,9 +4,9 @@ import (
 	"image"
 	"testing"
 
-	"gioui.org/layout"
-	"gioui.org/op"
-	"gioui.org/unit"
+	"github.com/hhhapz/giokit/gio/layout"
+	"github.com/hhhapz/giokit/gio/op"
+	"github.com/hhhapz/giokit/gio/unit"
 )
 
 func measureWidget(w layout.Widget, c layout.Constraints) (got layout.Constraints, size image.Point) {

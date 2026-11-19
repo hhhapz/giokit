@@ -516,7 +516,8 @@ func (e *Editor) command(gtx layout.Context, k key.Event) (EditorEvent, bool) {
 			e.text.MoveWord(1*direction, selAct)
 		}
 	}
-	if k.Modifiers.Contain(key.ModShortcut) {
+	deleteWord := moveByWord && (k.Name == key.NameDeleteBackward || k.Name == key.NameDeleteForward)
+	if k.Modifiers.Contain(key.ModShortcut) && !deleteWord {
 		switch k.Name {
 		// Initiate a paste operation, by requesting the clipboard contents; other
 		// half is in Editor.processKey() under clipboard.Event.
@@ -589,12 +590,22 @@ func (e *Editor) command(gtx layout.Context, k key.Event) (EditorEvent, bool) {
 			}
 		}
 	case key.NameUpArrow:
-		e.text.MoveLines(-1, selAct)
+		if e.SingleLine {
+			e.text.MoveTextStart(selAct)
+		} else {
+			e.text.MoveLines(-1, selAct)
+		}
 	case key.NameDownArrow:
-		e.text.MoveLines(+1, selAct)
+		if e.SingleLine {
+			e.text.MoveTextEnd(selAct)
+		} else {
+			e.text.MoveLines(+1, selAct)
+		}
 	case key.NameLeftArrow:
 		if moveByWord {
 			e.text.MoveWord(-1*direction, selAct)
+		} else if selAct == selectionClear && e.text.SelectionLen() > 0 {
+			e.text.CollapseSelection(-direction)
 		} else {
 			if selAct == selectionClear {
 				e.text.ClearSelection()
@@ -604,6 +615,8 @@ func (e *Editor) command(gtx layout.Context, k key.Event) (EditorEvent, bool) {
 	case key.NameRightArrow:
 		if moveByWord {
 			e.text.MoveWord(1*direction, selAct)
+		} else if selAct == selectionClear && e.text.SelectionLen() > 0 {
+			e.text.CollapseSelection(direction)
 		} else {
 			if selAct == selectionClear {
 				e.text.ClearSelection()

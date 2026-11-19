@@ -251,3 +251,19 @@ func UploadImage(t Texture, offset image.Point, img *image.RGBA) {
 	pixels = img.Pix[start:end]
 	t.Upload(offset, size, pixels, img.Stride)
 }
+
+// DMABuf describes a single-plane image in GPU memory (Linux). giokit patch.
+type DMABuf struct {
+	FD            int
+	Offset, Pitch uint32
+	Fourcc        uint32 // DRM fourcc
+	Modifier      uint64 // DRM format modifier
+	Width, Height int
+}
+
+// DMABufImporter is implemented by devices that can sample a DMA-BUF
+// directly. The texture samples as sRGB, like TextureFormatSRGBA. The
+// buffer must stay valid until the texture is released. giokit patch.
+type DMABufImporter interface {
+	ImportDMABuf(b DMABuf, filter TextureFilter) (Texture, error)
+}

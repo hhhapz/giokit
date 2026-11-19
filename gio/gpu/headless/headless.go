@@ -8,6 +8,7 @@ import (
 	"errors"
 	"image"
 	"image/color"
+	"os"
 
 	"github.com/hhhapz/giokit/gio/gpu"
 	"github.com/hhhapz/giokit/gio/gpu/internal/driver"
@@ -33,10 +34,21 @@ type context interface {
 var (
 	newContextPrimary  func() (context, error)
 	newContextFallback func() (context, error)
+	// newContextVulkan is the Vulkan constructor where Vulkan is built
+	// (giokit patch): tried after the others, as upstream's fallback was.
+	newContextVulkan func() (context, error)
 )
 
 func newContext() (context, error) {
-	funcs := []func() (context, error){newContextPrimary, newContextFallback}
+	funcs := []func() (context, error){newContextPrimary, newContextFallback, newContextVulkan}
+	// giokit patch: GIOKIT_GPU=vulkan uses only Vulkan and GIOKIT_GPU=opengl
+	// never does, so tests can cover each backend.
+	switch os.Getenv("GIOKIT_GPU") {
+	case "vulkan":
+		funcs = funcs[2:]
+	case "opengl":
+		funcs = funcs[:2]
+	}
 	var firstErr error
 	for _, f := range funcs {
 		if f == nil {

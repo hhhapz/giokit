@@ -17,6 +17,7 @@ type vkContext struct {
 	inst       vk.Instance
 	dev        vk.Device
 	queueFam   int
+	dmabuf     bool // DMA-BUF import extensions enabled (giokit patch)
 	queue      vk.Queue
 	acquireSem vk.Semaphore
 	presentSem vk.Semaphore
@@ -35,7 +36,14 @@ func newVulkanContext(inst vk.Instance, surf vk.Surface) (*vkContext, error) {
 	if err != nil {
 		return nil, err
 	}
-	dev, err := vk.CreateDeviceAndQueue(physDev, qFam, "VK_KHR_swapchain")
+	// giokit patch: enable DMA-BUF import where the device has it, and
+	// retry without it should the driver refuse the extensions.
+	dmabuf := vk.DMABufDeviceExtensions(physDev)
+	dev, err := vk.CreateDeviceAndQueue(physDev, qFam, append([]string{"VK_KHR_swapchain"}, dmabuf...)...)
+	if err != nil && dmabuf != nil {
+		dmabuf = nil
+		dev, err = vk.CreateDeviceAndQueue(physDev, qFam, "VK_KHR_swapchain")
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -62,6 +70,7 @@ func newVulkanContext(inst vk.Instance, surf vk.Surface) (*vkContext, error) {
 		inst:       inst,
 		dev:        dev,
 		queueFam:   qFam,
+		dmabuf:     dmabuf != nil,
 		queue:      vk.GetDeviceQueue(dev, qFam, 0),
 		acquireSem: acquireSem,
 		presentSem: presentSem,
@@ -95,6 +104,7 @@ func (c *vkContext) api() gpu.API {
 		Format:      int(c.format),
 		QueueFamily: c.queueFam,
 		QueueIndex:  0,
+		DMABuf:      c.dmabuf,
 	}
 }
 

@@ -1,0 +1,43 @@
+// SPDX-License-Identifier: Unlicense OR MIT
+
+package input
+
+import (
+	"image"
+
+	"github.com/hhhapz/giokit/gio/io/event"
+)
+
+// Bounds returns the window-space bounds of the clip area where tag's
+// event.Op was added in the most recent frame, and whether it was added.
+//
+// giokit patch: layout never learns absolute positions in Gio (transforms
+// apply when ops are processed), but popups need them to flip and shift at
+// window edges. The router has them from the last frame: anchors are a frame
+// behind while they move, which is fine for placement decisions. It works on
+// disabled Sources too: it reads geometry, not events.
+func (s Source) Bounds(tag event.Tag) (image.Rectangle, bool) {
+	if s.r == nil {
+		return image.Rectangle{}, false
+	}
+	h, ok := s.r.handlers[tag]
+	if !ok || h.pointer.areaPlusOne == 0 {
+		return image.Rectangle{}, false
+	}
+	areas := s.r.pointer.queue.areas
+	if i := h.pointer.areaPlusOne - 1; i < len(areas) {
+		return areas[i].bounds(), true
+	}
+	return image.Rectangle{}, false
+}
+
+// FocusedTag returns the tag that has keyboard focus, or nil.
+//
+// giokit patch: lets a harness name the focused widget (via Bounds and the
+// semantic tree), so tests can assert focus traps and Tab order.
+func (s Source) FocusedTag() event.Tag {
+	if s.r == nil {
+		return nil
+	}
+	return s.r.state().keyState.focus
+}

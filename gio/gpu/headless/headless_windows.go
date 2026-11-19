@@ -3,11 +3,15 @@
 package headless
 
 import (
+	"os"
 	"unsafe"
 
 	"github.com/hhhapz/giokit/gio/gpu"
 	"github.com/hhhapz/giokit/gio/internal/d3d11"
 )
+
+// driverTypeWARP is D3D_DRIVER_TYPE_WARP.
+const driverTypeWARP = 5
 
 type d3d11Context struct {
 	dev *d3d11.Device
@@ -15,10 +19,17 @@ type d3d11Context struct {
 
 func init() {
 	newContextPrimary = func() (context, error) {
-		dev, ctx, _, err := d3d11.CreateDevice(
-			d3d11.DRIVER_TYPE_HARDWARE,
-			0,
-		)
+		// giokit: fall back to WARP, the software rasterizer, when there is
+		// no hardware device (CI runners without a GPU); GIOKIT_GPU=warp
+		// forces it so tests can cover it on any machine.
+		driver := uint32(d3d11.DRIVER_TYPE_HARDWARE)
+		if os.Getenv("GIOKIT_GPU") == "warp" {
+			driver = driverTypeWARP
+		}
+		dev, ctx, _, err := d3d11.CreateDevice(driver, 0)
+		if err != nil && driver != driverTypeWARP {
+			dev, ctx, _, err = d3d11.CreateDevice(driverTypeWARP, 0)
+		}
 		if err != nil {
 			return nil, err
 		}

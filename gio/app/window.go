@@ -180,7 +180,10 @@ func (w *Window) validateAndProcess(size image.Point, sync bool, frame *op.Ops, 
 			w.gpu = gpu
 		}
 		if w.gpu != nil {
-			if err := w.frame(frame, size); err != nil {
+			gt0 := time.Now()
+			err := w.frame(frame, size)
+			gtrace("gpu_frame", "ms", float64(time.Since(gt0).Microseconds())/1000, "w", size.X, "h", size.Y)
+			if err != nil {
 				w.ctx.Unlock()
 				if errors.Is(err, errOutOfDate) {
 					// GPU surface needs refreshing.
@@ -200,7 +203,9 @@ func (w *Window) validateAndProcess(size image.Point, sync bool, frame *op.Ops, 
 		signal()
 		var err error
 		if w.gpu != nil {
+			pt0 := time.Now()
 			err = w.ctx.Present()
+			gtrace("present", "ms", float64(time.Since(pt0).Microseconds())/1000)
 			w.ctx.Unlock()
 		}
 		return err
@@ -346,6 +351,7 @@ func (w *Window) updateAnimation() {
 			animate = true
 		} else {
 			// Schedule redraw.
+			gtrace("schedule_timer", "in_ms", float64(dt.Microseconds())/1000)
 			w.scheduleInvalidate(w.nextFrame)
 		}
 	}

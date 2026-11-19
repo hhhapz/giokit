@@ -814,6 +814,16 @@ func (e *textView) ClearSelection() {
 	e.caret.end = e.caret.start
 }
 
+// CollapseSelection moves the caret to the start (dir < 0) or end (dir > 0)
+// of the selection, and clears the selection.
+func (e *textView) CollapseSelection(dir int) {
+	pos := min(e.caret.start, e.caret.end)
+	if dir > 0 {
+		pos = max(e.caret.start, e.caret.end)
+	}
+	e.caret.start, e.caret.end, e.caret.xoff = pos, pos, 0
+}
+
 // WriteTo implements io.WriterTo.
 func (e *textView) WriteTo(w io.Writer) (int64, error) {
 	e.Seek(0, io.SeekStart)

@@ -1372,3 +1372,100 @@ func textBaseline(e *Editor, lineNum int) float32 {
 	start := e.text.closestToLineCol(lineNum, 0)
 	return float32(start.y)
 }
+
+func TestEditorDeleteWordShortcut(t *testing.T) {
+	tShaper := text.NewShaper(text.NoSystemFonts(), text.WithCollection(gofont.Collection()))
+	for n, tst := range []struct {
+		pos  int
+		name key.Name
+		text string
+	}{
+		{17, key.NameDeleteBackward, "hello brave "},
+		{0, key.NameDeleteForward, " brave world"},
+	} {
+		tEditor := new(Editor)
+		tEditor.SetText("hello brave world")
+		tRouter := new(input.Router)
+		gtx := layout.Context{
+			Ops:         new(op.Ops),
+			Locale:      english,
+			Constraints: layout.Exact(image.Pt(100, 100)),
+			Source:      tRouter.Source(),
+		}
+		gtx.Execute(key.FocusCmd{Tag: tEditor})
+		tEditor.Layout(gtx, tShaper, font.Font{}, unit.Sp(10), op.CallOp{}, op.CallOp{})
+		tEditor.SetCaret(tst.pos, tst.pos)
+		tRouter.Queue(key.Event{Name: tst.name, Modifiers: key.ModShortcutAlt})
+		for {
+			if _, ok := tEditor.Update(gtx); !ok {
+				break
+			}
+		}
+		if got := tEditor.Text(); got != tst.text {
+			t.Errorf("TestEditorDeleteWordShortcut %d: Expected %q, got %q", n, tst.text, got)
+		}
+	}
+}
+
+func TestEditorCollapseSelection(t *testing.T) {
+	tShaper := text.NewShaper(text.NoSystemFonts(), text.WithCollection(gofont.Collection()))
+	tEditor := new(Editor)
+	tEditor.SetText("hello brave world")
+	for n, tst := range []struct {
+		start, end int
+		name       key.Name
+		pos        int
+	}{
+		{6, 11, key.NameLeftArrow, 6},
+		{11, 6, key.NameLeftArrow, 6},
+		{6, 11, key.NameRightArrow, 11},
+		{11, 6, key.NameRightArrow, 11},
+	} {
+		tRouter := new(input.Router)
+		gtx := layout.Context{
+			Ops:         new(op.Ops),
+			Locale:      english,
+			Constraints: layout.Exact(image.Pt(100, 100)),
+			Source:      tRouter.Source(),
+		}
+		gtx.Execute(key.FocusCmd{Tag: tEditor})
+		tEditor.Layout(gtx, tShaper, font.Font{}, unit.Sp(10), op.CallOp{}, op.CallOp{})
+		tEditor.SetCaret(tst.start, tst.end)
+		tRouter.Queue(key.Event{Name: tst.name})
+		tEditor.Update(gtx)
+		if start, end := tEditor.Selection(); start != tst.pos || end != tst.pos {
+			t.Errorf("TestEditorCollapseSelection %d: Expected caret at %d, got (%d, %d)", n, tst.pos, start, end)
+		}
+	}
+}
+
+func TestEditorSingleLineUpDown(t *testing.T) {
+	tShaper := text.NewShaper(text.NoSystemFonts(), text.WithCollection(gofont.Collection()))
+	tEditor := &Editor{SingleLine: true}
+	tEditor.SetText("hello world")
+	for n, tst := range []struct {
+		key        key.Event
+		start, end int
+	}{
+		{key.Event{Name: key.NameUpArrow}, 0, 0},
+		{key.Event{Name: key.NameDownArrow}, 11, 11},
+		{key.Event{Name: key.NameUpArrow, Modifiers: key.ModShift}, 0, 5},
+		{key.Event{Name: key.NameDownArrow, Modifiers: key.ModShift}, 11, 5},
+	} {
+		tRouter := new(input.Router)
+		gtx := layout.Context{
+			Ops:         new(op.Ops),
+			Locale:      english,
+			Constraints: layout.Exact(image.Pt(100, 100)),
+			Source:      tRouter.Source(),
+		}
+		gtx.Execute(key.FocusCmd{Tag: tEditor})
+		tEditor.Layout(gtx, tShaper, font.Font{}, unit.Sp(10), op.CallOp{}, op.CallOp{})
+		tEditor.SetCaret(5, 5)
+		tRouter.Queue(tst.key)
+		tEditor.Update(gtx)
+		if start, end := tEditor.Selection(); start != tst.start || end != tst.end {
+			t.Errorf("TestEditorSingleLineUpDown %d: Expected (%d, %d), got (%d, %d)", n, tst.start, tst.end, start, end)
+		}
+	}
+}

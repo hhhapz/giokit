@@ -86,13 +86,17 @@ func (l Label) LayoutDetailed(gtx layout.Context, lt *text.Shaper, font font.Fon
 		}
 	}
 	call := m.Stop()
+	dims := layout.Dimensions{Size: it.bounds.Size()}
+	dims.Size = cs.Constrain(dims.Size)
+	dims.Baseline = dims.Size.Y - it.baseline
+	// giokit patch: clip to the laid-out text (plus glyph overflow), not the
+	// max constraints. The clip is the label's semantic area, so upstream
+	// reported every label as large as its container (to screen readers too).
+	viewport = image.Rectangle{Max: dims.Size}
 	viewport.Min = viewport.Min.Add(it.padding.Min)
 	viewport.Max = viewport.Max.Add(it.padding.Max)
 	clipStack := clip.Rect(viewport).Push(gtx.Ops)
 	call.Add(gtx.Ops)
-	dims := layout.Dimensions{Size: it.bounds.Size()}
-	dims.Size = cs.Constrain(dims.Size)
-	dims.Baseline = dims.Size.Y - it.baseline
 	clipStack.Pop()
 	return dims, TextInfo{Truncated: it.truncated}
 }

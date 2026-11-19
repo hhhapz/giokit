@@ -167,6 +167,7 @@ type window struct {
 		time  time.Duration
 		steps image.Point
 		dist  f32.Point
+		wheel bool
 	}
 	pointerBtns pointer.Buttons
 	lastPos     f32.Point
@@ -181,8 +182,11 @@ type window struct {
 		// such as border resizes and window moves. It
 		// is nil if the pointer is not in a system gesture
 		// area.
-		system  *C.struct_wl_cursor
-		surf    *C.struct_wl_surface
+		system *C.struct_wl_cursor
+		surf   *C.struct_wl_surface
+		// name is the cursor last requested by the app, kept so a theme
+		// reload can restore it. (giokit patch)
+		name    pointer.Cursor
 		cursors struct {
 			pointer         *C.struct_wl_cursor
 			resizeNorth     *C.struct_wl_cursor
@@ -891,6 +895,7 @@ func gio_onPointerLeave(data unsafe.Pointer, p *C.struct_wl_pointer, serial C.ui
 	s := callbackLoad(data).(*wlSeat)
 	s.serial = serial
 	s.pointerFocus = nil
+	w.scroll.wheel = false
 	if w.inCompositor {
 		w.inCompositor = false
 		w.ProcessEvent(pointer.Event{Kind: pointer.Cancel})
@@ -975,6 +980,7 @@ func gio_onPointerAxis(data unsafe.Pointer, p *C.struct_wl_pointer, t, axis C.ui
 	s := callbackLoad(data).(*wlSeat)
 	w := s.pointerFocus
 	v := fromFixed(value)
+	gtrace("wl_axis", "t_ms", uint32(t), "axis", uint32(axis), "value", v)
 	w.resetFling()
 	if w.scroll.dist == (f32.Point{}) {
 		w.scroll.time = time.Duration(t) * time.Millisecond
@@ -1023,12 +1029,18 @@ func (w *window) flushFling() {
 
 //export gio_onPointerAxisSource
 func gio_onPointerAxisSource(data unsafe.Pointer, pointer *C.struct_wl_pointer, source C.uint32_t) {
+	gtrace("wl_axis_source", "source", uint32(source))
+	s := callbackLoad(data).(*wlSeat)
+	if w := s.pointerFocus; w != nil {
+		w.scroll.wheel = source == C.WL_POINTER_AXIS_SOURCE_WHEEL || source == C.WL_POINTER_AXIS_SOURCE_WHEEL_TILT
+	}
 }
 
 //export gio_onPointerAxisStop
 func gio_onPointerAxisStop(data unsafe.Pointer, p *C.struct_wl_pointer, t, axis C.uint32_t) {
 	s := callbackLoad(data).(*wlSeat)
 	w := s.pointerFocus
+	gtrace("wl_axis_stop", "t_ms", uint32(t), "axis", uint32(axis))
 	w.fling.start = true
 }
 
@@ -1036,6 +1048,7 @@ func gio_onPointerAxisStop(data unsafe.Pointer, p *C.struct_wl_pointer, t, axis 
 func gio_onPointerAxisDiscrete(data unsafe.Pointer, p *C.struct_wl_pointer, axis C.uint32_t, discrete C.int32_t) {
 	s := callbackLoad(data).(*wlSeat)
 	w := s.pointerFocus
+	gtrace("wl_axis_discrete", "axis", uint32(axis), "discrete", int32(discrete))
 	w.resetFling()
 	switch axis {
 	case C.WL_POINTER_AXIS_HORIZONTAL_SCROLL:
@@ -1197,6 +1210,8 @@ func (w *window) resize(serial, edge C.uint32_t) {
 }
 
 func (w *window) SetCursor(cursor pointer.Cursor) {
+	gtrace("set_cursor", "cursor", cursor.String())
+	w.cursor.name = cursor
 	w.cursor.cursor = w.loadCursor(cursor)
 	w.updateCursor()
 }
@@ -1393,6 +1408,7 @@ func (r *repeatState) Repeat(d *wlDisplay) {
 func gio_onFrameDone(data unsafe.Pointer, callback *C.struct_wl_callback, t C.uint32_t) {
 	C.wl_callback_destroy(callback)
 	w := callbackLoad(data).(*window)
+	gtrace("wl_frame_done", "t_ms", uint32(t), "current", w.lastFrameCallback == callback)
 	if w.lastFrameCallback == callback {
 		w.lastFrameCallback = nil
 		w.draw(false)
@@ -1549,6 +1565,7 @@ func (d *wlDisplay) dispatch() error {
 }
 
 func (w *window) SetAnimating(anim bool) {
+	gtrace("set_animating", "on", anim)
 	w.animating = anim
 	if anim {
 		w.draw(false)
@@ -1827,20 +1844,12 @@ func (w *window) flushScroll() {
 		dist := float32(w.fling.anim.Tick(time.Now()))
 		fling = w.fling.dir.Mul(dist)
 	}
-	// The Wayland reported scroll distance for
-	// discrete scroll axes is only 10 pixels, where
-	// 100 seems more appropriate.
-	const discreteScale = 10
-	if w.scroll.steps.X != 0 {
-		w.scroll.dist.X *= discreteScale
-	}
-	if w.scroll.steps.Y != 0 {
-		w.scroll.dist.Y *= discreteScale
-	}
+	w.scroll.dist = wheelScale(w.scroll.dist, w.scroll.steps, w.scroll.wheel) // giokit patch
 	total := w.scroll.dist.Add(fling)
 	if total == (f32.Point{}) {
 		return
 	}
+	gtrace("scroll_flush", "dy", total.Y, "dx", total.X, "steps", w.scroll.steps.Y, "fling", fling.Y, "t_ms", int64(w.scroll.time/time.Millisecond))
 	if w.scroll.steps == (image.Point{}) {
 		w.fling.xExtrapolation.SampleDelta(w.scroll.time, -w.scroll.dist.X)
 		w.fling.yExtrapolation.SampleDelta(w.scroll.time, -w.scroll.dist.Y)
@@ -1942,6 +1951,7 @@ func (w *window) updateOutputs() {
 	if found && scale != w.scale {
 		w.scale = scale
 		C.wl_surface_set_buffer_scale(w.surf, C.int32_t(w.scale))
+		w.reloadCursors()
 		w.draw(true)
 	}
 	if found {
@@ -1973,6 +1983,7 @@ func (w *window) draw(sync bool) {
 	anim := w.animating || w.fling.anim.Active()
 	// Draw animation only when not waiting for frame callback.
 	redrawAnim := anim && w.lastFrameCallback == nil
+	gtrace("wl_draw", "sync", sync, "anim", anim, "waiting_cb", w.lastFrameCallback != nil, "draws", redrawAnim || sync)
 	if !redrawAnim && !sync {
 		return
 	}
@@ -2086,16 +2097,27 @@ func (w *window) EditorStateChanged(old, new editorState) {
 	}
 }
 
+// NewContext tries Vulkan first, then EGL. giokit patch: upstream tries EGL
+// first, but Mesa's GL driver costs about 30 MB more RSS per process than
+// its Vulkan driver. EGL remains the fallback where Vulkan is missing or
+// fails to start. GIOKIT_GPU=opengl skips Vulkan, GIOKIT_GPU=vulkan EGL.
 func (w *window) NewContext() (context, error) {
 	var firstErr error
-	if f := newWaylandEGLContext; f != nil {
+	vulkan, egl := newWaylandVulkanContext, newWaylandEGLContext
+	switch os.Getenv("GIOKIT_GPU") {
+	case "opengl":
+		vulkan = nil
+	case "vulkan":
+		egl = nil
+	}
+	if f := vulkan; f != nil {
 		c, err := f(w)
 		if err == nil {
 			return c, nil
 		}
 		firstErr = err
 	}
-	if f := newWaylandVulkanContext; f != nil {
+	if f := egl; f != nil {
 		c, err := f(w)
 		if err == nil {
 			return c, nil
@@ -2218,4 +2240,38 @@ func fromFixed(v C.wl_fixed_t) float32 {
 	b := ((1023 + 44) << 52) + (1 << 51) + uint64(v)
 	f := math.Float64frombits(b) - (3 << 43)
 	return float32(f)
+}
+
+// reloadCursors reloads the cursor theme for the window's current scale.
+//
+// giokit patch: upstream loads the theme once at the creation-time scale and
+// never updates it, yet setCursor divides hotspots by the current scale. When a
+// window moves to (or starts on) an output with a larger scale, cursor images
+// stay at 1x while hotspots are halved, so the visible tip drifts from the real
+// pointer position (e.g. a hand cursor jumps ~9px on a fractionally scaled niri
+// output).
+func (w *window) reloadCursors() {
+	if w.cursor.surf == nil {
+		return
+	}
+	cursorTheme := C.CString(os.Getenv("XCURSOR_THEME"))
+	defer C.free(unsafe.Pointer(cursorTheme))
+	size := 32
+	if s, err := strconv.Atoi(os.Getenv("XCURSOR_SIZE")); err == nil && s > 0 {
+		size = s
+	}
+	theme := C.wl_cursor_theme_load(cursorTheme, C.int(size*w.scale), w.disp.shm)
+	if theme == nil {
+		return
+	}
+	old := w.cursor.theme
+	w.cursor.theme = theme
+	w.loadCursors()
+	w.cursor.cursor = w.loadCursor(w.cursor.name)
+	w.cursor.system = nil // re-derived on the next pointer motion
+	C.wl_surface_set_buffer_scale(w.cursor.surf, C.int32_t(w.scale))
+	if old != nil {
+		C.wl_cursor_theme_destroy(old)
+	}
+	w.updateCursor()
 }

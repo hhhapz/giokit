@@ -30,6 +30,7 @@ const (
 	Editor
 	RadioButton
 	Switch
+	Image
 )
 
 // SelectedOp describes the selected state for components that have
@@ -85,6 +86,8 @@ func (c ClassOp) String() string {
 		return "RadioButton"
 	case Switch:
 		return "Switch"
+	case Image:
+		return "Image"
 	default:
 		panic("invalid ClassOp")
 	}

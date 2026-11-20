@@ -140,7 +140,7 @@ func (dt DataTable) Layout(gtx layout.Context, th *kit.Theme, s *DataTableState)
 		}),
 		kit.Rigid(kit.HLine(th.Divider)),
 		kit.Flexed(1, func(gtx layout.Context) layout.Dimensions {
-			kit.SetRole(gtx, rowsID, kit.RoleGrid)
+			s.List.Role = kit.RoleGrid
 			view := selectionView{context: "table", id: rowsID, list: &s.List, selected: dt.Selected, multi: dt.Multiple, chosen: dt.Chosen}
 			return s.sel.layout(gtx, view, func(gtx layout.Context) layout.Dimensions {
 				return th.List(gtx, &s.List, rowsID, len(s.order), func(gtx layout.Context, i int) layout.Dimensions {

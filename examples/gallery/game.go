@@ -176,7 +176,7 @@ func (g *gallery) lightsGrid(gtx C) D {
 		kit.OnAction(gtx, kit.ActFirst, func() { lo.group.Active = cellID(0) })
 		kit.OnAction(gtx, kit.ActLast, func() { lo.group.Active = cellID(len(lo.cells) - 1) })
 		kit.OnAction(gtx, kit.ActConfirm, func() { lo.play(lo.active()) })
-		return lo.group.Layout(gtx, "lights", func(gtx C) D { return kit.TagArea(gtx, "lights", g.lightsCells) })
+		return lo.group.Layout(gtx, "lights", func(gtx C) D { kit.Tag(gtx, "lights"); return g.lightsCells(gtx) })
 	})
 }
 

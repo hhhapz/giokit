@@ -72,12 +72,8 @@ func FocusWithin(gtx layout.Context, w layout.Widget) (layout.Dimensions, bool) 
 		node = f.cur
 		return w(gtx)
 	})
-	for tag, n := range f.focus {
-		if f.inside(n, node) && gtx.Focused(tag) {
-			return dims, true
-		}
-	}
-	return dims, false
+	n, ok := f.focus[gtx.Source.FocusedTag()]
+	return dims, ok && f.inside(n, node)
 }
 
 // inside reports whether node n is ancestor or one of its descendants.
@@ -93,12 +89,7 @@ func (f *frame) inside(n, ancestor int) bool {
 // FocusedID is the id of the control holding keyboard focus in the last
 // frame (as recorded by FocusID), or "". src is the window's input source.
 func (w *Window) FocusedID(src input.Source) string {
-	for tag, id := range w.fr.ids {
-		if src.Focused(tag) {
-			return id
-		}
-	}
-	return ""
+	return w.fr.ids[src.FocusedTag()]
 }
 
 // GroupMembers maps each focus group's id to its members' ids, in layout
@@ -248,7 +239,7 @@ func (g *FocusGroup) Join(c *Clickable, active bool) {
 // Layout lays out w as the group's single focusable area. Something must
 // name that area with the same id, so tests and screen readers can name the
 // group and report its active item: kit's lists do through List; a custom
-// group wraps its content in TagArea(gtx, id, ...).
+// group calls Tag(gtx, id) at the top of w, which lands on the group's area.
 func (g *FocusGroup) Layout(gtx layout.Context, id string, w layout.Widget) layout.Dimensions {
 	g.id = Path(gtx, id)
 	FocusID(gtx, &g.focus, id)

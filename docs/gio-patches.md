@@ -18,10 +18,9 @@ The rewrite is one text substitution on Go files, `"gioui.org/` to `"github.com/
 - **Our differences:** `git diff <base> -- gio/`, where the base is `git log -1 --format=%h --grep='^gio: upstream '`.
 
 Rules for changes in `gio/`:
-1. A commit touches either `gio/` or the rest of the repository, never both, so every Gio change can be exported or reverted on its own.
-2. Subjects start with `gio`; to send one concern upstream, export its commit, or split it out of a larger one first.
-3. Prefer new files (`giokit_*.go`) over edits to upstream files; keep edits to upstream files small. Merge conflicts grow with the lines changed in upstream's files, not with what we add.
-4. Mark edits inside upstream files with a `giokit:` comment saying why.
+1. Commits may change `gio/` together with the rest of the repository; only snapshot commits must hold nothing but pristine upstream.
+2. Prefer new files (`giokit_*.go`) over edits to upstream files; keep edits to upstream files small. Merge conflicts grow with the lines changed in upstream's files, not with what we add.
+3. Mark edits inside upstream files with a `giokit:` comment saying why.
 
 `go test ./...` runs Gio's tests too. `TestIndexPositionRunes/many_newlines` is skipped: it fails on upstream v0.10.3.
 
@@ -34,8 +33,8 @@ Our changes to upstream v0.10.3, by area:
 | Vulkan | Asks for Vulkan 1.1 and adds `GIOKIT_GPU` backend selection to headless rendering. |
 | Wayland | Wayland cursor reload on scale change, even high-resolution wheel scaling, Vulkan before EGL, and `app.GiokitTrace` hooks. |
 | Labels | Clips `widget.Label` semantic bounds to laid-out text size. |
-| Input | Adds `Source.Bounds` and `Source.FocusedTag` on `input.Source`. |
-| Semantics | Adds `semantic.Image` to `io/semantic`. |
+| Input | Adds `Source.Bounds` and `Source.FocusedTag` on `input.Source`; keeps semantics on areas whose handler asks for no gestures. |
+| Semantics | Adds `semantic.Image` and WAI-ARIA role classes (`Link`, `Slider`, `Tab`, `MenuItem`, ...) to `io/semantic`. |
 | Editor | Adds `Ctrl+Backspace`/`Delete` word delete (Windows, Linux), selection collapse on `Left`/`Right`, and single-line `Up`/`Down`. |
 | Streams | Adds cross-platform `paint.Stream` (Metal, Direct3D 11, OpenGL ES, Vulkan, WebGL) plus zero-copy Linux DMA-BUF texture import (OpenGL ES and Vulkan). |
 | Headless | Falls back to WARP on Direct3D 11 without a GPU; `GIOKIT_GPU=warp` forces it. |
@@ -63,7 +62,7 @@ The patch records `cursor.name` in `SetCursor` and adds `reloadCursors()`, calle
 #### Even Wheel Scaling for High-Resolution Wheels (`app/os_wayland.go`, `app/giokit_scroll.go`)
 Upstream `flushScroll` multiplies a pointer frame's scroll distance by `10` only when that frame carried `axis_discrete`. High-resolution wheels send an axis event of `1.875` every 1/8th click and attach `axis_discrete = 1` only on the 8th event, causing every 8th event to jump 10× ([pitfalls.md #22](pitfalls.md#22-high-resolution-wheel-skipped-17px-once-per-click-wayland)).
 
-In `app/giokit_scroll.go` (`wheelScale`), a frame with a discrete step is scaled by `10` only if it carries a whole click (>= 5 units per step; classic wheels send 10 to 15). High-resolution wheel sub-steps are all scaled by `1.2` by default (configurable via `GIOKIT_WHEEL_MINI_STEP_SCALE` or `app.SetGiokitWheelMiniStepScale`). Touchpad scrolling is unchanged.
+In `app/giokit_scroll.go` (`wheelScale`), a frame with a discrete step is scaled by `10` only if it carries a whole click (>= 5 units per step; classic wheels send 10 to 15). High-resolution wheel sub-steps are all scaled by `1.2` by default (`GIOKIT_WHEEL_MINI_STEP_SCALE` overrides it at startup). Touchpad scrolling is unchanged.
 
 #### Debug Trace Hooks (`app/giokit_trace.go`)
 Adds `app.GiokitTrace`, called from `os_wayland.go` and `window.go` on axis events, frame callbacks, draw passes, and GPU presentation. Importing `_ "github.com/hhhapz/giokit/kit/forktrace"` installs the hook when `GIOKIT_TRACE` is set.
@@ -76,9 +75,13 @@ Upstream `widget.Label.LayoutDetailed` clips glyphs to `gtx.Constraints.Max`, ca
 
 Adds `Source.Bounds(tag)` and `Source.FocusedTag()` in `io/input/giokit_bounds.go`.
 
+### 4b. Semantics on Gesture-less Handlers
+
+Upstream `pointerQueue.Frame` set an area's semantic validity from its handler's gestures alone, so an area whose handler asked for no clicks or scrolls (hover, keys only, or disabled) lost the description, label and class its ops gave it. The patch only ever turns validity on (`io/input/giokit_semantic_test.go`).
+
 ### 5. Semantic Image Role 
 
-Appends `semantic.Image` in `io/semantic/semantic.go`.
+Appends `semantic.Image` and the WAI-ARIA role classes kit's components need (`Link`, `Slider`, `ComboBox`, `ListBox`, `Option`, `List`, `ListItem`, `Tree`, `TreeItem`, `Grid`, `Row`, `GridCell`, `TabList`, `Tab`, `Menu`, `MenuItem`, `Dialog`, `Toolbar`, `Status`, `Tooltip`, `Group`, `Separator`) to `semantic.ClassOp` in `io/semantic/semantic.go`; `kit.Role` is that type. Android reports the button-like ones as `android.widget.Button`.
 
 ### 6. Native Editing Keys 
 

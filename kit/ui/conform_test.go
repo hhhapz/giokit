@@ -4,7 +4,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/hhhapz/giokit/gio/io/semantic"
 	"github.com/hhhapz/giokit/gio/layout"
 	"github.com/hhhapz/giokit/gio/widget"
 
@@ -17,7 +16,7 @@ import (
 // (see kittest/conform).
 func TestConformance(t *testing.T) {
 	button := func(name string, b ui.Button) conform.Case {
-		return conform.Case{Name: name, ID: b.ID, Class: semantic.Button, Role: kit.RoleButton, Label: b.Text,
+		return conform.Case{Name: name, ID: b.ID, Role: kit.RoleButton, Label: b.Text,
 			Build: conform.Clickable(func(th *kit.Theme, gtx layout.Context, c *kit.Clickable) layout.Dimensions {
 				return b.Layout(gtx, th, c)
 			})}
@@ -30,29 +29,29 @@ func TestConformance(t *testing.T) {
 		button("Button/Solid", ui.Button{ID: "save", Text: "Save", Style: ui.Solid}),
 		button("Button/Icon", ui.Button{ID: "next", Text: "Next", Icon: kit.IconChevronRight, Style: ui.Primary}),
 		button("Button/Small", ui.Button{ID: "save", Text: "Save", Size: kit.ControlSmall}),
-		conform.Case{Name: "IconButton", ID: "close", Class: semantic.Button, Role: kit.RoleButton, Label: "Close",
+		conform.Case{Name: "IconButton", ID: "close", Role: kit.RoleButton, Label: "Close",
 			Build: conform.Clickable(func(th *kit.Theme, gtx layout.Context, c *kit.Clickable) layout.Dimensions {
 				return ui.IconButton{ID: "close", Icon: kit.IconX, Label: "Close", Active: true}.Layout(gtx, th, c)
 			})},
-		conform.Case{Name: "Link", ID: "docs", Class: semantic.Button, Role: kit.RoleLink, Label: "Read the docs",
+		conform.Case{Name: "Link", ID: "docs", Role: kit.RoleLink, Label: "Read the docs",
 			Build: conform.Clickable(func(th *kit.Theme, gtx layout.Context, c *kit.Clickable) layout.Dimensions {
 				return ui.Link{ID: "docs", Text: "Read the docs"}.Layout(gtx, th, c)
 			})},
-		conform.Case{Name: "Checkbox", ID: "agree", Class: semantic.CheckBox, Role: kit.RoleCheckbox, Label: "I agree",
+		conform.Case{Name: "Checkbox", ID: "agree", Role: kit.RoleCheckbox, Label: "I agree",
 			Build: conform.Clickable(func(th *kit.Theme, gtx layout.Context, c *kit.Clickable) layout.Dimensions {
 				return ui.Checkbox{ID: "agree", Label: "I agree"}.Layout(gtx, th, c)
 			})},
-		conform.Case{Name: "Switch", ID: "wifi", Class: semantic.Switch, Role: kit.RoleSwitch, Label: "Wi-Fi",
+		conform.Case{Name: "Switch", ID: "wifi", Role: kit.RoleSwitch, Label: "Wi-Fi",
 			Build: conform.Clickable(func(th *kit.Theme, gtx layout.Context, c *kit.Clickable) layout.Dimensions {
 				return ui.Switch{ID: "wifi", Label: "Wi-Fi"}.Layout(gtx, th, c)
 			})},
-		conform.Case{Name: "Radio", ID: "small", Class: semantic.RadioButton, Role: kit.RoleRadio, Label: "Small",
+		conform.Case{Name: "Radio", ID: "small", Role: kit.RoleRadio, Label: "Small",
 			Build: conform.Clickable(func(th *kit.Theme, gtx layout.Context, c *kit.Clickable) layout.Dimensions {
 				return ui.Radio{ID: "small", Label: "Small"}.Layout(gtx, th, c)
 			})},
 		// A field's activation is gaining focus. No hover feedback beyond the
 		// text cursor (drawn by the compositor), and Enter/Space type text.
-		conform.Case{Name: "TextField", ID: "name", Class: semantic.Editor, Role: kit.RoleTextbox, Label: "Name", NoHover: true, NoKeys: true,
+		conform.Case{Name: "TextField", ID: "name", Role: kit.RoleTextbox, Label: "Name", NoHover: true, NoKeys: true,
 			Build: func(th *kit.Theme, disabled bool) conform.Control {
 				var e widget.Editor
 				n, was := new(int), false
@@ -67,7 +66,7 @@ func TestConformance(t *testing.T) {
 					was = f
 				}}
 			}},
-		conform.Case{Name: "NumberField/plus", ID: "qty/plus", Class: semantic.Button, Role: kit.RoleButton, Label: "Increase Quantity",
+		conform.Case{Name: "NumberField/plus", ID: "qty/plus", Role: kit.RoleButton, Label: "Increase Quantity",
 			Build: func(th *kit.Theme, disabled bool) conform.Control {
 				var s ui.NumberFieldState
 				n := new(int)
@@ -80,11 +79,11 @@ func TestConformance(t *testing.T) {
 					})
 				}}
 			}},
-		conform.Case{Name: "NavItem", ID: "nav:home", Class: semantic.Button, Role: kit.RoleLink, Label: "Home",
+		conform.Case{Name: "NavItem", ID: "nav:home", Role: kit.RoleLink, Label: "Home",
 			Build: conform.Clickable(func(th *kit.Theme, gtx layout.Context, c *kit.Clickable) layout.Dimensions {
 				return ui.NavItem{ID: "nav:home", Label: "Home"}.Layout(gtx, th, c)
 			})},
-		conform.Case{Name: "Disclosure", ID: "more", Class: semantic.Button, Role: kit.RoleButton, Label: "More options",
+		conform.Case{Name: "Disclosure", ID: "more", Role: kit.RoleButton, Label: "More options",
 			Build: func(th *kit.Theme, disabled bool) conform.Control {
 				var c ui.Collapsible
 				n := new(int)
@@ -99,7 +98,7 @@ func TestConformance(t *testing.T) {
 			}},
 		// Tabs are one Tab stop that lands on the selected tab, which shows
 		// no hover change: it is already the chosen one.
-		conform.Case{Name: "Tabs", ID: "tabs/general", Class: semantic.Button, Role: kit.RoleTab, Label: "General", NoHover: true,
+		conform.Case{Name: "Tabs", ID: "tabs/general", Role: kit.RoleTab, Label: "General", NoHover: true,
 			Build: func(th *kit.Theme, disabled bool) conform.Control {
 				var s ui.TabsState
 				n, sel := new(int), "general"
@@ -113,7 +112,7 @@ func TestConformance(t *testing.T) {
 					})
 				}}
 			}},
-		conform.Case{Name: "Stepper/plus", ID: "qty/plus", Class: semantic.Button, Role: kit.RoleButton, Label: "Increase Quantity",
+		conform.Case{Name: "Stepper/plus", ID: "qty/plus", Role: kit.RoleButton, Label: "Increase Quantity",
 			Build: func(th *kit.Theme, disabled bool) conform.Control {
 				var s ui.StepperState
 				n := new(int)
@@ -127,7 +126,7 @@ func TestConformance(t *testing.T) {
 					})
 				}}
 			}},
-		conform.Case{Name: "TextArea", ID: "notes", Class: semantic.Editor, Role: kit.RoleTextbox, Label: "Notes", NoHover: true, NoKeys: true,
+		conform.Case{Name: "TextArea", ID: "notes", Role: kit.RoleTextbox, Label: "Notes", NoHover: true, NoKeys: true,
 			Build: func(th *kit.Theme, disabled bool) conform.Control {
 				var e widget.Editor
 				n, was := new(int), false
@@ -159,7 +158,7 @@ func TestConformance(t *testing.T) {
 					})
 				}}
 			}},
-		conform.Case{Name: "Accordion", ID: "faq/a", Class: semantic.Button, Role: kit.RoleButton, Label: "Shipping",
+		conform.Case{Name: "Accordion", ID: "faq/a", Role: kit.RoleButton, Label: "Shipping",
 			Build: func(th *kit.Theme, disabled bool) conform.Control {
 				var s ui.AccordionState
 				open, n := "", new(int)
@@ -175,7 +174,7 @@ func TestConformance(t *testing.T) {
 			}},
 		// The reorder buttons; the drag handle (no click activation) is
 		// covered by TestReorderHandle.
-		conform.Case{Name: "ReorderList/up", ID: "q/b/up", Class: semantic.Button, Role: kit.RoleButton, Label: "Move Second up",
+		conform.Case{Name: "ReorderList/up", ID: "q/b/up", Role: kit.RoleButton, Label: "Move Second up",
 			Build: func(th *kit.Theme, disabled bool) conform.Control {
 				var s ui.ReorderListState
 				items := []ui.Choice{{ID: "a", Label: "First"}, {ID: "b", Label: "Second"}}
@@ -189,7 +188,7 @@ func TestConformance(t *testing.T) {
 					})
 				}}
 			}},
-		conform.Case{Name: "Breadcrumbs", ID: "path/home", Class: semantic.Button, Role: kit.RoleLink, Label: "Home",
+		conform.Case{Name: "Breadcrumbs", ID: "path/home", Role: kit.RoleLink, Label: "Home",
 			Build: func(th *kit.Theme, disabled bool) conform.Control {
 				var s ui.BreadcrumbsState
 				n := new(int)
@@ -202,7 +201,7 @@ func TestConformance(t *testing.T) {
 					})
 				}}
 			}},
-		conform.Case{Name: "Toolbar", ID: "tb/new", Class: semantic.Button, Role: kit.RoleButton, Label: "New",
+		conform.Case{Name: "Toolbar", ID: "tb/new", Role: kit.RoleButton, Label: "New",
 			Build: func(th *kit.Theme, disabled bool) conform.Control {
 				var s ui.ToolbarState
 				n := new(int)

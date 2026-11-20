@@ -15,8 +15,9 @@ import (
 	"github.com/hhhapz/giokit/gio/font"
 	"github.com/hhhapz/giokit/gio/layout"
 	"github.com/hhhapz/giokit/gio/op"
+	"github.com/hhhapz/giokit/gio/op/paint"
 	"github.com/hhhapz/giokit/gio/unit"
-	"github.com/hhhapz/giokit/gio/widget/material"
+	"github.com/hhhapz/giokit/gio/widget"
 
 	"github.com/hhhapz/giokit/kit"
 	"github.com/hhhapz/giokit/kittest"
@@ -96,7 +97,6 @@ func allNew(cfg textConfig) mutation {
 // and reports the time per frame including GPU work.
 func runText(b *testing.B, cfg textConfig, mutate mutation) {
 	th := kit.Dark()
-	mt := th.Material()
 	lines := genLines(textLines, 1, cfg.unique)
 	top, frame := 0, 0
 	draw := func(gtx layout.Context) {
@@ -109,13 +109,9 @@ func runText(b *testing.B, cfg textConfig, mutate mutation) {
 			x := 0
 			for _, t := range ln {
 				word := op.Offset(image.Pt(x, 0)).Push(gtx.Ops)
-				l := material.Label(mt, unit.Sp(13), t.text)
-				l.Font = font.Font{Typeface: "Go Mono"}
-				l.Color = t.color
-				l.MaxLines = 1
 				wordGtx := gtx
 				wordGtx.Constraints.Min.X = 0
-				d := l.Layout(wordGtx)
+				d := monoLabel(wordGtx, th, t.text, t.color)
 				x += d.Size.X
 				word.Pop()
 			}
@@ -159,3 +155,11 @@ func BenchmarkUniqueScroll(b *testing.B)      { runText(b, lowDPIUnique, scroll)
 func BenchmarkHiDPIStatic(b *testing.B)       { runText(b, hiDPI, static) }
 func BenchmarkHiDPIUniqueScroll(b *testing.B) { runText(b, hiDPIUnique, scroll) }
 func BenchmarkHiDPIUniqueAllNew(b *testing.B) { runText(b, hiDPIUnique, allNew(hiDPIUnique)) }
+
+// monoLabel draws one line of s in Go Mono at 13sp: one label, the unit
+// these benchmarks count.
+func monoLabel(gtx layout.Context, th *kit.Theme, s string, c color.NRGBA) layout.Dimensions {
+	m := op.Record(gtx.Ops)
+	paint.ColorOp{Color: c}.Add(gtx.Ops)
+	return widget.Label{MaxLines: 1}.Layout(gtx, th.Shaper, font.Font{Typeface: "Go Mono"}, unit.Sp(13), s, m.Stop())
+}

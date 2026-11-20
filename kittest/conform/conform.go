@@ -3,11 +3,11 @@
 // that row is green:
 //
 //	conform.Run(t, conform.Case{
-//		Name: "button", ID: "save", Class: semantic.Button, Role: kit.RoleButton,
+//		Name: "button", ID: "save", Role: kit.RoleButton,
 //		Build: func(th *kit.Theme, disabled bool) conform.Control { ... },
 //	})
 //
-// Per case it checks: an id, the semantic class, the kit role, and a spoken
+// Per case it checks: an id, the role, and a spoken
 // label that is not the id; hover changes pixels; one click fires once; Tab
 // reaches it; Enter and Space activate it; keyboard focus draws a ring;
 // disabled blocks clicks, keys and Tab and says so; and the structural audit
@@ -27,7 +27,6 @@ import (
 	"testing"
 
 	"github.com/hhhapz/giokit/gio/io/key"
-	"github.com/hhhapz/giokit/gio/io/semantic"
 	"github.com/hhhapz/giokit/gio/layout"
 	"github.com/hhhapz/giokit/gio/op/paint"
 
@@ -54,11 +53,9 @@ type Builder func(th *kit.Theme, disabled bool) Control
 
 // Case is one interactive control.
 type Case struct {
-	Name  string           // subtest name
-	ID    string           // the control's id as tests address it
-	Class semantic.ClassOp // its Gio semantic class (semantic.Unknown for none)
-	// Role is the role the control must report (Harness.Role: as recorded
-	// with kit.SetRole, else derived from Class). Required.
+	Name string // subtest name
+	ID   string // the control's id as tests address it
+	// Role is the role (semantic class) the control must report. Required.
 	Role kit.Role
 	// Label is the expected spoken label; empty accepts any non-empty label
 	// other than the id.
@@ -238,8 +235,8 @@ func styles() []*kit.Theme {
 }
 
 func (c Case) behaviour(t *testing.T, th *kit.Theme) {
-	if c.Role == "" {
-		t.Fatal("Case.Role is unset: name the kit role the control must record")
+	if c.Role == 0 {
+		t.Fatal("Case.Role is unset: name the role the control must record")
 	}
 	h, n := c.harness(t, th, false, 1)
 	r, ok := h.Find(c.ID)
@@ -248,19 +245,12 @@ func (c Case) behaviour(t *testing.T, th *kit.Theme) {
 	}
 	node, _ := find(h.A11yTree(), c.ID)
 	switch {
-	case node.Class != c.Class:
-		t.Errorf("semantic class %v, want %v", node.Class, c.Class)
+	case node.Class != c.Role:
+		t.Errorf("role %v, want %v", node.Class, c.Role)
 	case node.Label == "" || node.Label == c.ID:
 		t.Errorf("spoken label %q: needs a human label, never the id", node.Label)
 	case c.Label != "" && node.Label != c.Label:
 		t.Errorf("spoken label %q, want %q", node.Label, c.Label)
-	}
-	switch role := h.Role(c.ID); role {
-	case "":
-		t.Errorf("no role: set one with kit.SetRole (want %s)", c.Role)
-	case c.Role:
-	default:
-		t.Errorf("role %s, want %s", role, c.Role)
 	}
 	h.ExpectClean()
 

@@ -69,6 +69,9 @@ const (
 // smoothing, scrollbar or continuity check.
 type List struct {
 	widget.List
+	// Role is the role of the list's area, which carries its id
+	// (RoleListbox, RoleTree, RoleGrid); 0 for none.
+	Role    Role
 	wheel   gesture.Scroll
 	pending float32   // wheel distance still to glide, in pixels
 	last    time.Time // the previous frame's time, for the glide step
@@ -243,6 +246,9 @@ func (l *List) layoutItems(gtx layout.Context, id string, n int, item layout.Lis
 	defer area.Pop()
 	l.wheel.Add(gtx.Ops)
 	Tag(gtx, id)
+	if l.Role != 0 {
+		l.Role.Add(gtx.Ops)
+	}
 	if l.sizes == nil {
 		l.sizes = map[int]int{}
 	}

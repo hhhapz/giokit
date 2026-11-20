@@ -9,7 +9,6 @@ import (
 	"slices"
 
 	"github.com/hhhapz/giokit/gio/io/input"
-	"github.com/hhhapz/giokit/gio/io/semantic"
 
 	"github.com/hhhapz/giokit/kit"
 )
@@ -52,23 +51,14 @@ func (h *Harness) FocusedID() string {
 	return id
 }
 
-// Role is the role of the widget tagged id: as kit recorded it
-// (kit.SetRole; every kit component does), else derived from its Gio
-// semantic class, else "".
+// Role is the role (semantic class) of the widget tagged id, or 0
+// (semantic.Unknown) when it has none or is not on screen.
 func (h *Harness) Role(id string) kit.Role {
-	if r, ok := h.kwin.Roles()[id]; ok {
-		return r
-	}
 	n, ok := h.node(func(d input.SemanticDesc) bool { return d.Description == id })
 	if !ok {
-		return ""
+		return 0
 	}
-	return classRole[n.Desc.Class]
-}
-
-var classRole = map[semantic.ClassOp]kit.Role{
-	semantic.Button: kit.RoleButton, semantic.CheckBox: kit.RoleCheckbox,
-	semantic.Editor: kit.RoleTextbox, semantic.RadioButton: kit.RoleRadio, semantic.Switch: kit.RoleSwitch,
+	return n.Desc.Class
 }
 
 // ByRole returns the id of the one control with role and spoken label (as a

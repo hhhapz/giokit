@@ -80,12 +80,9 @@ func (c Combobox) Layout(gtx layout.Context, th *kit.Theme, s *ComboboxState) la
 	if !gtx.Focused(&s.Editor) && s.popup.Opened() && !s.popup.Opening() {
 		s.popup.Hide() // tabbed away
 	}
-	list := kit.Part(c.ID, "list")
-	return th.Popover(gtx, &s.popup, list, func(gtx layout.Context) layout.Dimensions {
-		d := th.EditorField(gtx, &s.Editor, c.ID, kit.EditorField{Placeholder: c.Placeholder, Size: c.Size})
-		kit.SetRole(gtx, c.ID, kit.RoleCombobox)
-		kit.SetRole(gtx, list, kit.RoleListbox)
-		return d
+	s.popup.Role = kit.RoleListbox
+	return th.Popover(gtx, &s.popup, kit.Part(c.ID, "list"), func(gtx layout.Context) layout.Dimensions {
+		return th.EditorField(gtx, &s.Editor, c.ID, kit.EditorField{Placeholder: c.Placeholder, Size: c.Size, Role: kit.RoleCombobox})
 	}, func(gtx layout.Context) layout.Dimensions { return c.suggestions(gtx, th, s) })
 }
 

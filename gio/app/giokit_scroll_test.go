@@ -14,11 +14,9 @@ import (
 // Every frame scrolls 20% more than raw, including the last one (upstream
 // scaled only the last one ×10).
 func TestWheelScaleHighResEven(t *testing.T) {
-	previous := GiokitWheelMiniStepScale()
-	t.Cleanup(func() { _ = SetGiokitWheelMiniStepScale(previous) })
-	if err := SetGiokitWheelMiniStepScale(defaultWheelMiniStepScale); err != nil {
-		t.Fatal(err)
-	}
+	previous := wheelMiniStepScale
+	t.Cleanup(func() { wheelMiniStepScale = previous })
+	wheelMiniStepScale = defaultWheelMiniStepScale
 	for i := range 8 {
 		steps := image.Point{}
 		if i == 7 {
@@ -52,39 +50,14 @@ func TestWheelScaleHighResEven(t *testing.T) {
 	}
 }
 
-func TestWheelMiniStepScaleConfiguration(t *testing.T) {
-	previous := GiokitWheelMiniStepScale()
-	t.Cleanup(func() { _ = SetGiokitWheelMiniStepScale(previous) })
-	if err := SetGiokitWheelMiniStepScale(1.5); err != nil {
-		t.Fatal(err)
-	}
-	if got := GiokitWheelMiniStepScale(); got != 1.5 {
-		t.Fatalf("configured scale: got %v, want 1.5", got)
-	}
-	if got := wheelScale(f32.Pt(0, 2), image.Point{}, true).Y; got != 3 {
-		t.Errorf("wheel sub-step: got %v, want 3", got)
-	}
-	if got := wheelScale(f32.Pt(0, 2), image.Point{}, false).Y; got != 2 {
-		t.Errorf("touchpad: got %v, want 2", got)
-	}
-	if got := wheelScale(f32.Pt(0, 15), image.Pt(0, 1), true).Y; got != 150 {
-		t.Errorf("classic wheel: got %v, want 150", got)
-	}
-	for _, invalid := range []float32{0, -1, float32(math.NaN()), float32(math.Inf(1))} {
-		if err := SetGiokitWheelMiniStepScale(invalid); err == nil {
-			t.Errorf("accepted invalid scale %v", invalid)
-		}
-		if got := GiokitWheelMiniStepScale(); got != 1.5 {
-			t.Errorf("invalid scale changed setting to %v", got)
-		}
-	}
+func TestWheelMiniStepScaleParse(t *testing.T) {
 	for _, value := range []string{"0.8", "2"} {
-		if _, err := parseWheelMiniStepScale(value); err != nil {
-			t.Errorf("rejected environment value %q: %v", value, err)
+		if _, ok := parseWheelMiniStepScale(value); !ok {
+			t.Errorf("rejected environment value %q", value)
 		}
 	}
-	for _, value := range []string{"", "0", "NaN", "-1", "nonsense"} {
-		if _, err := parseWheelMiniStepScale(value); err == nil {
+	for _, value := range []string{"", "0", "NaN", "Inf", "-1", "nonsense"} {
+		if _, ok := parseWheelMiniStepScale(value); ok {
 			t.Errorf("accepted invalid environment value %q", value)
 		}
 	}

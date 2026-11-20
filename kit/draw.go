@@ -224,7 +224,7 @@ const unbounded = 1 << 20
 
 // measure returns w's natural size: w is laid out unconstrained, with its
 // operations discarded, input disabled, and outside the window's frame, so
-// semantic and focus registration (Tag, SetRole, FocusID) have no effect.
+// semantic and focus registration (Tag, FocusID) have no effect.
 // w still runs: Go state it changes stays changed, so measured callbacks
 // must only draw.
 func measure(gtx layout.Context, w layout.Widget) layout.Dimensions {

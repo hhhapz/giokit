@@ -331,7 +331,7 @@ type rowSpec struct {
 // ring while focused, the content padded like a control.
 func row(gtx layout.Context, th *kit.Theme, c *kit.Clickable, r rowSpec, content layout.Widget) layout.Dimensions {
 	return th.Press(gtx, c, r.id, func(gtx layout.Context, st kit.State) layout.Dimensions {
-		describe(gtx, r.id, r.role, semantic.Button, r.label)
+		describe(gtx, r.role, r.label)
 		semantic.SelectedOp(r.selected).Add(gtx.Ops)
 		bg := th.Surface
 		if r.selected {

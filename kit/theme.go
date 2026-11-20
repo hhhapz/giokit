@@ -8,7 +8,6 @@ import (
 	"github.com/hhhapz/giokit/gio/font/gofont"
 	"github.com/hhhapz/giokit/gio/text"
 	"github.com/hhhapz/giokit/gio/unit"
-	"github.com/hhhapz/giokit/gio/widget/material"
 )
 
 // TypeScale is the theme's text sizes. Components read sizes from here, so a
@@ -96,7 +95,6 @@ type Theme struct {
 
 	// Shaper shapes all text, from bundled fonts only. UseFonts replaces it.
 	Shaper *text.Shaper
-	mat    *material.Theme // built and refreshed by Material
 }
 
 // New's defaults for the fields a palette does not set.
@@ -175,15 +173,10 @@ func newNamed(name string, dark bool, p Palette) *Theme {
 //
 //	danger := th.Derive(func(t *kit.Theme) { t.Accent, t.AccentBg = t.Bad, t.BadBg })
 //
-// Value fields (colors, sizes, Strings, Metrics) are the copy's own, as are
-// its Material settings. The Shaper is shared, which keeps text caches warm;
+// Value fields (colors, sizes, Strings, Metrics) are the copy's own. The Shaper is shared, which keeps text caches warm;
 // calling UseFonts on the copy gives it a new shaper without touching t.
 func (t *Theme) Derive(f func(t *Theme)) *Theme {
 	c := *t
-	if c.mat != nil { // the copy's material settings are its own
-		m := *c.mat
-		c.mat = &m
-	}
 	f(&c)
 	return &c
 }
@@ -300,29 +293,6 @@ func (s TypeScale) Scaled(f float32) TypeScale {
 		Stat:    s.Stat * m,
 		Title:   s.Title * m,
 	}
-}
-
-// Material returns the material theme kit draws editors and labels with,
-// for widgets kit doesn't wrap. Its Palette, Face and Shaper follow the
-// theme's Bg, Fg, Accent, OnAccent, UI and Shaper at every call, so direct
-// field writes take effect. Its other settings (TextSize, FingerSize,
-// icons) are the caller's to change, and are kept when those fields change.
-// Call it each frame rather than keeping the pointer: a change to a
-// mirrored field replaces it.
-func (t *Theme) Material() *material.Theme {
-	want := material.Palette{Bg: t.Bg, Fg: t.Fg, ContrastBg: t.Accent, ContrastFg: t.OnAccent}
-	if m := t.mat; m != nil && m.Palette == want && m.Face == t.UI && m.Shaper == t.Shaper {
-		return m
-	}
-	var m material.Theme
-	if t.mat != nil {
-		m = *t.mat // never mutate a material theme an earlier call returned
-	} else {
-		m = *material.NewTheme()
-	}
-	m.Palette, m.Face, m.Shaper = want, t.UI, t.Shaper
-	t.mat = &m
-	return t.mat
 }
 
 // Space scales a spacing value by the theme's Density (0 counts as 1).

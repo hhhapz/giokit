@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"image"
 
+	"github.com/hhhapz/giokit/gio/font"
 	"github.com/hhhapz/giokit/gio/io/event"
 	"github.com/hhhapz/giokit/gio/io/key"
 	"github.com/hhhapz/giokit/gio/io/pointer"
@@ -13,7 +14,6 @@ import (
 	"github.com/hhhapz/giokit/gio/op/clip"
 	"github.com/hhhapz/giokit/gio/unit"
 	"github.com/hhhapz/giokit/gio/widget"
-	"github.com/hhhapz/giokit/gio/widget/material"
 )
 
 // WithLabel lays out a control followed by an optional text label.
@@ -88,6 +88,9 @@ type EditorField struct {
 	// Lines is the minimum height in lines; 0 is one line. It does not make
 	// the editor multi-line: set Editor.SingleLine yourself.
 	Lines int
+	// Role is the field's role: RoleTextbox by default; a combobox's
+	// field is RoleCombobox.
+	Role Role
 }
 
 // EditorField lays out e as a field: theme chrome, a ring while focused,
@@ -155,12 +158,7 @@ func (t *Theme) editorBody(gtx layout.Context, e *widget.Editor, pad event.Tag, 
 					lineH := float32(gtx.Sp(t.Type.Body)) * bodyLineHeight
 					gtx.Constraints.Min.Y = max(gtx.Constraints.Min.Y, int(lineH*float32(f.Lines)))
 				}
-				ed := material.Editor(t.Material(), e, f.Placeholder)
-				ed.TextSize = t.Type.Body
-				ed.Color = t.Fg
-				ed.HintColor = t.Dim
-				ed.SelectionColor = WithAlpha(t.Accent, selectionAlpha)
-				return ed.Layout(gtx)
+				return t.editor(gtx, e, f.Placeholder)
 			}),
 		)
 	})
@@ -168,21 +166,39 @@ func (t *Theme) editorBody(gtx layout.Context, e *widget.Editor, pad event.Tag, 
 	// The id goes on the whole field so tests can click anywhere in it.
 	defer clip.Rect(image.Rectangle{Max: dims.Size}).Push(gtx.Ops).Pop()
 	if gtx.Enabled() {
-		// Only while enabled: Gio drops the semantics (the id) of an area
-		// whose handler asks for no events, as a disabled one doesn't.
+		// Only while enabled: a disabled field takes no clicks and shows no
+		// text cursor.
 		event.Op(gtx.Ops, pad)
 		pointer.CursorText.Add(gtx.Ops)
 	}
 	semantic.EnabledOp(gtx.Enabled()).Add(gtx.Ops)
 	// The tagged area is the editor as screen readers and tests see it:
 	// role and spoken name on the node that carries the id.
-	semantic.Editor.Add(gtx.Ops)
+	cmp.Or(f.Role, RoleTextbox).Add(gtx.Ops)
 	if label := cmp.Or(f.Label, f.Placeholder); label != "" {
 		semantic.LabelOp(label).Add(gtx.Ops)
 	}
 	Tag(gtx, id)
 	FocusID(gtx, e, id)
-	SetRole(gtx, id, RoleTextbox)
 	call.Add(gtx.Ops)
 	return dims
+}
+
+// editor draws e in the UI face at body size, with hint drawn while it is
+// empty, and the editor at least as large as the hint.
+func (t *Theme) editor(gtx layout.Context, e *widget.Editor, hint string) layout.Dimensions {
+	f := font.Font{Typeface: t.UI}
+	m := op.Record(gtx.Ops)
+	maxLines := 0
+	if e.SingleLine {
+		maxLines = 1
+	}
+	hd := widget.Label{Alignment: e.Alignment, MaxLines: maxLines}.Layout(gtx, t.Shaper, f, t.Type.Body, hint, colorOp(gtx, t.Dim))
+	hintCall := m.Stop()
+	gtx.Constraints.Min = image.Pt(max(gtx.Constraints.Min.X, hd.Size.X), max(gtx.Constraints.Min.Y, hd.Size.Y))
+	d := e.Layout(gtx, t.Shaper, f, t.Type.Body, colorOp(gtx, t.Fg), colorOp(gtx, WithAlpha(t.Accent, selectionAlpha)))
+	if e.Len() == 0 {
+		hintCall.Add(gtx.Ops)
+	}
+	return d
 }

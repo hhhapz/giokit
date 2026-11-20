@@ -31,6 +31,29 @@ const (
 	RadioButton
 	Switch
 	Image
+	// giokit: WAI-ARIA roles beyond upstream's classes.
+	Link      // navigates somewhere
+	Slider    // picks a value in a range
+	ComboBox  // a field that opens a list of choices
+	ListBox   // a list of choices
+	Option    // a choice in a ListBox
+	List      // a list of items
+	ListItem  // an item in a List
+	Tree      // a hierarchical list
+	TreeItem  // an item in a Tree
+	Grid      // a table of interactive cells
+	Row       // a row in a Grid
+	GridCell  // a cell in a Row
+	TabList   // a set of tabs
+	Tab       // a tab in a TabList
+	Menu      // a list of commands
+	MenuItem  // a command in a Menu
+	Dialog    // a window over the page
+	Toolbar   // a set of controls
+	Status    // a live message (a toast)
+	Tooltip   // a description shown on hover or focus
+	Group     // a named set of components
+	Separator // divides content
 )
 
 // SelectedOp describes the selected state for components that have
@@ -88,6 +111,50 @@ func (c ClassOp) String() string {
 		return "Switch"
 	case Image:
 		return "Image"
+	case Link:
+		return "Link"
+	case Slider:
+		return "Slider"
+	case ComboBox:
+		return "ComboBox"
+	case ListBox:
+		return "ListBox"
+	case Option:
+		return "Option"
+	case List:
+		return "List"
+	case ListItem:
+		return "ListItem"
+	case Tree:
+		return "Tree"
+	case TreeItem:
+		return "TreeItem"
+	case Grid:
+		return "Grid"
+	case Row:
+		return "Row"
+	case GridCell:
+		return "GridCell"
+	case TabList:
+		return "TabList"
+	case Tab:
+		return "Tab"
+	case Menu:
+		return "Menu"
+	case MenuItem:
+		return "MenuItem"
+	case Dialog:
+		return "Dialog"
+	case Toolbar:
+		return "Toolbar"
+	case Status:
+		return "Status"
+	case Tooltip:
+		return "Tooltip"
+	case Group:
+		return "Group"
+	case Separator:
+		return "Separator"
 	default:
 		panic("invalid ClassOp")
 	}

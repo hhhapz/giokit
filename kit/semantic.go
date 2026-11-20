@@ -17,23 +17,21 @@ func Tag(gtx layout.Context, id string) {
 	}
 }
 
-// TagArea lays out w and gives its whole area the id, on a nested clip area
-// of its own that carries no event handler.
-//
-// It exists because of how Gio's router keeps semantics: an area with an
-// event handler keeps its description only if that handler asked for
-// pointer gestures this frame, that is, if its tag was polled with a
-// pointer filter. A handler that is never polled that way (a FocusGroup
-// container that reads only key and focus events, a keyboard-only canvas,
-// a disabled control, a component whose Update was skipped this frame)
-// asks for none, and Gio drops the area's description, so Tag on it would
-// be lost. A handler-free area is always kept.
+// TagArea lays out w on a clip area of its own, as large as w, and gives
+// that area the id: for content that has no area to Tag (a label, a
+// drawing).
 func TagArea(gtx layout.Context, id string, w layout.Widget) layout.Dimensions {
+	return area(gtx, w, func() { Tag(gtx, id) })
+}
+
+// area lays out w on a clip area of its own, as large as w, adding ops
+// (semantics) to that area first.
+func area(gtx layout.Context, w layout.Widget, ops func()) layout.Dimensions {
 	m := op.Record(gtx.Ops)
 	dims := w(gtx)
 	call := m.Stop()
 	defer clip.Rect(image.Rectangle{Max: dims.Size}).Push(gtx.Ops).Pop()
-	Tag(gtx, id)
+	ops()
 	call.Add(gtx.Ops)
 	return dims
 }
@@ -49,75 +47,49 @@ func TagLabel(gtx layout.Context, id, label string) {
 }
 
 // TagImage names an image area: id for tests, label as its alternative
-// text. Audits treat the label as a description, not painted text (stock
-// Gio has no image role).
+// text, role RoleImage. Audits treat the label as a description, not
+// painted text.
 func TagImage(gtx layout.Context, id, label string) {
 	TagLabel(gtx, id, label)
-	SetRole(gtx, id, RoleImage)
+	RoleImage.Add(gtx.Ops)
 }
 
-// Role is what a control is, in the WAI-ARIA vocabulary: richer than Gio's
-// five semantic classes, so a tree node, a table row and a menu item are
-// told apart. kit's components set their roles and kittest reads them
-// (h.Role, h.ByRole). Roles live in the window's frame (Window.Roles):
-// the platform's accessibility tree sees only Gio's semantic classes.
-type Role string
+// Role is what a control is, in the WAI-ARIA vocabulary: richer than
+// upstream Gio's five semantic classes, so a tree node, a table row and a
+// menu item are told apart. It is the fork's semantic.ClassOp: add it to the
+// control's clip area (role.Add(gtx.Ops)) beside its Tag, and it is part of
+// the semantic tree that kittest (h.Role, h.ByRole) and the platform read.
+// The zero value, semantic.Unknown, is no role.
+type Role = semantic.ClassOp
 
 // The roles kit's components record.
 const (
-	RoleButton    Role = "button"
-	RoleLink      Role = "link"
-	RoleCheckbox  Role = "checkbox"
-	RoleSwitch    Role = "switch"
-	RoleRadio     Role = "radio"
-	RoleTextbox   Role = "textbox"
-	RoleSlider    Role = "slider"
-	RoleCombobox  Role = "combobox"
-	RoleListbox   Role = "listbox"
-	RoleOption    Role = "option"
-	RoleList      Role = "list"
-	RoleListItem  Role = "listitem"
-	RoleTree      Role = "tree"
-	RoleTreeItem  Role = "treeitem"
-	RoleGrid      Role = "grid"
-	RoleRow       Role = "row"
-	RoleGridCell  Role = "gridcell"
-	RoleTabList   Role = "tablist"
-	RoleTab       Role = "tab"
-	RoleMenu      Role = "menu"
-	RoleMenuItem  Role = "menuitem"
-	RoleDialog    Role = "dialog"
-	RoleImage     Role = "img"
-	RoleToolbar   Role = "toolbar"
-	RoleStatus    Role = "status" // a toast, a live message
-	RoleTooltip   Role = "tooltip"
-	RoleGroup     Role = "group"
-	RoleSeparator Role = "separator"
+	RoleButton    = semantic.Button
+	RoleLink      = semantic.Link
+	RoleCheckbox  = semantic.CheckBox
+	RoleSwitch    = semantic.Switch
+	RoleRadio     = semantic.RadioButton
+	RoleTextbox   = semantic.Editor
+	RoleSlider    = semantic.Slider
+	RoleCombobox  = semantic.ComboBox
+	RoleListbox   = semantic.ListBox
+	RoleOption    = semantic.Option
+	RoleList      = semantic.List
+	RoleListItem  = semantic.ListItem
+	RoleTree      = semantic.Tree
+	RoleTreeItem  = semantic.TreeItem
+	RoleGrid      = semantic.Grid
+	RoleRow       = semantic.Row
+	RoleGridCell  = semantic.GridCell
+	RoleTabList   = semantic.TabList
+	RoleTab       = semantic.Tab
+	RoleMenu      = semantic.Menu
+	RoleMenuItem  = semantic.MenuItem
+	RoleDialog    = semantic.Dialog
+	RoleImage     = semantic.Image
+	RoleToolbar   = semantic.Toolbar
+	RoleStatus    = semantic.Status // a toast, a live message
+	RoleTooltip   = semantic.Tooltip
+	RoleGroup     = semantic.Group
+	RoleSeparator = semantic.Separator
 )
-
-// SetRole records id's role this frame (see Role).
-func SetRole(gtx layout.Context, id string, r Role) {
-	if f := frameOf(gtx); f != nil {
-		if f.roles == nil {
-			f.roles = map[string]Role{}
-		}
-		f.roles[Path(gtx, id)] = r
-	}
-}
-
-// Roles are the roles recorded in the last frame, by id path. The map is
-// borrowed: it belongs to the window and is cleared and refilled by the
-// next frame's Begin, so copy what you keep and do not modify it.
-func (w *Window) Roles() map[string]Role { return w.fr.roles }
-
-// Images are the id paths of image areas in the last frame: every id whose
-// role is RoleImage (TagImage). It returns a new map on each call.
-func (w *Window) Images() map[string]bool {
-	images := map[string]bool{}
-	for id, r := range w.fr.roles {
-		if r == RoleImage {
-			images[id] = true
-		}
-	}
-	return images
-}

@@ -176,13 +176,12 @@ type State struct {
 // animating hover over d.
 func (c *Clickable) press(gtx layout.Context, id string, d time.Duration, w func(gtx layout.Context, st State) layout.Dimensions) layout.Dimensions {
 	c.disabled = !gtx.Enabled()
-	if c.disabled {
-		return c.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-			return disabledArea(gtx, id, func(gtx layout.Context) layout.Dimensions { return w(gtx, State{}) })
-		})
-	}
 	return c.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 		Tag(gtx, id)
+		if c.disabled {
+			semantic.EnabledOp(false).Add(gtx.Ops)
+			return w(gtx, State{})
+		}
 		FocusID(gtx, c, id)
 		var focused bool
 		if g := c.group; g != nil {
@@ -211,18 +210,10 @@ func (t *Theme) Press(gtx layout.Context, c *Clickable, id string, w func(gtx la
 	return c.press(gtx, id, t.Dur(DurFast), w)
 }
 
-// disabledArea lays out w with id and a disabled state on a nested area of
-// its own. A disabled handler asks for no gestures, and Gio drops semantics
-// from such areas: the id must not sit on the handler's area.
-func disabledArea(gtx layout.Context, id string, w layout.Widget) layout.Dimensions {
-	m := op.Record(gtx.Ops)
-	dims := w(gtx)
-	call := m.Stop()
-	defer clip.Rect(image.Rectangle{Max: dims.Size}).Push(gtx.Ops).Pop()
-	Tag(gtx, id)
-	semantic.EnabledOp(false).Add(gtx.Ops)
-	call.Add(gtx.Ops)
-	return dims
+// disabledArea lays out w on an area of its own that the semantics call
+// disabled, so everything inside reads as disabled.
+func disabledArea(gtx layout.Context, w layout.Widget) layout.Dimensions {
+	return area(gtx, w, func() { semantic.EnabledOp(false).Add(gtx.Ops) })
 }
 
 // Disable lays out w disabled when disabled is true, and normally otherwise.
@@ -237,7 +228,7 @@ func (t *Theme) Disable(gtx layout.Context, disabled bool, w layout.Widget) layo
 	}
 	gtx = gtx.Disabled()
 	defer paint.PushOpacity(gtx.Ops, t.DisabledAlpha).Pop()
-	return disabledArea(gtx, "", w) // the whole subtree reads as disabled
+	return disabledArea(gtx, w) // the whole subtree reads as disabled
 }
 
 // Anim is a per-control animation slot for the component drawing c (a

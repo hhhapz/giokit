@@ -306,8 +306,7 @@ func (f Form) Layout(gtx layout.Context, th *kit.Theme) layout.Dimensions {
 	for _, ff := range f.Fields {
 		rows = append(rows, kit.Rigid(func(gtx layout.Context) layout.Dimensions { return f.row(gtx, th, ff, narrow, labelWidth) }))
 	}
-	kit.SetRole(gtx, f.ID, kit.RoleGroup)
-	return kit.Group(gtx, f.ID, th.Strings.Form, func(gtx layout.Context) layout.Dimensions {
+	return kit.Group(gtx, f.ID, th.Strings.Form, kit.RoleGroup, func(gtx layout.Context) layout.Dimensions {
 		return kit.Flex{Axis: layout.Vertical, Gap: kit.Space3}.Layout(gtx, th, rows...)
 	})
 }
@@ -317,10 +316,9 @@ func (f Form) Layout(gtx layout.Context, th *kit.Theme) layout.Dimensions {
 // reader would announce the label twice.
 func (f Form) row(gtx layout.Context, th *kit.Theme, ff FormField, narrow bool, labelWidth int) layout.Dimensions {
 	id := kit.Part(f.ID, ff.ID)
-	kit.SetRole(gtx, id, kit.RoleGroup)
-	return kit.Group(gtx, id, "", func(gtx layout.Context) layout.Dimensions {
+	return kit.Group(gtx, id, "", kit.RoleGroup, func(gtx layout.Context) layout.Dimensions {
 		label := func(gtx layout.Context) layout.Dimensions {
-			return kit.Group(gtx, kit.Part(id, "label"), ff.Label, func(gtx layout.Context) layout.Dimensions {
+			return kit.Group(gtx, kit.Part(id, "label"), ff.Label, 0, func(gtx layout.Context) layout.Dimensions {
 				return th.Text(gtx, ff.Label, th.Type.Body, th.Muted, kit.Medium)
 			})
 		}

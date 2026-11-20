@@ -33,7 +33,7 @@ Put detail in `docs/`, and add a pitfall here only as a one-line rule.
   every demo on one page. New components land as a demo with a test.
 - **`gio/`:** our hard fork of Gio (`github.com/hhhapz/giokit/gio/...`), synced
   from upstream by `gio: upstream` snapshot commits (`scripts/gio-sync.sh`,
-  `docs/gio-patches.md`). Commits touch `gio/` or the rest, never both.
+  `docs/gio-patches.md`). Never squash a snapshot commit.
 - **`skills/giokit/SKILL.md`:** portable skill for projects that use giokit.
 - **`internal/bench/`:** rendering baselines (editor/terminal text, video).
 - **`media/`:** separate module (cgo, FFmpeg): video decoder for `paint.Stream`/

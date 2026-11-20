@@ -68,12 +68,11 @@ import (
 	"github.com/hhhapz/giokit/kit"
 )
 
-// describe records a control's semantics: its Gio class, its kit role
-// under id, and its spoken label (none when empty). Call it inside the
-// control's clip area, as th.Press's callback is.
-func describe(gtx layout.Context, id string, role kit.Role, class semantic.ClassOp, label string) {
-	class.Add(gtx.Ops)
-	kit.SetRole(gtx, id, role)
+// describe records a control's semantics: its role and its spoken label
+// (none when empty). Call it inside the control's clip area, as
+// th.Press's callback is.
+func describe(gtx layout.Context, role kit.Role, label string) {
+	role.Add(gtx.Ops)
 	if label != "" {
 		semantic.LabelOp(label).Add(gtx.Ops)
 	}

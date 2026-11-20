@@ -35,7 +35,7 @@ const checkMaxRadius unit.Dp = 5
 // read c.Clicked in the handle pass and flip your value.
 func (cb Checkbox) Layout(gtx layout.Context, th *kit.Theme, c *kit.Clickable) layout.Dimensions {
 	return th.Press(gtx, c, cb.ID, func(gtx layout.Context, st kit.State) layout.Dimensions {
-		describe(gtx, cb.ID, kit.RoleCheckbox, semantic.CheckBox, cb.Label)
+		describe(gtx, kit.RoleCheckbox, cb.Label)
 		semantic.SelectedOp(cb.Checked).Add(gtx.Ops)
 		s := th.Styled(kit.Surface{Bg: kit.WithAlpha(th.Surface, uint8(255*st.Hover)), Border: kit.LerpColor(th.Dim, th.Muted, st.Hover), Radius: min(th.RadiusSm(), checkMaxRadius)})
 		if cb.Checked {
@@ -74,7 +74,7 @@ type Switch struct {
 // c.Clicked in the handle pass and flip your value.
 func (sw Switch) Layout(gtx layout.Context, th *kit.Theme, c *kit.Clickable) layout.Dimensions {
 	return th.Press(gtx, c, sw.ID, func(gtx layout.Context, st kit.State) layout.Dimensions {
-		describe(gtx, sw.ID, kit.RoleSwitch, semantic.Switch, sw.Label)
+		describe(gtx, kit.RoleSwitch, sw.Label)
 		semantic.SelectedOp(sw.On).Add(gtx.Ops)
 		target := float32(0)
 		if sw.On {
@@ -121,7 +121,7 @@ type Radio struct {
 // set your value to this option.
 func (r Radio) Layout(gtx layout.Context, th *kit.Theme, c *kit.Clickable) layout.Dimensions {
 	return th.Press(gtx, c, r.ID, func(gtx layout.Context, st kit.State) layout.Dimensions {
-		describe(gtx, r.ID, kit.RoleRadio, semantic.RadioButton, r.Label)
+		describe(gtx, kit.RoleRadio, r.Label)
 		semantic.SelectedOp(r.Selected).Add(gtx.Ops)
 		target := float32(0)
 		if r.Selected {
@@ -312,6 +312,6 @@ func (sl Slider) Layout(gtx layout.Context, th *kit.Theme, s *SliderState) layou
 		semantic.LabelOp(sl.Label).Add(gtx.Ops)
 	}
 	kit.Tag(gtx, sl.ID)
-	kit.SetRole(gtx, sl.ID, kit.RoleSlider)
+	kit.RoleSlider.Add(gtx.Ops)
 	return layout.Dimensions{Size: sz}
 }

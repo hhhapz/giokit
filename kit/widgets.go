@@ -1,61 +1,43 @@
 package kit
 
 import (
-	"image"
 	"image/color"
 	"strings"
 
 	"github.com/hhhapz/giokit/gio/font"
 	"github.com/hhhapz/giokit/gio/layout"
 	"github.com/hhhapz/giokit/gio/op"
+	"github.com/hhhapz/giokit/gio/op/paint"
 	"github.com/hhhapz/giokit/gio/unit"
-	"github.com/hhhapz/giokit/gio/widget/material"
+	"github.com/hhhapz/giokit/gio/widget"
 )
 
 // Text draws a single line of text in the UI typeface, truncated to the
 // width available. Its area hugs the text.
 func (t *Theme) Text(gtx layout.Context, s string, size unit.Sp, c color.NRGBA, w font.Weight) layout.Dimensions {
-	l := material.Label(t.Material(), size, s)
-	l.Color = c
-	l.Font.Weight = w
-	l.MaxLines = 1
-	return hug(gtx, l)
+	return t.label(gtx, s, font.Font{Typeface: t.UI, Weight: w}, size, c, 1, 0)
 }
 
 // Paragraph draws wrapping body text at the regular weight.
 func (t *Theme) Paragraph(gtx layout.Context, s string, c color.NRGBA) layout.Dimensions {
-	l := material.Label(t.Material(), t.Type.Body, s)
-	l.Color = c
-	l.LineHeightScale = bodyLineHeight
-	return hug(gtx, l)
+	return t.label(gtx, s, font.Font{Typeface: t.UI}, t.Type.Body, c, 0, bodyLineHeight)
 }
 
 // ParagraphLine is Paragraph with a font weight: it wraps too. It suits a
 // block of text whose emphasis changes with state, such as the current line
 // of lyrics.
 func (t *Theme) ParagraphLine(gtx layout.Context, s string, c color.NRGBA, w font.Weight) layout.Dimensions {
-	l := material.Label(t.Material(), t.Type.Body, s)
-	l.Color = c
-	l.Font.Weight = w
-	l.LineHeightScale = bodyLineHeight
-	return hug(gtx, l)
+	return t.label(gtx, s, font.Font{Typeface: t.UI, Weight: w}, t.Type.Body, c, 0, bodyLineHeight)
 }
 
 // Code draws a single line in the monospace typeface (logs, ids, paths).
 func (t *Theme) Code(gtx layout.Context, s string, size unit.Sp, c color.NRGBA) layout.Dimensions {
-	l := material.Label(t.Material(), size, s)
-	l.Color = c
-	l.Font.Typeface = t.Mono
-	l.MaxLines = 1
-	return hug(gtx, l)
+	return t.label(gtx, s, font.Font{Typeface: t.Mono}, size, c, 1, 0)
 }
 
 // CodeBlock is Code that wraps: monospace paragraphs (previews, output).
 func (t *Theme) CodeBlock(gtx layout.Context, s string, size unit.Sp, c color.NRGBA) layout.Dimensions {
-	l := material.Label(t.Material(), size, s)
-	l.Color = c
-	l.Font.Typeface = t.Mono
-	return hug(gtx, l)
+	return t.label(gtx, s, font.Font{Typeface: t.Mono}, size, c, 0, 0)
 }
 
 // Heading is a page or section title.
@@ -99,17 +81,19 @@ func (t *Theme) Bar(gtx layout.Context, v, h unit.Dp, w layout.Widget) layout.Di
 	return Fill(gtx, t.Panel, Stretch(Pad(t.Space(v), t.Space(h), w)))
 }
 
-// hug lays l out so its area, and so its semantic bounds, hug the text: it
-// measures with gtx's constraints, then lays out again with that size as the
-// maximum. Stock Gio clips a label to its maximum constraints, so without
-// this a label reports bounds as large as its container (wrong for screen
-// readers, and kittest could not find its pixels). The shaper caches the
-// layout, so the second pass is cheap.
-func hug(gtx layout.Context, l material.LabelStyle) layout.Dimensions {
+// label draws s with the theme's shaper in f at size and color c: at most
+// maxLines lines (0 is unlimited; a cut line ends in an ellipsis), with
+// lineHeight times the font's line height (0 is the font's own). The
+// fork's widget.Label clips to the laid-out text, so its area hugs the
+// text.
+func (t *Theme) label(gtx layout.Context, s string, f font.Font, size unit.Sp, c color.NRGBA, maxLines int, lineHeight float32) layout.Dimensions {
+	return widget.Label{MaxLines: maxLines, LineHeightScale: lineHeight}.Layout(gtx, t.Shaper, f, size, s, colorOp(gtx, c))
+}
+
+// colorOp records a paint.ColorOp for c, the material widgets take a text
+// color as.
+func colorOp(gtx layout.Context, c color.NRGBA) op.CallOp {
 	m := op.Record(gtx.Ops)
-	d := l.Layout(gtx)
-	m.Stop()
-	gtx.Constraints.Max = d.Size
-	gtx.Constraints.Min = image.Pt(min(gtx.Constraints.Min.X, d.Size.X), min(gtx.Constraints.Min.Y, d.Size.Y))
-	return l.Layout(gtx)
+	paint.ColorOp{Color: c}.Add(gtx.Ops)
+	return m.Stop()
 }

@@ -297,10 +297,10 @@ func (f DateField) Layout(gtx layout.Context, th *kit.Theme, s *DateFieldState) 
 		}
 		label, lc = f.Value.Format(layoutStr), th.Fg
 	}
+	s.popup.Role = kit.RoleDialog
 	return th.Popover(gtx, &s.popup, f.ID, func(gtx layout.Context) layout.Dimensions {
-		kit.SetRole(gtx, f.ID, kit.RoleDialog)
 		return th.Press(gtx, &s.Trigger, kit.Part(f.ID, "field"), func(gtx layout.Context, st kit.State) layout.Dimensions {
-			describe(gtx, kit.Part(f.ID, "field"), kit.RoleCombobox, semantic.Button, "") // spoken by its text
+			describe(gtx, kit.RoleCombobox, "") // spoken by its text
 			st.Focused = st.Focused || s.popup.Opened()
 			return th.SizedField(gtx, f.Size, st, func(gtx layout.Context) layout.Dimensions {
 				return kit.Row(gtx,
@@ -413,10 +413,10 @@ func (f DateField) calendar(gtx layout.Context, th *kit.Theme, s *DateFieldState
 	grid := func(gtx layout.Context) layout.Dimensions {
 		return kit.KeyContext(gtx, "calendar", func(gtx layout.Context) layout.Dimensions {
 			keys(gtx)
-			kit.SetRole(gtx, kit.Part(f.ID, "grid"), kit.RoleGrid)
 			return s.grid.Layout(gtx, kit.Part(f.ID, "grid"), func(gtx layout.Context) layout.Dimensions {
-				// The group's own area takes no pointer gestures: name it on a nested one.
-				return kit.TagArea(gtx, kit.Part(f.ID, "grid"), body)
+				kit.Tag(gtx, kit.Part(f.ID, "grid"))
+				kit.RoleGrid.Add(gtx.Ops)
+				return body(gtx)
 			})
 		})
 	}
@@ -458,7 +458,7 @@ func (f DateField) pageKeys(gtx layout.Context, s *DateFieldState) {
 // viewButton is the title: it zooms out to the next coarser view.
 func (f DateField) viewButton(gtx layout.Context, th *kit.Theme, s *DateFieldState, title string) layout.Dimensions {
 	return th.Press(gtx, &s.head, kit.Part(f.ID, "view"), func(gtx layout.Context, st kit.State) layout.Dimensions {
-		describe(gtx, kit.Part(f.ID, "view"), kit.RoleButton, semantic.Button, title)
+		describe(gtx, kit.RoleButton, title)
 		sf := th.Styled(kit.Surface{Bg: th.Highlight(st.Hover), Radius: th.RadiusSm()})
 		if st.Focused {
 			sf.Focus = th.Focus
@@ -543,7 +543,7 @@ func (f DateField) gridCell(gtx layout.Context, th *kit.Theme, s *DateFieldState
 	k := s.view.key(c.date)
 	id := kit.Part(f.ID, k)
 	return th.Press(gtx, s.cells.Get(k), id, func(gtx layout.Context, st kit.State) layout.Dimensions {
-		describe(gtx, id, kit.RoleGridCell, semantic.Button, "") // spoken by its text
+		describe(gtx, kit.RoleGridCell, "") // spoken by its text
 		semantic.SelectedOp(c.selected).Add(gtx.Ops)
 		fg := th.Fg
 		if c.outside {

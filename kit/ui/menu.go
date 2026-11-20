@@ -6,7 +6,6 @@ import (
 	"github.com/hhhapz/giokit/gio/io/event"
 	"github.com/hhhapz/giokit/gio/io/key"
 	"github.com/hhhapz/giokit/gio/io/pointer"
-	"github.com/hhhapz/giokit/gio/io/semantic"
 	"github.com/hhhapz/giokit/gio/layout"
 	"github.com/hhhapz/giokit/gio/op"
 	"github.com/hhhapz/giokit/gio/op/clip"
@@ -103,7 +102,7 @@ type Menu struct {
 // reports the pick and toggles the menu on trigger clicks.
 func (mn Menu) Layout(gtx layout.Context, th *kit.Theme, m *MenuState) layout.Dimensions {
 	m.last = mn.Items
-	kit.SetRole(gtx, mn.ID, kit.RoleMenu)
+	m.popup.Role = kit.RoleMenu
 	m.opening()
 	if d, byKey := m.popup.DidDismiss(); d {
 		m.returnFocus(gtx, byKey)
@@ -134,7 +133,7 @@ type ContextMenu struct {
 // and draws the open item panel at the pointer. m.Update reports the pick.
 func (cm ContextMenu) Layout(gtx layout.Context, th *kit.Theme, m *MenuState) layout.Dimensions {
 	m.last = cm.Items
-	kit.SetRole(gtx, cm.ID, kit.RoleMenu)
+	m.popup.Role = kit.RoleMenu
 	m.opening()
 	m.popup.DidDismiss() // no trigger to return focus to
 	// Right presses anywhere inside the content bubble up to this area
@@ -356,10 +355,10 @@ func (sl Select) Layout(gtx layout.Context, th *kit.Theme, s *SelectState) layou
 	}
 	opening := m.popup.Opening()
 	m.opening()
+	m.popup.Role = kit.RoleListbox
 	return th.Popover(gtx, &m.popup, sl.ID, func(gtx layout.Context) layout.Dimensions {
-		kit.SetRole(gtx, sl.ID, kit.RoleListbox)
 		return th.Press(gtx, &m.Trigger, kit.Part(sl.ID, "field"), func(gtx layout.Context, st kit.State) layout.Dimensions {
-			describe(gtx, kit.Part(sl.ID, "field"), kit.RoleCombobox, semantic.Button, "") // spoken by its text
+			describe(gtx, kit.RoleCombobox, "") // spoken by its text
 			st.Focused = st.Focused || m.Opened()
 			return th.SizedField(gtx, sl.Size, st, func(gtx layout.Context) layout.Dimensions {
 				return kit.Row(gtx,

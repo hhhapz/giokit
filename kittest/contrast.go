@@ -28,14 +28,13 @@ func (h *Harness) Contrasts() []TextContrast {
 	h.tb.Helper()
 	img := h.Image()
 	t := h.semantics()
-	images := h.kwin.Images()
 	var out []TextContrast
 	for _, n := range t.nodes {
 		d := n.Desc
 		if d.Label == "" || t.disabled(n) {
 			continue
 		}
-		if images[d.Description] {
+		if d.Class == kit.RoleImage {
 			continue // an image label is alternative text, not painted glyphs
 		}
 		r := t.visible(n, img.Rect)

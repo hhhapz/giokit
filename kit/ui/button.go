@@ -4,7 +4,6 @@ import (
 	"image"
 	"image/color"
 
-	"github.com/hhhapz/giokit/gio/io/semantic"
 	"github.com/hhhapz/giokit/gio/layout"
 	"github.com/hhhapz/giokit/gio/op"
 	"github.com/hhhapz/giokit/gio/op/clip"
@@ -91,7 +90,7 @@ func (b Button) Layout(gtx layout.Context, th *kit.Theme, c *kit.Clickable) layo
 		label = b.Text
 	}
 	return th.Press(gtx, c, b.ID, func(gtx layout.Context, st kit.State) layout.Dimensions {
-		describe(gtx, b.ID, kit.RoleButton, semantic.Button, label)
+		describe(gtx, kit.RoleButton, label)
 		s, fg := style(th, st)
 		return s.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 			v, h := th.FieldPad(b.Size), th.Space(kit.Space3p5) // one height with fields
@@ -126,7 +125,7 @@ type IconButton struct {
 // c as the press and focus target; read clicks with c.Clicked.
 func (b IconButton) Layout(gtx layout.Context, th *kit.Theme, c *kit.Clickable) layout.Dimensions {
 	return th.Press(gtx, c, b.ID, func(gtx layout.Context, st kit.State) layout.Dimensions {
-		describe(gtx, b.ID, kit.RoleButton, semantic.Button, b.Label)
+		describe(gtx, kit.RoleButton, b.Label)
 		s, fg := th.Styled(kit.Surface{Radius: th.RadiusSm()}), th.Dim
 		if b.Active {
 			s.Bg, fg = kit.LerpColor(th.Surface, th.Hover, st.Hover), th.Muted
@@ -158,7 +157,7 @@ type Link struct {
 func (l Link) Layout(gtx layout.Context, th *kit.Theme, c *kit.Clickable) layout.Dimensions {
 	gtx.Constraints.Min.X = 0
 	return th.Press(gtx, c, l.ID, func(gtx layout.Context, st kit.State) layout.Dimensions {
-		describe(gtx, l.ID, kit.RoleLink, semantic.Button, l.Text)
+		describe(gtx, kit.RoleLink, l.Text)
 		fg := th.Accent
 		if st.Hovered || st.Focused {
 			fg = th.Fg
@@ -238,8 +237,7 @@ func (tb Toolbar) Layout(gtx layout.Context, th *kit.Theme, s *ToolbarState) lay
 		})
 	}
 	s.buttons.Sweep()
-	kit.SetRole(gtx, tb.ID, kit.RoleToolbar)
-	return kit.Group(gtx, tb.ID, th.Strings.Toolbar, func(gtx layout.Context) layout.Dimensions {
+	return kit.Group(gtx, tb.ID, th.Strings.Toolbar, kit.RoleToolbar, func(gtx layout.Context) layout.Dimensions {
 		return kit.Flow(gtx, th.Space(kit.Space1p5), th.Space(kit.Space1p5), items...)
 	})
 }

@@ -85,7 +85,7 @@ Additional layout helpers: `kit.Row` (middle-aligned horizontal flex), `kit.Col`
 ### Interaction, Semantics, Focus, and Key Dispatch
 
 - Click and hover: `kit.Clickable` (`Clicked(gtx)`, `Click()`, `Focus(gtx)`, `FocusQuiet(gtx)`, `FocusOnClick()`, `Modifiers()`, `Anim()`), `th.Press(gtx, c, id, func(gtx, kit.State) layout.Dimensions)`, `kit.HoverArea`, `th.Disable(gtx, cond, w)`, `th.WithLabel`.
-- IDs and WAI-ARIA roles: `kit.Tag(gtx, id)`, `kit.TagLabel(gtx, id, label)`, `kit.TagImage(gtx, id, label)`, `kit.TagArea(gtx, id, w)`, `kit.Group(gtx, id, label, w)`, `kit.SetRole(gtx, id, role)`, `kit.Part(id, parts...)`, `kit.Scope(gtx, name, w)`, `kit.Path(gtx, id)`, `kit.EscapeID(s)`.
+- IDs and WAI-ARIA roles: `kit.Tag(gtx, id)`, `kit.TagLabel(gtx, id, label)`, `kit.TagImage(gtx, id, label)`, `kit.TagArea(gtx, id, w)`, `kit.Group(gtx, id, label, role, w)`, `role.Add(gtx.Ops)`, `kit.Part(id, parts...)`, `kit.Scope(gtx, name, w)`, `kit.Path(gtx, id)`, `kit.EscapeID(s)`.
 - Focus and actions: `kit.Focus`, `kit.FocusGroup` (`Join`, `Layout`, `Focus`, `HasFocus`, `FocusHandle`, `RingVisible`), `kit.FocusVisible`, `kit.FocusID(gtx, tag, id)`, `kit.FocusWithin(gtx, w)`, `kit.KeyContext(gtx, name, w)`, `kit.OnAction(gtx, act, fn)` (`ActMoveUp`, `ActMoveDown`, `ActFirst`, `ActLast`, `ActExpand`, `ActCollapse`, `ActConfirm`, `ActCancel`, `ActExtendUp`, `ActExtendDown`, `ActSelectAll`, `ActContextMenu`), `kit.Keymap` (`"Shortcut"` maps to `Cmd` on macOS and `Ctrl` on Windows and Linux), and `kit.Actions`.
 
 ### Scrolling, Overlays, and Building Blocks

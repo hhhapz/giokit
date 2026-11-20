@@ -2,14 +2,11 @@ package kit
 
 import (
 	"image"
-	"time"
 
 	"github.com/hhhapz/giokit/gio/io/event"
 	"github.com/hhhapz/giokit/gio/io/key"
-	"github.com/hhhapz/giokit/gio/io/pointer"
 	"github.com/hhhapz/giokit/gio/layout"
 	"github.com/hhhapz/giokit/gio/op"
-	"github.com/hhhapz/giokit/gio/op/clip"
 )
 
 // Window holds the state that outlives a frame for one window: the key
@@ -39,21 +36,11 @@ type frame struct {
 	active  map[string]string   // focus group id → active member id
 	scope   string              // current Scope path, escaped
 
-	size     image.Point          // the window, in pixels (Begin's constraints)
-	pointers []pointerSeen        // this frame's pointer events at the root, window coordinates
-	root     clip.Stack           // the window area, pushed for the whole frame (Begin to End)
-	ids      map[event.Tag]string // focusable tag → id path, for FocusedID
-	roles    map[string]Role      // id path → role (SetRole)
+	size image.Point          // the window, in pixels (Begin's constraints)
+	ids  map[event.Tag]string // focusable tag → id path, for FocusedID
 	// typing is set when a text editor laid out this frame holds focus:
 	// keymaps then leave plain printable keys to it (see Keymap).
 	typing bool
-}
-
-// pointerSeen is a pointer event as the root saw it: popups compare it with
-// the same event seen by their anchor to learn where the anchor is.
-type pointerSeen struct {
-	at  time.Duration
-	pos image.Point
 }
 
 // ctxNode is one KeyContext: what it handles and the keymaps attached in it.
@@ -72,29 +59,14 @@ type actionHandler struct {
 
 const frameKey = "giokit.frame"
 
-// Begin starts a frame: it registers the window bounds (Root) and installs
-// the dispatch tree in gtx, which KeyContext, OnAction and Focus use. It
-// resets what the last frame recorded (roles, focus groups, focus ids), so
+// Begin starts a frame: it records the window's size and installs the
+// dispatch tree in gtx, which KeyContext, OnAction and Focus use. It
+// resets what the last frame recorded (focus groups, focus ids), so
 // maps the window returned earlier are reused from here on. Every Begin
 // needs a matching End on the same gtx.
 func (w *Window) Begin(gtx layout.Context) layout.Context {
 	f := &w.fr
 	f.size = gtx.Constraints.Max
-	f.pointers = f.pointers[:0]
-	for {
-		e, ok := gtx.Event(pointer.Filter{Target: rootTag, Kinds: pointerKinds})
-		if !ok {
-			break
-		}
-		if pe, ok := e.(pointer.Event); ok {
-			f.pointers = append(f.pointers, pointerSeen{pe.Time, pe.Position.Round()})
-		}
-	}
-	// The window area stays pushed until End, so it encloses every area of
-	// the frame and sees every pointer event (Root alone would be a sibling
-	// underneath the page).
-	f.root = clip.Rect(image.Rectangle{Max: gtx.Constraints.Max}).Push(gtx.Ops)
-	event.Op(gtx.Ops, rootTag)
 	f.nodes = append(f.nodes[:0], ctxNode{parent: -1})
 	f.cur = 0
 	clear(f.focus)
@@ -103,7 +75,6 @@ func (w *Window) Begin(gtx layout.Context) layout.Context {
 	clear(f.members)
 	clear(f.active)
 	clear(f.ids)
-	clear(f.roles)
 	f.typing = false
 	if gtx.Values == nil {
 		if w.values == nil {
@@ -216,7 +187,6 @@ func Notify(gtx layout.Context) { gtx.Execute(op.InvalidateCmd{}) }
 // themselves during layout (editors) asked first, so they keep theirs.
 func (w *Window) End(gtx layout.Context) {
 	f := &w.fr
-	f.root.Pop()
 	var filters []event.Filter
 	for _, b := range defaultKeys {
 		filters = append(filters, b.keys.filter())
@@ -241,15 +211,9 @@ func (w *Window) End(gtx layout.Context) {
 // and reports whether one ran. A binding whose action is disabled is
 // skipped, so the key keeps bubbling outward.
 func (f *frame) dispatch(gtx layout.Context, ke key.Event) bool {
-	node := -1
-	var focused event.Tag
-	for tag, n := range f.focus {
-		if gtx.Focused(tag) {
-			node, focused = n, tag
-			break
-		}
-	}
-	if node < 0 {
+	focused := gtx.Source.FocusedTag()
+	node, ok := f.focus[focused]
+	if !ok {
 		node = 0
 		if n := len(f.modals); n > 0 {
 			node = f.modals[n-1]

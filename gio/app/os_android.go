@@ -749,7 +749,7 @@ func (w *window) initAccessibilityNodeInfo(env *C.JNIEnv, sem input.SemanticNode
 	selectMethod := android.accessibilityNodeInfo.setChecked
 	checkable := false
 	switch d.Class {
-	case semantic.Button:
+	case semantic.Button, semantic.Link, semantic.Tab, semantic.MenuItem, semantic.Option, semantic.TreeItem, semantic.ComboBox: // giokit: role classes that act as buttons
 		clsName = android.strings.androidWidgetButton
 	case semantic.CheckBox:
 		checkable = true

@@ -9,7 +9,6 @@ import (
 	"github.com/hhhapz/giokit/gio/io/event"
 	"github.com/hhhapz/giokit/gio/io/key"
 	"github.com/hhhapz/giokit/gio/io/pointer"
-	"github.com/hhhapz/giokit/gio/io/semantic"
 	"github.com/hhhapz/giokit/gio/layout"
 	"github.com/hhhapz/giokit/gio/op/clip"
 	"github.com/hhhapz/giokit/gio/unit"
@@ -228,7 +227,7 @@ func (rl ReorderList) handle(gtx layout.Context, th *kit.Theme, s *ReorderListSt
 	defer clip.Rect{Max: sz}.Push(gtx.Ops).Pop()
 	kit.TagLabel(gtx, id, fmt.Sprintf(th.Strings.Reorder, c.Label))
 	kit.FocusID(gtx, h, id)
-	describe(gtx, id, kit.RoleButton, semantic.Button, "") // labelled by TagLabel
+	describe(gtx, kit.RoleButton, "") // labelled by TagLabel
 	if gtx.Enabled() {
 		h.drag.Add(gtx.Ops)
 		event.Op(gtx.Ops, h)

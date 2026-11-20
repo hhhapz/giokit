@@ -118,8 +118,7 @@ func (tt Tooltip) Layout(gtx layout.Context, th *kit.Theme, s *TooltipState) lay
 	kit.Layer(gtx, image.Pt(0, dims.Size.Y+gtx.Dp(th.Space(kit.Space1p5))), func(gtx layout.Context) layout.Dimensions {
 		defer paint.PushOpacity(gtx.Ops, a).Pop()
 		gtx.Constraints.Min = image.Point{}
-		kit.SetRole(gtx, tt.ID, kit.RoleTooltip)
-		return kit.Group(gtx, tt.ID, tt.Text, func(gtx layout.Context) layout.Dimensions {
+		return kit.Group(gtx, tt.ID, tt.Text, kit.RoleTooltip, func(gtx layout.Context) layout.Dimensions {
 			return th.Styled(kit.Surface{Bg: th.Overlay, Border: th.Border, Radius: th.Radius}).Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 				return kit.Flex{PadX: kit.Space2, PadY: kit.Space1}.Layout(gtx, th, kit.Rigid(func(gtx layout.Context) layout.Dimensions {
 					return th.Text(gtx, tt.Text, th.Type.Small, th.Fg, kit.Regular)
@@ -247,8 +246,7 @@ func toastCard(gtx layout.Context, th *kit.Theme, ts *Toasts, id string, it *toa
 	fg, _, icon := th.StatusColors(it.status)
 	return th.FloatingPanel(gtx, func(gtx layout.Context) layout.Dimensions {
 		gtx.Constraints.Min.X = gtx.Constraints.Max.X
-		kit.SetRole(gtx, id, kit.RoleStatus)
-		return kit.Group(gtx, id, it.title, func(gtx layout.Context) layout.Dimensions { return toastBody(gtx, th, ts, id, it, fg, icon) })
+		return kit.Group(gtx, id, it.title, kit.RoleStatus, func(gtx layout.Context) layout.Dimensions { return toastBody(gtx, th, ts, id, it, fg, icon) })
 	})
 }
 

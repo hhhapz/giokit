@@ -116,10 +116,9 @@ func (tb Tabs) Layout(gtx layout.Context, th *kit.Theme, s *TabsState) layout.Di
 		kit.OnAction(gtx, kit.ActFirst, func() { pick(0) })
 		kit.OnAction(gtx, kit.ActLast, func() { pick(n - 1) })
 		return s.group.Layout(gtx, tb.ID, func(gtx layout.Context) layout.Dimensions {
-			// The group's own area takes no pointer gestures, so Gio would drop
-			// a tag on it: name it on a nested area.
-			kit.SetRole(gtx, tb.ID, kit.RoleTabList)
-			return kit.TagArea(gtx, tb.ID, func(gtx layout.Context) layout.Dimensions { return tb.draw(gtx, th, s, selected) })
+			kit.Tag(gtx, tb.ID)
+			kit.RoleTabList.Add(gtx.Ops)
+			return tb.draw(gtx, th, s, selected)
 		})
 	})
 }
@@ -152,7 +151,7 @@ func (tb Tabs) draw(gtx layout.Context, th *kit.Theme, s *TabsState, selected in
 		id := kit.Part(tb.ID, it.ID)
 		st := op.Offset(image.Pt(x, gtx.Dp(pad))).Push(gtx.Ops)
 		d := th.Press(gtx, s.clicks.Get(it.ID), id, func(gtx layout.Context, st kit.State) layout.Dimensions {
-			describe(gtx, id, kit.RoleTab, semantic.Button, it.Label)
+			describe(gtx, kit.RoleTab, it.Label)
 			semantic.SelectedOp(i == selected).Add(gtx.Ops)
 			fg := kit.LerpColor(th.Muted, th.Fg, st.Hover)
 			if i == selected {
@@ -227,7 +226,7 @@ func (dc Disclosure) Layout(gtx layout.Context, th *kit.Theme, c *kit.Clickable)
 	return kit.Col(gtx,
 		kit.Rigid(func(gtx layout.Context) layout.Dimensions {
 			return th.Press(gtx, c, dc.ID, func(gtx layout.Context, st kit.State) layout.Dimensions {
-				describe(gtx, dc.ID, kit.RoleButton, semantic.Button, dc.Title)
+				describe(gtx, kit.RoleButton, dc.Title)
 				semantic.SelectedOp(dc.Open).Add(gtx.Ops)
 				s := th.Styled(kit.Surface{Bg: kit.WithAlpha(th.Hover, uint8(255*st.Hover)), Radius: th.Radius})
 				if st.Focused {
@@ -317,8 +316,7 @@ func (a Accordion) Layout(gtx layout.Context, th *kit.Theme, s *AccordionState) 
 			return Disclosure{ID: kit.Part(a.ID, sec.ID), Title: sec.Title, Trailing: sec.Summary, Open: a.Open == sec.ID, Body: sec.Body}.Layout(gtx, th, s.headers.Get(sec.ID))
 		}))
 	}
-	kit.SetRole(gtx, a.ID, kit.RoleGroup)
-	return kit.Group(gtx, a.ID, th.Strings.Accordion, func(gtx layout.Context) layout.Dimensions {
+	return kit.Group(gtx, a.ID, th.Strings.Accordion, kit.RoleGroup, func(gtx layout.Context) layout.Dimensions {
 		return kit.Flex{Axis: layout.Vertical, Gap: kit.Space1}.Layout(gtx, th, children...)
 	})
 }
@@ -381,7 +379,7 @@ func (b Breadcrumbs) Layout(gtx layout.Context, th *kit.Theme, s *BreadcrumbsSta
 					if link != nil {
 						return Link{ID: kit.Part(b.ID, part.ID), Text: part.Label}.Layout(gtx, th, link)
 					}
-					return kit.Group(gtx, kit.Part(b.ID, part.ID), part.Label, func(gtx layout.Context) layout.Dimensions {
+					return kit.Group(gtx, kit.Part(b.ID, part.ID), part.Label, 0, func(gtx layout.Context) layout.Dimensions {
 						// Match Link's inset and reserved underline so Flow's top
 						// alignment keeps every crumb on the same text line.
 						d := layout.UniformInset(th.Space(kit.Space1)).Layout(gtx, func(gtx layout.Context) layout.Dimensions {
@@ -398,8 +396,7 @@ func (b Breadcrumbs) Layout(gtx layout.Context, th *kit.Theme, s *BreadcrumbsSta
 		})
 	}
 	s.links.Sweep()
-	kit.SetRole(gtx, b.ID, kit.RoleGroup)
-	return kit.Group(gtx, b.ID, th.Strings.Breadcrumbs, func(gtx layout.Context) layout.Dimensions {
+	return kit.Group(gtx, b.ID, th.Strings.Breadcrumbs, kit.RoleGroup, func(gtx layout.Context) layout.Dimensions {
 		return kit.Flow(gtx, th.Space(kit.Space1p5), th.Space(kit.Space1), items...)
 	})
 }
@@ -426,7 +423,7 @@ func (n NavItem) Layout(gtx layout.Context, th *kit.Theme, c *kit.Clickable) lay
 		tc = th.Dim
 	}
 	return th.Press(gtx, c, n.ID, func(gtx layout.Context, st kit.State) layout.Dimensions {
-		describe(gtx, n.ID, kit.RoleLink, semantic.Button, n.Label)
+		describe(gtx, kit.RoleLink, n.Label)
 		semantic.SelectedOp(n.Active).Add(gtx.Ops)
 		bg, fg := kit.WithAlpha(th.Hover, uint8(255*st.Hover)), th.Muted
 		if n.Active {
@@ -505,8 +502,7 @@ type EmptyState struct {
 // Layout draws the message centred, at most th.ReadingWidth wide, inside a
 // group named by Title. It handles no input; Action handles its own.
 func (es EmptyState) Layout(gtx layout.Context, th *kit.Theme) layout.Dimensions {
-	kit.SetRole(gtx, es.ID, kit.RoleGroup)
-	return kit.Group(gtx, es.ID, es.Title, func(gtx layout.Context) layout.Dimensions {
+	return kit.Group(gtx, es.ID, es.Title, kit.RoleGroup, func(gtx layout.Context) layout.Dimensions {
 		return layout.Center.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 			gtx.Constraints.Max.X = min(gtx.Constraints.Max.X, gtx.Dp(th.ReadingWidth))
 			return kit.Col(gtx,

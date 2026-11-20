@@ -24,10 +24,10 @@ In `layout.Flex`, a `Flexed` child that returns zero width (`layout.Dimensions{}
 Gio's default system font fallback can mask missing Unicode symbols on a developer's machine while rendering `□` on machines without that font. `kit.New` disables system font fallback (`text.NoSystemFonts()`); draw UI symbols as vector icons with `kit.Icon`.
 
 ## 8. Hover-only and keyboard-only areas missing from the semantic tree
-Gio's pointer router discards semantic ops on any clip area whose pointer handler registers for zero click or scroll gestures. Use `kit.HoverArea` for hover regions and `kit.TagArea(gtx, id, w)` for keyboard-only areas, which attach semantics to a nested handler-free clip area.
+Upstream Gio's pointer router discards semantic ops on any clip area whose handler registers for zero click or scroll gestures (hover-only, key-only, disabled). The fork keeps them ([gio-patches.md](gio-patches.md)), so `kit.Tag` works on any area. `kit.TagArea` only gives an area to content that has none.
 
 ## 9. Semantic label bounds and duplicate traversal nodes
-In upstream Gio, unclipped `widget.Label` areas extend to `Max.Y ≈ 1e6`, and `Router.AppendSemantics` returns the root node at `[0]` followed by a flat copy of every descendant. `th.Text` measures and clips labels to their text bounds, `TextsIn(id)` matches on label origin, and semantic tree walks start from `roots[0]` only.
+In upstream Gio, unclipped `widget.Label` areas extend to `Max.Y ≈ 1e6`, and `Router.AppendSemantics` returns the root node at `[0]` followed by a flat copy of every descendant. The fork clips labels to their laid-out text ([gio-patches.md](gio-patches.md)), `TextsIn(id)` matches on label origin, and semantic tree walks start from `roots[0]` only.
 
 ## 10. Wayland cursor tip drifting on scaled displays
 Upstream Gio loads the Wayland cursor theme once at window creation scale and divides cursor hotspots by the current output scale in `setCursor`, leaving 1× cursor bitmaps with halved hotspots on 2× displays. The `0002-wayland-cursor-wheel-trace` patch reloads the cursor theme when output scale changes.
@@ -69,7 +69,7 @@ Gio tessellates `clip.Stroke` paths on the CPU on every frame without caching. `
 High-resolution mouse wheels on Wayland send eight `wl_pointer.axis` events of `1.875` units per detent and attach `wl_pointer.axis_discrete = 1` only to the 8th event. Upstream Gio multiplies a scroll frame by `10` whenever `axis_discrete` is non-zero, making every 8th sub-step jump 10× farther than the previous seven. The `0002-wayland-cursor-wheel-trace` patch applies the `×10` multiplier only when the frame carries a full classic click (>= 5 units per step) and scales high-resolution sub-steps uniformly by `×1.2` ([gio-patches.md](gio-patches.md)).
 
 ## 23. Disabled controls vanishing from the semantic tree
-When `th.Disable` disables input via `gtx.Disabled()`, pointer handlers register for zero gestures, causing Gio to drop semantic ops on those areas. Disabled primitives in `kit` attach their semantic ID, role, and `semantic.DisabledOp` to a nested handler-free clip area.
+Under `gtx.Disabled()` pointer handlers register for zero gestures, and upstream Gio drops semantic ops on such areas. The fork keeps them (see #8), so a disabled control keeps its id and `semantic.EnabledOp(false)` on its own area.
 
 ## 24. Synthesizing text input in tests
 In Gio's `app.Window`, inserting text into an editor sends a `key.EditEvent` followed immediately by a `key.SelectionEvent` moving the caret to the end of the inserted text. Sending `EditEvent` alone leaves the caret ahead of the inserted text when typing mid-field.

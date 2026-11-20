@@ -121,6 +121,28 @@ func TestPopupFlipsAtBottom(t *testing.T) {
 	h.ExpectClean()
 }
 
+// A popup opened from the keyboard, before the pointer ever crossed its
+// anchor, flips too: kit places it from the anchor's laid-out bounds.
+func TestPopupFlipsFromKeyboard(t *testing.T) {
+	g := newGallery()
+	h := kittest.NewT(t, 1100, 260, g.Frame)
+	h.Theme = g.th
+	goTo(t, h, g, "pickers")
+	f := h.ExpectID("zone/field")
+	for i := 0; h.FocusedID() != "zone/field"; i++ {
+		if i == 60 {
+			t.Fatal("Tab never reached zone/field")
+		}
+		h.Tab(false)
+	}
+	h.Key(key.NameReturn, 0)
+	p := h.ExpectID("zone")
+	if p.Min.Y > f.Min.Y {
+		t.Errorf("opened by keyboard at the bottom, the panel didn't flip: %v, field %v", p, f)
+	}
+	h.ExpectClean()
+}
+
 // Select: opens on the selected option, arrows move, Enter picks; the field
 // shows the pick; a long list scrolls inside its panel.
 func TestSelect(t *testing.T) {

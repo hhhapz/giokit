@@ -5,13 +5,10 @@ import (
 	"math/rand"
 	"testing"
 
-	"github.com/hhhapz/giokit/gio/font"
 	"github.com/hhhapz/giokit/gio/layout"
 	"github.com/hhhapz/giokit/gio/op"
 	"github.com/hhhapz/giokit/gio/op/clip"
 	"github.com/hhhapz/giokit/gio/op/paint"
-	"github.com/hhhapz/giokit/gio/unit"
-	"github.com/hhhapz/giokit/gio/widget/material"
 
 	"github.com/hhhapz/giokit/kit"
 	"github.com/hhhapz/giokit/kittest"
@@ -21,7 +18,6 @@ import (
 // and a background on one cell in eight: the naive renderer's cost.
 func BenchmarkTerminalPerCell(b *testing.B) {
 	th := kit.Dark()
-	mt := th.Material()
 	r := rand.New(rand.NewSource(1))
 	const cols, rows = 200, 50
 	draw := func(gtx layout.Context) {
@@ -32,12 +28,9 @@ func BenchmarkTerminalPerCell(b *testing.B) {
 				if r.Intn(8) == 0 {
 					paint.FillShape(gtx.Ops, syntaxColors[r.Intn(len(syntaxColors))], clip.Rect{Max: image.Pt(cw, ch)}.Op())
 				}
-				l := material.Label(mt, unit.Sp(13), string(rune('!'+r.Intn(90))))
-				l.Font = font.Font{Typeface: "Go Mono"}
-				l.Color = syntaxColors[r.Intn(len(syntaxColors))]
 				cellGtx := gtx
 				cellGtx.Constraints.Min.X = 0
-				l.Layout(cellGtx)
+				monoLabel(cellGtx, th, string(rune('!'+r.Intn(90))), syntaxColors[r.Intn(len(syntaxColors))])
 				cell.Pop()
 			}
 		}

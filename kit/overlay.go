@@ -82,6 +82,9 @@ type Popup struct {
 	// KeepFocus leaves keyboard focus where it is when the panel opens (a
 	// combobox keeps typing in its field).
 	KeepFocus bool
+	// Role is the panel's role (RoleMenu, RoleListbox, RoleDialog); 0 for
+	// none.
+	Role Role
 
 	floating
 	byKey    bool // the pending dismissal was by Escape (return focus with a ring)
@@ -89,7 +92,7 @@ type Popup struct {
 	atPoint  bool
 	entering bool        // just opened: replay the fade-in
 	anchor   int         // event tag: only its address matters, naming the anchor area
-	origin   image.Point // the anchor's window position, from pointer events
+	origin   image.Point // the anchor's window position in the last frame
 	located  bool        // origin is known
 	focusTo  *Focus      // focused on open instead of the panel (a menu's group)
 }
@@ -190,12 +193,9 @@ func (p *Popup) close(gtx layout.Context, byKey bool) {
 // build on.
 //
 // The panel is drawn in a deferred layer, so it lands above everything,
-// positioned against its anchor's window position. kit learns that from
-// pointer events: the window area (kit.Window) and the anchor see the same
-// hover event in their own coordinates, and the difference is the anchor's
-// offset (stock Gio has no way to ask). It opens below its anchor and flips
-// above it, or shifts sideways, to stay inside the window; an anchor the
-// pointer has never crossed (opened from the keyboard first) opens below.
+// positioned against its anchor's window position in the last frame
+// (input.Source.Bounds). It opens below its anchor and flips above it, or
+// shifts sideways, to stay inside the window.
 //
 // While the panel is open, a backdrop covers the window: a press outside
 // the panel closes it and goes nowhere else. The backdrop's id is
@@ -211,8 +211,8 @@ func (t *Theme) Popover(gtx layout.Context, p *Popup, id string, anchor layout.W
 		if p.open {
 			OnAction(gtx, ActCancel, func() { p.close(gtx, true) })
 		}
-		if off, ok := anchorOffset(gtx, &p.anchor); ok {
-			p.origin, p.located = off, true
+		if r, ok := gtx.Source.Bounds(&p.anchor); ok {
+			p.origin, p.located = r.Min, true
 		}
 		m := op.Record(gtx.Ops)
 		dims := anchor(gtx)
@@ -262,9 +262,9 @@ func (t *Theme) shadow(gtx layout.Context, sz image.Point, r int) {
 // float lays out a panel in a deferred layer above the page, placed against
 // the anchor (size anchorSz at the current origin), with the backdrop.
 func (t *Theme) float(gtx layout.Context, p *Popup, id string, anchorSz image.Point, panel layout.Widget) {
-	// The anchor in window space: this frame's size at the position its
-	// pointer events last showed. Not yet located (opened by keyboard before
-	// the pointer ever crossed it): no edges, so the panel opens below it.
+	// The anchor in window space: this frame's size at last frame's
+	// position. Not yet located (opened on the anchor's first frame): no
+	// edges, so the panel opens below it.
 	win := windowBounds(gtx)
 	ab := image.Rectangle{Max: anchorSz}
 	if p.located {
@@ -324,13 +324,12 @@ func (t *Theme) float(gtx layout.Context, p *Popup, id string, anchorSz image.Po
 	off := op.Offset(pos.Sub(anchorOrigin)).Push(gtx.Ops)
 	pa := clip.Rect(image.Rectangle{Max: sz}).Push(gtx.Ops)
 	event.Op(gtx.Ops, &p.focus)
-	// The id goes on a nested, handler-free area: Gio drops semantics from
-	// an area whose handler asks for no pointer gestures.
-	pt := clip.Rect(image.Rectangle{Max: sz}).Push(gtx.Ops)
 	Tag(gtx, id)
+	if p.Role != 0 {
+		p.Role.Add(gtx.Ops)
+	}
 	FocusID(gtx, &p.focus, id)
 	pcall.Add(gtx.Ops)
-	pt.Pop()
 	pa.Pop()
 	off.Pop()
 	o.Pop()
@@ -392,7 +391,7 @@ func (t *Theme) Modal(gtx layout.Context, d *Dialog, id string, page layout.Widg
 		gtx.Execute(key.FocusCmd{Tag: &d.focus})
 		d.fade.From(gtx, 0, t.Dur(DurNormal))
 	}
-	dims := disabledArea(gtx.Disabled(), "", page) // inert to screen readers too
+	dims := disabledArea(gtx.Disabled(), page) // inert to screen readers too
 
 	m := op.Record(gtx.Ops)
 	a := d.fade.To(gtx, 1, t.Dur(DurNormal))
@@ -431,12 +430,10 @@ func (t *Theme) Modal(gtx layout.Context, d *Dialog, id string, page layout.Widg
 	off := op.Offset(pos).Push(gtx.Ops)
 	pa := clip.Rect(image.Rectangle{Max: cd.Size}).Push(gtx.Ops)
 	event.Op(gtx.Ops, &d.focus)
-	pt := clip.Rect(image.Rectangle{Max: cd.Size}).Push(gtx.Ops) // id on a handler-free area
 	Tag(gtx, id)
 	FocusID(gtx, &d.focus, id)
-	SetRole(gtx, id, RoleDialog)
+	RoleDialog.Add(gtx.Ops)
 	call.Add(gtx.Ops)
-	pt.Pop()
 	pa.Pop()
 	off.Pop()
 	o.Pop()

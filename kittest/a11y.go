@@ -52,32 +52,26 @@ func (h *Harness) A11yTree() []A11yNode {
 	return copyNodes(root)
 }
 
-// focusableClasses are the Gio semantic classes of controls Tab must reach.
-var focusableClasses = []semantic.ClassOp{semantic.Button, semantic.CheckBox, semantic.RadioButton, semantic.Switch, semantic.Editor}
-
-// focusableRoles are the kit roles of controls Tab must reach, covering
-// custom controls (a slider, a split handle) that have no Gio class. Members
-// of a focus group count as reached when the group is.
+// focusableRoles are the roles of controls Tab must reach. Members of a
+// focus group count as reached when the group is.
 var focusableRoles = []kit.Role{
 	kit.RoleButton, kit.RoleLink, kit.RoleCheckbox, kit.RoleSwitch, kit.RoleRadio,
 	kit.RoleTextbox, kit.RoleSlider, kit.RoleCombobox, kit.RoleTab,
 }
 
 // TabUnreachable visits the enabled, named controls in the current frame and
-// returns those Tab cannot reach. A control is one by its Gio semantic class
-// or its kit role. Call it on a stable screen with no popup opening during
+// returns those Tab cannot reach. A control is one by its role. Call it on a stable screen with no popup opening during
 // traversal. It leaves focus at the final Tab stop.
 func (h *Harness) TabUnreachable() []string {
 	h.tb.Helper()
 	var want []string
 	t := h.semantics()
-	roles := h.kwin.Roles()
 	for _, n := range t.nodes {
 		d := n.Desc
 		if d.Description == "" || t.disabled(n) {
 			continue
 		}
-		if slices.Contains(focusableClasses, d.Class) || slices.Contains(focusableRoles, roles[d.Description]) {
+		if slices.Contains(focusableRoles, d.Class) {
 			want = append(want, d.Description)
 		}
 	}

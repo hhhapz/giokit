@@ -10,16 +10,14 @@ import (
 
 	"github.com/hhhapz/giokit/gio/io/input"
 	"github.com/hhhapz/giokit/gio/io/semantic"
-
-	"github.com/hhhapz/giokit/kit"
 )
 
 // Stale draws one extra frame with no input and reports what changed, or "".
 // A settled UI must be a fixed point: if another frame changes anything, the
 // previous frame showed stale state and a real window would sit on it until
 // the user moved the mouse. Compared are the semantic tree (ids, labels,
-// classes, selection, disabled state, gestures and bounds), kit's roles,
-// focus groups and focused id, and every pixel.
+// classes (roles), selection, disabled state, gestures and bounds), focus
+// groups and focused id, and every pixel.
 func (h *Harness) Stale() string {
 	before := h.snapshot()
 	h.frame()
@@ -52,7 +50,6 @@ func (h *Harness) snapshot() frameSnapshot {
 type semanticSnapshot struct {
 	nodes   []semanticNode
 	focused string
-	roles   map[string]kit.Role
 	groups  map[string][]string
 	active  map[string]string
 }
@@ -72,7 +69,6 @@ type semanticNode struct {
 func (h *Harness) semanticSnapshot() semanticSnapshot {
 	s := semanticSnapshot{
 		focused: h.FocusedID(),
-		roles:   maps.Clone(h.kwin.Roles()),
 		groups:  map[string][]string{},
 		active:  maps.Clone(h.kwin.GroupActive()),
 	}
@@ -117,9 +113,6 @@ func (a semanticSnapshot) diff(b semanticSnapshot) string {
 	}
 	if a.focused != b.focused {
 		out = append(out, fmt.Sprintf("focus %q → %q", a.focused, b.focused))
-	}
-	for _, id := range changedKeys(a.roles, b.roles, func(x, y kit.Role) bool { return x == y }) {
-		out = append(out, fmt.Sprintf("role of %q %q → %q", id, a.roles[id], b.roles[id]))
 	}
 	for _, g := range changedKeys(a.groups, b.groups, slices.Equal[[]string]) {
 		out = append(out, fmt.Sprintf("members of group %q %q → %q", g, a.groups[g], b.groups[g]))

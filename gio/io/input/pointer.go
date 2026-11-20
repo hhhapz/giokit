@@ -628,7 +628,12 @@ func (q *pointerQueue) Frame(handlers map[event.Tag]*handler, state pointerState
 			if h.filter.pointer.kinds&pointer.Scroll != 0 {
 				area.semantic.content.gestures |= ScrollGesture
 			}
-			area.semantic.valid = area.semantic.content.gestures != 0
+			// giokit: an area with a handler that asked for no gestures (only
+			// keys, or disabled) keeps the semantics its ops gave it; upstream
+			// dropped them.
+			if area.semantic.content.gestures != 0 {
+				area.semantic.valid = true
+			}
 		}
 	}
 	var evts []taggedEvent

@@ -1,6 +1,8 @@
 package kit
 
 import (
+	"cmp"
+
 	"github.com/hhhapz/giokit/gio/io/semantic"
 	"github.com/hhhapz/giokit/gio/layout"
 	"github.com/hhhapz/giokit/gio/unit"
@@ -55,13 +57,8 @@ func (t *Theme) menuRowGeometry() menuRowGeometry {
 func (t *Theme) MenuRow(gtx layout.Context, c *Clickable, id string, r MenuRow) layout.Dimensions {
 	g := t.menuRowGeometry()
 	return t.Press(gtx, c, id, func(gtx layout.Context, st State) layout.Dimensions {
-		semantic.Button.Add(gtx.Ops)
+		cmp.Or(r.Role, RoleMenuItem).Add(gtx.Ops)
 		semantic.LabelOp(r.Label).Add(gtx.Ops)
-		role := r.Role
-		if role == "" {
-			role = RoleMenuItem
-		}
-		SetRole(gtx, id, role)
 		fg := t.Fg
 		if r.Danger {
 			fg = t.Bad

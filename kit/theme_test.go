@@ -7,7 +7,6 @@ import (
 
 	"github.com/hhhapz/giokit/gio/layout"
 	"github.com/hhhapz/giokit/gio/widget"
-	"github.com/hhhapz/giokit/gio/widget/material"
 
 	"github.com/hhhapz/giokit/kit"
 	"github.com/hhhapz/giokit/kit/fonts"
@@ -119,26 +118,5 @@ func TestInstanceSizesLineUp(t *testing.T) {
 				}
 			}
 		})
-	}
-}
-
-// Writing a theme field directly must reach widgets drawn through the
-// material theme (editors, labels), as Derive and UseFonts do.
-func TestMaterialFollowsThemeFields(t *testing.T) {
-	th := kit.Dark()
-	th.Material().TextSize = 20 // an escape-hatch setting kit does not mirror
-	th.Accent, th.OnAccent, th.Fg, th.Bg = th.Bad, th.Panel, th.Good, th.Warn
-	th.UI = "Go Mono"
-	m := th.Material()
-	want := material.Palette{Bg: th.Bg, Fg: th.Fg, ContrastBg: th.Accent, ContrastFg: th.OnAccent}
-	if m.Palette != want || m.Face != th.UI || m.Shaper != th.Shaper {
-		t.Errorf("material theme is stale after field writes: palette %v face %q", m.Palette, m.Face)
-	}
-	if m.TextSize != 20 {
-		t.Errorf("material TextSize %v: settings kit does not mirror must survive a resync", m.TextSize)
-	}
-	d := th.Derive(func(t *kit.Theme) { t.Accent = t.Dim })
-	if d.Material().Palette.ContrastBg != th.Dim || th.Material().Palette.ContrastBg != th.Bad {
-		t.Error("a derived theme's material theme must be independent of its parent's")
 	}
 }

@@ -25,12 +25,12 @@ var broken = map[string]struct {
 	want string
 	c    Case
 }{
-	"unlabeled": {"needs a human label", Case{ID: "x", Class: semantic.Button, Role: kit.RoleButton,
+	"unlabeled": {"needs a human label", Case{ID: "x", Role: kit.RoleButton,
 		Build: custom(func(th *kit.Theme, gtx layout.Context, c *kit.Clickable, st kit.State) {
 			semantic.Button.Add(gtx.Ops) // no LabelOp: a screen reader says nothing (or the id)
 			fill(gtx, th.Surface, st)
 		})}},
-	"no-hover": {"hover changes nothing", Case{ID: "x", Class: semantic.Button, Role: kit.RoleButton,
+	"no-hover": {"hover changes nothing", Case{ID: "x", Role: kit.RoleButton,
 		Build: custom(func(th *kit.Theme, gtx layout.Context, c *kit.Clickable, st kit.State) {
 			semantic.Button.Add(gtx.Ops)
 			semantic.LabelOp("X").Add(gtx.Ops)
@@ -39,7 +39,7 @@ var broken = map[string]struct {
 		})}},
 	// A transparent control whose hover fill is Panel: visible on the window,
 	// gone on a card.
-	"hover-equals-card": {"hover changes nothing on a card", Case{ID: "x", Class: semantic.Button, Role: kit.RoleButton,
+	"hover-equals-card": {"hover changes nothing on a card", Case{ID: "x", Role: kit.RoleButton,
 		Build: custom(func(th *kit.Theme, gtx layout.Context, c *kit.Clickable, st kit.State) {
 			semantic.Button.Add(gtx.Ops)
 			semantic.LabelOp("X").Add(gtx.Ops)
@@ -53,14 +53,13 @@ var broken = map[string]struct {
 		})}},
 	// A button that tells kit it is a tab: a screen reader announces the
 	// wrong control.
-	"wrong-role": {"role tab, want button", Case{ID: "x", Class: semantic.Button, Role: kit.RoleButton,
+	"wrong-role": {"role Tab, want Button", Case{ID: "x", Role: kit.RoleButton,
 		Build: custom(func(th *kit.Theme, gtx layout.Context, c *kit.Clickable, st kit.State) {
-			semantic.Button.Add(gtx.Ops)
+			kit.RoleTab.Add(gtx.Ops)
 			semantic.LabelOp("X").Add(gtx.Ops)
-			kit.SetRole(gtx, "x", kit.RoleTab)
 			fill(gtx, th.Surface, st)
 		})}},
-	"no-ring": {"no visible ring", Case{ID: "x", Class: semantic.Button, Role: kit.RoleButton,
+	"no-ring": {"no visible ring", Case{ID: "x", Role: kit.RoleButton,
 		Build: custom(func(th *kit.Theme, gtx layout.Context, c *kit.Clickable, st kit.State) {
 			semantic.Button.Add(gtx.Ops)
 			semantic.LabelOp("X").Add(gtx.Ops)
@@ -69,7 +68,7 @@ var broken = map[string]struct {
 		})}},
 	// The Solid-button bug: a ring in the fill's own colour, visible only in
 	// a few anti-aliased corner pixels.
-	"invisible-ring": {"no visible ring", Case{ID: "x", Class: semantic.Button, Role: kit.RoleButton,
+	"invisible-ring": {"no visible ring", Case{ID: "x", Role: kit.RoleButton,
 		Build: custom(func(th *kit.Theme, gtx layout.Context, c *kit.Clickable, st kit.State) {
 			semantic.Button.Add(gtx.Ops)
 			semantic.LabelOp("X").Add(gtx.Ops)
@@ -80,7 +79,7 @@ var broken = map[string]struct {
 			s.Bg = kit.LerpColor(s.Bg, th.Fg, 0.3*st.Hover)
 			s.Layout(gtx, func(gtx layout.Context) layout.Dimensions { return layout.Dimensions{Size: image.Pt(80, 32)} })
 		})}},
-	"ignores-disabled": {"fired 1 times on click", Case{ID: "x", Class: semantic.Button, Role: kit.RoleButton,
+	"ignores-disabled": {"fired 1 times on click", Case{ID: "x", Role: kit.RoleButton,
 		Build: func(th *kit.Theme, disabled bool) Control {
 			var c kit.Clickable
 			n := new(int)
@@ -91,7 +90,7 @@ var broken = map[string]struct {
 				ui.Button{ID: "x", Text: "X"}.Layout(gtx, th, &c)
 			}}
 		}}},
-	"pointer-only": {"Tab cannot reach", Case{ID: "x", Class: semantic.Button, Role: kit.RoleButton, NoKeys: true,
+	"pointer-only": {"Tab cannot reach", Case{ID: "x", Role: kit.RoleButton, NoKeys: true,
 		Build: func(th *kit.Theme, disabled bool) Control {
 			var g gesture.Click
 			var hover gesture.Hover

@@ -25,9 +25,6 @@ func (h *HoverArea) Layout(gtx layout.Context, id string, w func(gtx layout.Cont
 	area := clip.Rect(image.Rectangle{Max: dims.Size})
 	defer area.Push(gtx.Ops).Pop()
 	h.g.Add(gtx.Ops)
-	// Gio drops semantics from areas whose handler has no click/scroll gesture,
-	// so the id goes on a nested, handler-free area of the same size.
-	defer area.Push(gtx.Ops).Pop()
 	Tag(gtx, id)
 	call.Add(gtx.Ops)
 	return dims

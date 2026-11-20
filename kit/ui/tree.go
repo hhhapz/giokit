@@ -154,7 +154,7 @@ func (t Tree) Layout(gtx layout.Context, th *kit.Theme, s *TreeState) layout.Dim
 		}
 	}
 	defer s.toggles.Sweep()
-	kit.SetRole(gtx, t.ID, kit.RoleTree)
+	s.List.Role = kit.RoleTree
 	view := selectionView{context: "tree", id: t.ID, list: &s.List, selected: t.Selected, multi: t.Multiple, chosen: t.Chosen,
 		actions: func(gtx layout.Context) {
 			kit.OnAction(gtx, kit.ActExpand, func() { s.expand(t.Roots) })

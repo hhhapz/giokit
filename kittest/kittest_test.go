@@ -12,15 +12,16 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hhhapz/giokit/gio/font"
 	"github.com/hhhapz/giokit/gio/gesture"
 	"github.com/hhhapz/giokit/gio/io/event"
 	"github.com/hhhapz/giokit/gio/io/input"
 	"github.com/hhhapz/giokit/gio/io/key"
 	"github.com/hhhapz/giokit/gio/io/semantic"
 	"github.com/hhhapz/giokit/gio/layout"
+	"github.com/hhhapz/giokit/gio/op"
 	"github.com/hhhapz/giokit/gio/op/clip"
 	"github.com/hhhapz/giokit/gio/widget"
-	"github.com/hhhapz/giokit/gio/widget/material"
 
 	"github.com/hhhapz/giokit/kit"
 	"github.com/hhhapz/giokit/kit/ui"
@@ -163,8 +164,8 @@ func TestCatchesTabUnreachable(t *testing.T) {
 }
 
 // Bug class: a custom control with no Gio semantic class (a slider, a split
-// handle) is skipped by a reachability check that only knows Gio classes.
-// Its kit role says it must be reachable.
+// handle) is skipped by a reachability check that only knows upstream Gio's
+// classes. Its role says it must be reachable.
 func TestCatchesTabUnreachableByRole(t *testing.T) {
 	var press gesture.Click // a pointer handler and nothing for the keyboard
 	h := harness(t, func(gtx C) {
@@ -177,7 +178,7 @@ func TestCatchesTabUnreachableByRole(t *testing.T) {
 			defer clip.Rect{Max: image.Pt(120, 24)}.Push(gtx.Ops).Pop()
 			press.Add(gtx.Ops)
 			kit.TagLabel(gtx, "volume", "Volume")
-			kit.SetRole(gtx, "volume", kit.RoleSlider)
+			kit.RoleSlider.Add(gtx.Ops)
 			return box(gtx, 120, 24)
 		})
 	})
@@ -526,7 +527,9 @@ func TestEditorLabeling(t *testing.T) {
 	h := harness(t, func(gtx C) {
 		kit.Col(gtx,
 			kit.Rigid(func(gtx C) D { return ui.TextField{ID: "name", Placeholder: "Name"}.Layout(gtx, th, &labeled) }),
-			kit.Rigid(func(gtx C) D { return material.Editor(th.Material(), &bare, "bare").Layout(gtx) }),
+			kit.Rigid(func(gtx C) D {
+				return bare.Layout(gtx, th.Shaper, font.Font{Typeface: th.UI}, th.Type.Body, op.CallOp{}, op.CallOp{})
+			}),
 		)
 	})
 	var unlabeled int
@@ -874,7 +877,7 @@ func TestFocusedIDPrefersInnermost(t *testing.T) {
 	h := NewT(t, 300, 120, func(gtx C) {
 		c.Clicked(gtx)
 		gtx.Constraints.Min = image.Point{}
-		kit.Group(gtx, "group", "Actions", func(gtx C) D {
+		kit.Group(gtx, "group", "Actions", 0, func(gtx C) D {
 			return ui.Button{ID: "group/save", Text: "Save"}.Layout(gtx, th, &c)
 		})
 	})
@@ -1023,7 +1026,7 @@ func TestByRole(t *testing.T) {
 		h.ByRole(kit.RoleButton, "Delete")
 		return ""
 	}()
-	if !strings.Contains(msg, `no button labelled "Delete"`) {
+	if !strings.Contains(msg, `no Button labelled "Delete"`) {
 		t.Fatalf("missing control: %q", msg)
 	}
 }

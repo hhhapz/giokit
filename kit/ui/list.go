@@ -52,7 +52,7 @@ func (s *SelectableListState) Update(gtx layout.Context) (SelectionEvent, bool) 
 // change for s.Update, which also reports clicks.
 func (sl SelectableList) Layout(gtx layout.Context, th *kit.Theme, s *SelectableListState) layout.Dimensions {
 	s.sel.setRows(len(sl.Items), func(i int) (string, string) { return sl.Items[i].ID, sl.Items[i].Label })
-	kit.SetRole(gtx, sl.ID, kit.RoleListbox)
+	s.List.Role = kit.RoleListbox
 	view := selectionView{context: "list", id: sl.ID, list: &s.List, selected: sl.Selected, multi: sl.Multiple, chosen: sl.Chosen}
 	return s.sel.layout(gtx, view, func(gtx layout.Context) layout.Dimensions {
 		return th.List(gtx, &s.List, sl.ID, len(sl.Items), func(gtx layout.Context, i int) layout.Dimensions {

@@ -376,7 +376,7 @@ func (s *SplitState) paint(gtx layout.Context, th *kit.Theme, id string, g split
 	s.drag.Add(gtx.Ops)
 	s.hover.Add(gtx.Ops)
 	event.Op(gtx.Ops, s)
-	kit.Tag(gtx, id) // the drag listens for presses, so this area keeps its semantics
+	kit.Tag(gtx, id)
+	kit.RoleSeparator.Add(gtx.Ops)
 	kit.FocusID(gtx, s, id)
-	kit.SetRole(gtx, id, kit.RoleSeparator)
 }

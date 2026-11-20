@@ -35,9 +35,8 @@ frame(gtx)           // Application Frame: handle input first, then lay out
 win.End(gtx)         // Resolve unclaimed keyboard events through the dispatch tree
 ```
 
-`Window.Begin(gtx)` installs a per-frame record in `gtx.Values["giokit.frame"]` and pushes a window-wide clip area and pointer event handler that stays open until `End`. During layout:
-- Both the window root and any popup anchor see the same pointer events, letting popups compute their window-space offset without custom router APIs.
-- `kit.Scope`, `kit.Tag`, `kit.SetRole`, and `kit.FocusID` record each widget's scoped path, WAI-ARIA role, and focusable tag.
+`Window.Begin(gtx)` installs a per-frame record in `gtx.Values["giokit.frame"]`. During layout:
+- `kit.Scope`, `kit.Tag`, `role.Add(gtx.Ops)`, and `kit.FocusID` record each widget's scoped path, WAI-ARIA role, and focusable tag.
 - `kit.KeyContext`, `kit.OnAction`, and `Keymap.Attach` build a tree of keyboard scopes matching the layout hierarchy.
 
 After `frame(gtx)` returns, `Window.End(gtx)` pops the root area and runs the keyboard dispatcher:
@@ -96,7 +95,7 @@ A few components handle their own input inside `Layout` because it depends on th
 
 `kit.Scope(gtx, name, widget)` pushes a path segment onto the frame's scope stack: inside `Scope(gtx, "sidebar", ...)`, a control with `ID: "save"` gets the full path `"sidebar/save"`. Composite components name their sub-parts with `kit.Part(id, parts...)` (`qty/minus`, `qty/plus`, `lang/field`). Literal `/` and `%` characters inside a segment are escaped (`%2F`, `%25`) with `kit.EscapeID`. Because scoping only affects semantic paths and not state keys, moving a component into or out of a `Scope` never resets its state.
 
-On top of Gio's basic semantic classes, `kit.SetRole(gtx, id, role)` records WAI-ARIA roles (`RoleTab`, `RoleTabList`, `RoleOption`, `RoleListBox`, `RoleMenu`, `RoleMenuItem`, `RoleTree`, `RoleTreeItem`, `RoleGrid`, `RoleRow`, `RoleGridCell`, `RoleDialog`, `RoleSlider`, `RoleComboBox`, `RoleStatus`, `RoleImage`).
+A `kit.Role` is the fork's `semantic.ClassOp`, which adds WAI-ARIA roles (`RoleTab`, `RoleTabList`, `RoleOption`, `RoleListbox`, `RoleMenu`, `RoleMenuItem`, `RoleTree`, `RoleTreeItem`, `RoleGrid`, `RoleRow`, `RoleGridCell`, `RoleDialog`, `RoleSlider`, `RoleCombobox`, `RoleStatus`, `RoleImage`, ...) to Gio's five classes. A control adds its role to its clip area beside its `Tag` (`kit.RoleSlider.Add(gtx.Ops)`), so roles live in the semantic tree that kittest and the platform read; `kit.Group`, `kit.List.Role`, `kit.Popup.Role` and `kit.EditorField.Role` take one for the areas they own.
 
 ## Focus Groups and Key Dispatch
 
@@ -123,7 +122,7 @@ When `Window.End(gtx)` processes unclaimed keys at the end of the frame, it walk
 ## Overlay Layers (`Popup`, `Dialog`, and `Layer`)
 
 - `kit.Layer(gtx, offset, widget)` defers drawing until the end of the frame while keeping the widget attached to the caller's `KeyContext` node. Tooltips and toasts use `Layer`.
-- `kit.Popup` and `th.Popover(gtx, popup, id, anchor, content)` draw anchored floating panels for `Menu`, `ContextMenu`, `Select`, `Combobox`, and `DateField`. By comparing pointer event positions at the anchor with the root window area recorded by `Window.Begin`, `Popover` learns where the anchor sits in the window and flips above the anchor or shifts horizontally to stay inside the window bounds. Outside presses hit `id/backdrop` and close the popup.
+- `kit.Popup` and `th.Popover(gtx, popup, id, anchor, content)` draw anchored floating panels for `Menu`, `ContextMenu`, `Select`, `Combobox`, and `DateField`. `Popover` reads where the anchor sat in the window last frame (`input.Source.Bounds`, a fork addition) and flips above the anchor or shifts horizontally to stay inside the window bounds. Outside presses hit `id/backdrop` and close the popup.
 - `kit.Dialog` and `th.Modal(gtx, dialog, id, page, content)` draw modal dialogs. While open, `page` is laid out inside `th.Disable` beneath `th.Scrim`, focus is trapped inside the dialog, and `Escape` or a backdrop click closes it unless `Dialog.Persistent` is set.
 
 ## Themes, OKLCH Palettes, and Design Tokens

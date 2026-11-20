@@ -11,7 +11,7 @@ Put detail in `docs/`, and add a pitfall here only as a one-line rule.
 
 - **`kit/`:** primitives only, one concern per file: tokens (`theme`, `palette`,
   `color`, `tint`, `metrics`, `spacing`, `strings`, `tokens`), layout and drawing
-  (`flex`, `flow`, `draw`, `icon`, `widgets` text, `styledtext`, `table`, `anim`),
+  (`flex`, `flow`, `draw`, `drawcache`, `icon`, `widgets` text, `styledtext`, `table`, `anim`),
   input (`clickable`, `hover`, `focus`, `dispatch`, `keymap`, `actions`, `inputs`,
   `menu` rows), ids (`id`, `semantic`), scrolling (`scroll`, `anchoredlist`,
   `pool`), layers (`overlay`, `root`), runner (`app`, `pacing`, `trace`).

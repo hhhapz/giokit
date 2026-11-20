@@ -39,7 +39,8 @@ import (
 //
 // A Keymap belongs to the UI goroutine, and its bound functions run there.
 type Keymap struct {
-	binds []Binding
+	binds   []Binding
+	filters []event.Filter // Attach's filters without a kit.Window, reused
 }
 
 // Binding is one chord → function.
@@ -54,7 +55,8 @@ type Binding struct {
 	Run    func() // what the chord does, on the UI goroutine
 
 	keys    chord
-	enabled func() bool // nil: always enabled
+	filter  event.Filter // keys.filter(), boxed once at bind time
+	enabled func() bool  // nil: always enabled
 }
 
 // live reports whether b takes its chord now. A disabled binding lets the
@@ -71,7 +73,9 @@ type chord struct {
 func (c chord) matches(e key.Event) bool { return e.Name == c.name && e.Modifiers == c.mods }
 
 // filter asks Gio for c's key events.
-func (c chord) filter() key.Filter { return key.Filter{Name: c.name, Required: c.mods} }
+// filter is the key filter for c, boxed: callers keep the result rather
+// than boxing a key.Filter into an event.Filter every frame.
+func (c chord) filter() event.Filter { return key.Filter{Name: c.name, Required: c.mods} }
 
 var modNames = map[string]key.Modifiers{
 	"ctrl": key.ModCtrl, "control": key.ModCtrl, "shift": key.ModShift, "alt": key.ModAlt, "option": key.ModAlt,
@@ -163,6 +167,7 @@ func (k *Keymap) Bind(spec, title string, run func()) error {
 // add adds b, replacing the binding for the same chord.
 func (k *Keymap) add(b Binding) {
 	b.Chord = FormatChord(b.keys.name, b.keys.mods)
+	b.filter = b.keys.filter()
 	for i := range k.binds {
 		if k.binds[i].keys == b.keys {
 			k.binds[i] = b
@@ -215,7 +220,7 @@ func (k *Keymap) appendFilters(fs []event.Filter, typing bool) []event.Filter {
 		if typing && b.keys.types() {
 			continue
 		}
-		fs = append(fs, b.keys.filter())
+		fs = append(fs, b.filter)
 	}
 	return fs
 }
@@ -267,7 +272,8 @@ func (k *Keymap) Attach(gtx layout.Context) {
 	if len(k.binds) == 0 {
 		return
 	}
-	filters := k.appendFilters(nil, false)
+	filters := k.appendFilters(k.filters[:0], false)
+	k.filters = filters
 	for {
 		e, ok := gtx.Event(filters...)
 		if !ok {

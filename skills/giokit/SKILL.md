@@ -35,6 +35,7 @@ Docs: `$(go list -m -f '{{.Dir}}' github.com/hhhapz/giokit)/docs/`. Read only wh
 22. **Streaming images (video, camera, remote screens) use `paint.Stream` + `video.Video`,** never `paint.NewImageOp` per frame. Submit frames from any goroutine and wire `stream.OnFrame = app.Invalidate`.
 23. **Call every conditional component's `Update` on every frame,** even while hidden, after the input that toggles its visibility; otherwise it appears one frame late (`ProblemStaleFrame`).
 24. **Custom state `Update` methods run outside `th.Disable`:** Record `!gtx.Enabled()` during `Layout`, register no input handlers when disabled, and ignore events in `Update`.
+25. **Custom drawing that rarely changes goes through `kit.DrawCache`.** Shapes drawn straight into `gtx.Ops` are re-flattened and re-uploaded to the GPU every frame (one buffer per shape); a cached recording is reused, even when replayed under a moving `op.Offset`.
 
 ## Verify Every UI Change Headlessly
 

@@ -76,3 +76,6 @@ In Gio's `app.Window`, inserting text into an editor sends a `key.EditEvent` fol
 
 ## 25. Draining chained `app.Post` callbacks in tests
 A live window draws a frame for every queued `app.Post` callback. `kittest`'s `Settle` and `RunTasks` keep drawing frames while `app.Queued() > 0` so callbacks posted from inside another callback finish before strict mode checks the settled frame.
+
+## 26. Custom shapes rebuilt on the GPU every frame
+The renderer caches a filled shape's vertex buffer by the operation that drew it: its op list, position and that list's version. The frame's op list is reset every frame, so every `clip.Outline` or `clip.Path` drawn straight into `gtx.Ops` is flattened and uploaded as a new GPU buffer every frame, cache or no cache. A pixel-art card game drawing its board, header and shadows as about 150 small shapes spent half its frame on this in the browser (WebGL upload plus a Go-to-JS copy per buffer), and the garbage forced periodic GC pauses. Record drawing that changes rarely into a `kit.DrawCache`, keyed on what it depends on; replaying the recording hits the cache. Translation is not part of the cache key, so one recorded shape replayed under `op.Offset` (a shadow following a dragged card) also hits; scale, rotation and shear do not.

@@ -21,8 +21,9 @@ import (
 // The zero value is ready to use. A Window belongs to the goroutine that
 // runs its window's frames; one Window serves one window.
 type Window struct {
-	fr     frame
-	values map[string]any
+	fr      frame
+	values  map[string]any
+	filters []event.Filter // End's key filters, reused from frame to frame
 }
 
 // frame is the per-frame dispatch tree. Nodes are KeyContexts; node 0 is the
@@ -143,6 +144,15 @@ var defaultKeys = []defaultBinding{
 	{keys: chord{name: key.NameF10, mods: key.ModShift}, action: ActContextMenu},
 }
 
+// defaultFilters are defaultKeys' key filters, boxed once.
+var defaultFilters = func() []event.Filter {
+	fs := make([]event.Filter, len(defaultKeys))
+	for i, b := range defaultKeys {
+		fs[i] = b.keys.filter()
+	}
+	return fs
+}()
+
 // KeyContext lays out w inside a named dispatch node. Actions and keymaps
 // declared inside apply while focus is anywhere within it; nested contexts
 // are asked first. Popups lay out inside their opener's context, so a menu
@@ -187,15 +197,13 @@ func Notify(gtx layout.Context) { gtx.Execute(op.InvalidateCmd{}) }
 // themselves during layout (editors) asked first, so they keep theirs.
 func (w *Window) End(gtx layout.Context) {
 	f := &w.fr
-	var filters []event.Filter
-	for _, b := range defaultKeys {
-		filters = append(filters, b.keys.filter())
-	}
+	filters := append(w.filters[:0], defaultFilters...)
 	for _, n := range f.nodes {
 		for _, km := range n.keymaps {
 			filters = km.appendFilters(filters, f.typing)
 		}
 	}
+	w.filters = filters
 	for {
 		e, ok := gtx.Event(filters...)
 		if !ok {

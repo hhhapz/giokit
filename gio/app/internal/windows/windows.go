@@ -347,6 +347,7 @@ const (
 	WM_CLOSE                 = 0x0010
 	WM_COPYDATA              = 0x004A
 	WM_CREATE                = 0x0001
+	WM_INPUTLANGCHANGE       = 0x0051
 	WM_DPICHANGED            = 0x02E0
 	WM_DESTROY               = 0x0002
 	WM_ERASEBKGND            = 0x0014
@@ -459,6 +460,7 @@ var (
 	_GetDC                        = user32.NewProc("GetDC")
 	_GetDpiForWindow              = user32.NewProc("GetDpiForWindow")
 	_GetKeyState                  = user32.NewProc("GetKeyState")
+	_MapVirtualKey                = user32.NewProc("MapVirtualKeyW")
 	_GetMessage                   = user32.NewProc("GetMessageW")
 	_GetMessageTime               = user32.NewProc("GetMessageTime")
 	_GetMonitorInfo               = user32.NewProc("GetMonitorInfoW")
@@ -686,6 +688,17 @@ func GetSystemDPI() int {
 		defer ReleaseDC(screenDC)
 		return getDeviceCaps(screenDC, LOGPIXELSX)
 	}
+}
+
+// MapVirtualKey translations.
+const (
+	MAPVK_VSC_TO_VK  = 1 // scan code to virtual key
+	MAPVK_VK_TO_CHAR = 2 // virtual key to its unshifted character; the top bit marks a dead key
+)
+
+func MapVirtualKey(code, mapType uint32) uint32 {
+	r, _, _ := _MapVirtualKey.Call(uintptr(code), uintptr(mapType))
+	return uint32(r)
 }
 
 func GetKeyState(nVirtKey int32) int16 {

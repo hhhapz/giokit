@@ -14,6 +14,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/hhhapz/giokit/gio/internal/f32color"
+	"github.com/hhhapz/giokit/gio/internal/keylayout"
 	"github.com/hhhapz/giokit/gio/op"
 
 	"github.com/hhhapz/giokit/gio/f32"
@@ -112,6 +113,7 @@ func newWindow(win *callbacks, options []Option) {
 		return nil
 	})
 	w.addEventListeners()
+	w.loadKeyLayout()
 	w.addHistory()
 
 	w.Configure(options)
@@ -292,6 +294,22 @@ func (w *window) addEventListeners() {
 	})
 	w.addEventListener(w.tarea, "keyup", func(this js.Value, args []js.Value) interface{} {
 		w.keyEvent(args[0], key.Release)
+		return nil
+	})
+	// giokit: the textarea only has focus while a text input does, so
+	// without these, shortcuts and key handlers get no keys at all on
+	// the web. Keys pressed with focus elsewhere on the page come from
+	// the window instead, unless another editable element has them.
+	w.addEventListener(w.window, "keydown", func(this js.Value, args []js.Value) interface{} {
+		if w.pageKey() {
+			w.keyEvent(args[0], key.Press)
+		}
+		return nil
+	})
+	w.addEventListener(w.window, "keyup", func(this js.Value, args []js.Value) interface{} {
+		if w.pageKey() {
+			w.keyEvent(args[0], key.Release)
+		}
 		return nil
 	})
 	w.addEventListener(w.tarea, "compositionstart", func(this js.Value, args []js.Value) interface{} {
@@ -510,6 +528,24 @@ func (w *window) addHistory() {
 	w.browserHistory.Call("pushState", nil, nil, w.window.Get("location").Get("href"))
 }
 
+// pageKey reports whether a key event reaching the window is the app's:
+// not one the textarea already delivered, and not one typed into some
+// other editable element on the page.
+func (w *window) pageKey() bool {
+	el := w.document.Get("activeElement")
+	if el.IsNull() || el.IsUndefined() {
+		return true
+	}
+	if el.Equal(w.tarea) {
+		return false
+	}
+	switch el.Get("tagName").String() {
+	case "INPUT", "TEXTAREA", "SELECT":
+		return false
+	}
+	return !el.Get("isContentEditable").Truthy()
+}
+
 func (w *window) blur() {
 	w.tarea.Call("blur")
 	w.requestFocus = false
@@ -589,8 +625,46 @@ func (w *window) keyEvent(e js.Value, ks key.State) {
 			Modifiers: modifiersFor(e),
 			State:     ks,
 		}
+		if c := key.Code(e.Get("code").String()); c.Valid() {
+			cmd.Code = c
+		}
 		w.processEvent(cmd)
 	}
+}
+
+// loadKeyLayout reports the keyboard layout's key names, where the browser
+// can tell (navigator.keyboard, in Chromium): now, on a layout change where
+// the browser announces one, and whenever the page regains focus, since a
+// layout is usually switched elsewhere. Elsewhere they are learned as keys
+// are pressed.
+func (w *window) loadKeyLayout() {
+	kb := js.Global().Get("navigator").Get("keyboard")
+	if !kb.Truthy() || !kb.Get("getLayoutMap").Truthy() {
+		return
+	}
+	var load js.Func
+	load = js.FuncOf(func(this js.Value, args []js.Value) any {
+		var got js.Func
+		got = js.FuncOf(func(this js.Value, args []js.Value) any {
+			got.Release()
+			each := js.FuncOf(func(this js.Value, kv []js.Value) any { // (value, code)
+				if n, ok := translateKey(kv[0].String()); ok {
+					keylayout.Set(kv[1].String(), string(n))
+				}
+				return nil
+			})
+			args[0].Call("forEach", each)
+			each.Release()
+			return nil
+		})
+		kb.Call("getLayoutMap").Call("then", got)
+		return nil
+	})
+	load.Invoke()
+	if kb.Get("addEventListener").Truthy() { // in the spec, but Chromium's navigator.keyboard has no events
+		kb.Call("addEventListener", "layoutchange", load)
+	}
+	w.window.Call("addEventListener", "focus", load)
 }
 
 func (w *window) ProcessEvent(e event.Event) {

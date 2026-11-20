@@ -164,7 +164,7 @@ To switch to another bundled font pair (`fonts.Go()`, `fonts.Inter()`, `fonts.Pl
 
 Interactive controls are reachable with `Tab` and activated with `Enter` or `Space`. Collections (`SelectableList`, `Tree`, `DataTable`, `Tabs`, `Menu`) act as a single `Tab` stop and use arrow keys, `Home`/`End`, and type-ahead to move inside the group.
 
-Application commands go in a `kit.Actions` registry bound to shortcuts through a `kit.Keymap`, and `ui.CommandPalette` provides a searchable modal picker over those actions. In chord strings such as `"Shortcut+K"`, `"Shortcut"` maps to `Cmd` on macOS and `Ctrl` on Windows and Linux.
+Application commands go in a `kit.Actions` registry bound to shortcuts through a `kit.Keymap`, and `ui.CommandPalette` provides a searchable modal picker over those actions. In chord strings such as `"Shortcut+K"`, `"Shortcut"` maps to `Cmd` on macOS and `Ctrl` on Windows and Linux. A key written as a physical key code such as `"KeyQ"` binds by place on the keyboard, whatever the layout types there, for keys chosen for where they sit, like a game's WASD.
 
 ## Testing
 

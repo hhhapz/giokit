@@ -35,7 +35,10 @@ import (
 //
 // Chords: modifiers joined with "+", then a key: "Ctrl+K", "Shift+Ctrl+P",
 // "Alt+Up", "F1", "Escape", "Shortcut+S", "Ctrl++". Shortcut is Cmd on macOS
-// and Ctrl elsewhere.
+// and Ctrl elsewhere. A key written as a physical key code ("KeyQ",
+// "Shift+Digit1"; see key.Code) binds the key in that place whatever the
+// keyboard layout types with it: bind by place for keys chosen for where
+// they sit (a game's WASD), by name for keys chosen for what they say.
 //
 // A Keymap belongs to the UI goroutine, and its bound functions run there.
 type Keymap struct {
@@ -46,7 +49,9 @@ type Keymap struct {
 // Binding is one chord → function.
 type Binding struct {
 	// Chord is the chord in display form, as FormatChord writes it, whatever
-	// spelling was passed to Bind: binding "ctrl+k" gives "Ctrl+K".
+	// spelling was passed to Bind: binding "ctrl+k" gives "Ctrl+K". A
+	// physical key shows what the current layout types with it ("KeyQ" is
+	// "A" on AZERTY); Bindings, Hint and HintFor give it fresh.
 	Chord string
 	Title string // human description, for menus / palettes / help
 	// Action is the id of the Action this binding runs, when BindActions
@@ -64,18 +69,39 @@ type Binding struct {
 func (b Binding) live() bool { return b.enabled == nil || b.enabled() }
 
 // chord is a parsed key chord: a key and exactly the modifiers held with it.
+// The key is a name, or a physical key code ("KeyQ") whatever the layout
+// types with it.
 type chord struct {
 	name key.Name
+	code key.Code
 	mods key.Modifiers
 }
 
 // matches reports whether e is c pressed.
-func (c chord) matches(e key.Event) bool { return e.Name == c.name && e.Modifiers == c.mods }
+func (c chord) matches(e key.Event) bool {
+	if c.code != "" {
+		return e.PhysicalCode() == c.code && e.Modifiers == c.mods
+	}
+	return e.Name == c.name && e.Modifiers == c.mods
+}
 
-// filter asks Gio for c's key events.
 // filter is the key filter for c, boxed: callers keep the result rather
 // than boxing a key.Filter into an event.Filter every frame.
-func (c chord) filter() event.Filter { return key.Filter{Name: c.name, Required: c.mods} }
+func (c chord) filter() event.Filter {
+	return key.Filter{Name: c.name, Code: c.code, Required: c.mods}
+}
+
+// keyName is the name of c's key: for a physical key, what the current
+// layout types with it.
+func (c chord) keyName() key.Name {
+	if c.code != "" {
+		return c.code.Name()
+	}
+	return c.name
+}
+
+// String is c for display, as FormatChord writes it.
+func (c chord) String() string { return FormatChord(c.keyName(), c.mods) }
 
 var modNames = map[string]key.Modifiers{
 	"ctrl": key.ModCtrl, "control": key.ModCtrl, "shift": key.ModShift, "alt": key.ModAlt, "option": key.ModAlt,
@@ -99,12 +125,13 @@ const (
 )
 
 // ParseChord parses "Ctrl+Shift+P" into Gio's key name and modifiers.
-// Names are case-insensitive. The plus key is written "+" ("Ctrl++"). It
-// fails on an unknown modifier or key, a missing key, and function keys Gio
-// does not deliver (F0, F13 and above).
+// Names are case-insensitive. The plus key is written "+" ("Ctrl++"). For a
+// physical key code ("KeyQ") the name is what the current layout types with
+// it. It fails on an unknown modifier or key, a missing key, and function
+// keys Gio does not deliver (F0, F13 and above).
 func ParseChord(s string) (key.Name, key.Modifiers, error) {
 	c, err := parseChord(s)
-	return c.name, c.mods, err
+	return c.keyName(), c.mods, err
 }
 
 func parseChord(s string) (chord, error) {
@@ -150,6 +177,10 @@ func parseChord(s string) (chord, error) {
 		c.name = key.Name(strings.ToUpper(k))
 		return c, nil
 	}
+	if code, ok := key.ParseCode(k); ok {
+		c.code = code
+		return c, nil
+	}
 	return chord{}, fmt.Errorf("kit: chord %q: unknown key %q", s, k)
 }
 
@@ -166,7 +197,7 @@ func (k *Keymap) Bind(spec, title string, run func()) error {
 
 // add adds b, replacing the binding for the same chord.
 func (k *Keymap) add(b Binding) {
-	b.Chord = FormatChord(b.keys.name, b.keys.mods)
+	b.Chord = b.keys.String()
 	b.filter = b.keys.filter()
 	for i := range k.binds {
 		if k.binds[i].keys == b.keys {
@@ -186,7 +217,13 @@ func (k *Keymap) MustBind(spec, title string, run func()) {
 
 // Bindings lists every binding in the order bound. It returns a copy:
 // changing it does not change k.
-func (k *Keymap) Bindings() []Binding { return slices.Clone(k.binds) }
+func (k *Keymap) Bindings() []Binding {
+	bs := slices.Clone(k.binds)
+	for i := range bs {
+		bs[i].Chord = bs[i].keys.String() // physical keys follow the layout
+	}
+	return bs
+}
 
 // Hint returns the display chord of the binding with this title ("" if
 // none). Titles are display strings, which may be translated or repeated;
@@ -194,7 +231,7 @@ func (k *Keymap) Bindings() []Binding { return slices.Clone(k.binds) }
 func (k *Keymap) Hint(title string) string {
 	for _, b := range k.binds {
 		if b.Title == title {
-			return b.Chord
+			return b.keys.String()
 		}
 	}
 	return ""
@@ -206,7 +243,7 @@ func (k *Keymap) Hint(title string) string {
 func (k *Keymap) HintFor(actionID string) string {
 	for _, b := range k.binds {
 		if b.Action != "" && b.Action == actionID {
-			return b.Chord
+			return b.keys.String()
 		}
 	}
 	return ""
@@ -228,7 +265,7 @@ func (k *Keymap) appendFilters(fs []event.Filter, typing bool) []event.Filter {
 // types reports whether c belongs to a focused editor: a key that types
 // or edits text, with no modifier but Shift ("1", "?", "Shift+A", "Space",
 // "Left", "Shift+Home", "Return").
-func (c chord) types() bool { return c.mods&^key.ModShift == 0 && editorKey(c.name) }
+func (c chord) types() bool { return c.mods&^key.ModShift == 0 && editorKey(c.keyName()) }
 
 // editorKey reports whether a focused editor owns the key name when no
 // modifier but Shift is held: printable characters, Space, and the keys

@@ -11,6 +11,7 @@ import (
 
 	"github.com/hhhapz/giokit/gio/f32"
 	f32internal "github.com/hhhapz/giokit/gio/internal/f32"
+	"github.com/hhhapz/giokit/gio/internal/keylayout"
 	"github.com/hhhapz/giokit/gio/internal/ops"
 	"github.com/hhhapz/giokit/gio/io/clipboard"
 	"github.com/hhhapz/giokit/gio/io/event"
@@ -448,6 +449,7 @@ func (q *Router) processEvent(e event.Event, system bool) {
 		state.pointerState = pstate
 		q.changeState(e, state, evts)
 	case key.Event:
+		learnKey(e)
 		var evts []taggedEvent
 		if q.key.filter.Matches(state.keyState.focus, e, system) {
 			evts = append(evts, taggedEvent{event: e})
@@ -903,3 +905,12 @@ func (s SemanticGestures) String() string {
 }
 
 func (SystemEvent) ImplementsEvent() {}
+
+// learnKey teaches key.Code.Name what the current layout types with a
+// physical key, from an unmodified press that reports both; a press that
+// shows the layout changed can relabel every key (see keylayout.Learn).
+func learnKey(e key.Event) {
+	if e.Code != "" && e.Modifiers == 0 && e.State == key.Press {
+		keylayout.Learn(string(e.Code), string(e.Name))
+	}
+}

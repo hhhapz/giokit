@@ -22,6 +22,7 @@ import (
 	"unsafe"
 
 	"github.com/hhhapz/giokit/gio/app/internal/windows"
+	"github.com/hhhapz/giokit/gio/internal/keylayout"
 	"github.com/hhhapz/giokit/gio/op"
 	"github.com/hhhapz/giokit/gio/unit"
 	gowindows "golang.org/x/sys/windows"
@@ -295,6 +296,9 @@ func windowProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) uintptr
 				Modifiers: getModifiers(),
 				State:     key.Press,
 			}
+			if lParam&(1<<24) == 0 { // not an extended key: the typing area
+				e.Code = key.Code(keylayout.Evdev(uint32(lParam>>16) & 0xff))
+			}
 			if msg == windows.WM_KEYUP || msg == windows.WM_SYSKEYUP {
 				e.State = key.Release
 			}
@@ -337,7 +341,10 @@ func windowProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) uintptr
 		w.ProcessEvent(pointer.Event{
 			Kind: pointer.Cancel,
 		})
+	case windows.WM_INPUTLANGCHANGE:
+		reportKeyLayout()
 	case windows.WM_SETFOCUS:
+		reportKeyLayout() // the layout may have changed while away
 		w.config.Focused = true
 		w.ProcessEvent(ConfigEvent{Config: w.config})
 	case windows.WM_KILLFOCUS:
@@ -1449,5 +1456,19 @@ func unregisterSchemes(appid string, schemes []string) {
 		}
 
 		registry.DeleteKey(classes, scheme)
+	}
+}
+
+// reportKeyLayout tells keylayout what the active layout types with each
+// physical key, unshifted. Windows scan codes for the typing area match
+// evdev's.
+func reportKeyLayout() {
+	keylayout.Reset()
+	for _, sc := range keylayout.EvdevCodes() {
+		vk := windows.MapVirtualKey(sc, windows.MAPVK_VSC_TO_VK)
+		ch := rune(windows.MapVirtualKey(vk, windows.MAPVK_VK_TO_CHAR) &^ (1 << 31))
+		if ch > ' ' && unicode.IsPrint(ch) {
+			keylayout.Set(keylayout.Evdev(sc), strings.ToUpper(string(ch)))
+		}
 	}
 }

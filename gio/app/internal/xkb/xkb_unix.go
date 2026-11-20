@@ -14,6 +14,7 @@ import (
 	"unicode/utf8"
 	"unsafe"
 
+	"github.com/hhhapz/giokit/gio/internal/keylayout"
 	"github.com/hhhapz/giokit/gio/io/event"
 	"github.com/hhhapz/giokit/gio/io/key"
 )
@@ -36,6 +37,7 @@ type Context struct {
 	compTable *C.struct_xkb_compose_table
 	compState *C.struct_xkb_compose_state
 	utf8Buf   []byte
+	layout    C.xkb_layout_index_t // the layout group last reported to keylayout
 }
 
 const (
@@ -110,6 +112,7 @@ func (x *Context) SetKeymap(xkbKeyMap, xkbState unsafe.Pointer) {
 	x.DestroyKeymapState()
 	x.keyMap = (*C.struct_xkb_keymap)(xkbKeyMap)
 	x.state = (*C.struct_xkb_state)(xkbState)
+	x.reportLayout()
 }
 
 func (x *Context) LoadKeymap(format int, fd int, size int) error {
@@ -130,7 +133,33 @@ func (x *Context) LoadKeymap(format int, fd int, size int) error {
 	}
 	x.keyMap = keyMap
 	x.state = state
+	x.reportLayout()
 	return nil
+}
+
+// reportLayout tells keylayout what the active layout types with each
+// physical key, unshifted.
+func (x *Context) reportLayout() {
+	if x.state == nil {
+		return
+	}
+	keylayout.Reset()
+	x.layout = C.xkb_state_serialize_layout(x.state, C.XKB_STATE_LAYOUT_EFFECTIVE)
+	for _, code := range keylayout.EvdevCodes() {
+		kc := C.xkb_keycode_t(code + 8)
+		var syms *C.xkb_keysym_t
+		n := C.xkb_keymap_key_get_syms_by_level(x.keyMap, kc, x.layout, 0, &syms)
+		if n < 1 {
+			continue
+		}
+		name, ok := convertKeysym(*syms)
+		if !ok {
+			name, ok = keysymName(*syms)
+		}
+		if ok {
+			keylayout.Set(keylayout.Evdev(code), string(name))
+		}
+	}
 }
 
 func (x *Context) Modifiers() key.Modifiers {
@@ -164,9 +193,15 @@ func (x *Context) DispatchKey(keyCode uint32, state key.State) (symbol uint32, e
 	}
 	sym := C.xkb_state_key_get_one_sym(x.state, kc)
 	symbol = uint32(sym)
-	if name, ok := convertKeysym(sym); ok {
+	code := key.Code(keylayout.Evdev(keyCode - 8))
+	name, ok := convertKeysym(sym)
+	if !ok && code != "" {
+		name, ok = keysymName(sym) // é on bépo: still a key, for bindings by place
+	}
+	if ok {
 		cmd := key.Event{
 			Name:      name,
+			Code:      code,
 			Modifiers: x.Modifiers(),
 			State:     state,
 		}
@@ -236,6 +271,9 @@ func (x *Context) UpdateMask(depressed, latched, locked, depressedGroup, latched
 	}
 	C.xkb_state_update_mask(x.state, C.xkb_mod_mask_t(depressed), C.xkb_mod_mask_t(latched), C.xkb_mod_mask_t(locked),
 		C.xkb_layout_index_t(depressedGroup), C.xkb_layout_index_t(latchedGroup), C.xkb_layout_index_t(lockedGroup))
+	if C.xkb_state_serialize_layout(x.state, C.XKB_STATE_LAYOUT_EFFECTIVE) != x.layout {
+		x.reportLayout() // switched to another layout
+	}
 }
 
 func convertKeysym(s C.xkb_keysym_t) (key.Name, bool) {
@@ -372,4 +410,14 @@ func convertKeysym(s C.xkb_keysym_t) (key.Name, bool) {
 		return "", false
 	}
 	return n, true
+}
+
+// keysymName names a keysym convertKeysym doesn't: any printable character,
+// upper-cased like Gio's letter names.
+func keysymName(s C.xkb_keysym_t) (key.Name, bool) {
+	r := rune(C.xkb_keysym_to_utf32(s))
+	if r <= ' ' || !unicode.IsPrint(r) {
+		return "", false
+	}
+	return key.Name(unicode.ToUpper(r)), true
 }

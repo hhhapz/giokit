@@ -36,8 +36,10 @@ Our changes to upstream v0.10.3, by area:
 | Input | Adds `Source.Bounds` and `Source.FocusedTag` on `input.Source`; keeps semantics on areas whose handler asks for no gestures. |
 | Semantics | Adds `semantic.Image` and WAI-ARIA role classes (`Link`, `Slider`, `Tab`, `MenuItem`, ...) to `io/semantic`. |
 | Editor | Adds `Ctrl+Backspace`/`Delete` word delete (Windows, Linux), selection collapse on `Left`/`Right`, and single-line `Up`/`Down`. |
+| Keys | Adds physical keys: `key.Code` (named like the web's `KeyboardEvent.code`) on `key.Event` and `key.Filter`, reported on the web, X11, Wayland, Windows and macOS, with the US place standing in elsewhere; `Code.Name` gives what the current layout types there, from the platform (web where supported, xkb, Windows) or learned from presses, where one press that reveals a common layout (QWERTZ, AZERTY, Dvorak, Colemak, Workman) relabels every key. |
 | Streams | Adds cross-platform `paint.Stream` (Metal, Direct3D 11, OpenGL ES, Vulkan, WebGL) plus zero-copy Linux DMA-BUF texture import (OpenGL ES and Vulkan). |
 | Headless | Falls back to WARP on Direct3D 11 without a GPU; `GIOKIT_GPU=warp` forces it. |
+| Web | Delivers key events from the window when no text input has focus, so shortcuts and key handlers work in the browser (upstream only listens on the hidden textarea, which is focused only for text input). |
 
 ## Patch Details
 

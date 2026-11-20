@@ -16,6 +16,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/hhhapz/giokit/gio/internal/f32"
+	"github.com/hhhapz/giokit/gio/internal/keylayout"
 	"github.com/hhhapz/giokit/gio/io/event"
 	"github.com/hhhapz/giokit/gio/io/key"
 	"github.com/hhhapz/giokit/gio/io/pointer"
@@ -321,6 +322,11 @@ static void invalidateCharacterCoordinates(CFTypeRef viewRef) {
 	}
 }
 
+static uint16_t eventKeyCode(CFTypeRef eventRef) {
+	NSEvent *event = (__bridge NSEvent *)eventRef;
+	return [event keyCode];
+}
+
 static void interpretKeyEvents(CFTypeRef viewRef, CFTypeRef eventRef) {
 	@autoreleasepool {
 		NSView *view = (__bridge NSView *)viewRef;
@@ -379,6 +385,7 @@ type window struct {
 type cmdKeys struct {
 	eventStr  string
 	eventMods key.Modifiers
+	eventCode key.Code
 }
 
 // launched is closed when applicationDidFinishLaunching is called.
@@ -588,17 +595,20 @@ func gio_onKeys(h C.uintptr_t, event C.CFTypeRef, cstr C.CFTypeRef, ti C.double,
 	}
 	str := nsstringToString(cstr)
 	kmods := convertMods(mods)
+	code := key.Code(keylayout.Mac(uint16(C.eventKeyCode(event))))
 	ks := key.Release
 	if keyDown {
 		ks = key.Press
 		w.cmdKeys.eventStr = str
 		w.cmdKeys.eventMods = kmods
+		w.cmdKeys.eventCode = code
 		C.interpretKeyEvents(w.view, event)
 	}
 	for _, k := range str {
 		if n, ok := convertKey(k); ok {
 			ke := key.Event{
 				Name:      n,
+				Code:      code,
 				Modifiers: kmods,
 				State:     ks,
 			}
@@ -635,6 +645,7 @@ func gio_onCommandBySelector(h C.uintptr_t) C.bool {
 		}
 		ke := key.Event{
 			Name:      n,
+			Code:      ev.eventCode,
 			Modifiers: ev.eventMods,
 			State:     key.Press,
 		}

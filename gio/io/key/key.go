@@ -29,6 +29,9 @@ type Filter struct {
 	// and Shift-Tab for changing focus, are only matched by filters
 	// that specify their Name explicitly. See [gioui.org/io/input.SystemEvent].
 	Name Name
+	// Code, if set, matches the physical key instead of Name, whatever the
+	// keyboard layout types with it. See [Code].
+	Code Code
 }
 
 // InputHintOp describes the type of text expected by a tag.
@@ -103,6 +106,10 @@ type FocusEvent struct {
 type Event struct {
 	// Name of the key.
 	Name Name
+	// Code is the physical key, independent of the keyboard layout. It is
+	// empty for keys outside the typing area, and on platforms that don't
+	// report physical keys; see [Event.PhysicalCode].
+	Code Code
 	// Modifiers is the set of active modifiers when the key was pressed.
 	Modifiers Modifiers
 	// State is the state of the key when the event was fired.

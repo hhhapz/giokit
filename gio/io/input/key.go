@@ -265,7 +265,13 @@ func keyFilterMatch(focus event.Tag, f key.Filter, e key.Event, system bool) boo
 	if f.Focus != nil && f.Focus != focus {
 		return false
 	}
-	if (f.Name != "" || system) && f.Name != e.Name {
+	switch {
+	case f.Code != "":
+		// A physical key, named explicitly: system keys may match too.
+		if f.Code != e.PhysicalCode() {
+			return false
+		}
+	case (f.Name != "" || system) && f.Name != e.Name:
 		return false
 	}
 	if e.Modifiers&f.Required != f.Required {

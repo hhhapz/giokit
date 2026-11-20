@@ -37,6 +37,7 @@ Every input call settles immediate redraws and finite animations, and (when `h.S
 
 - `h.Key(name, mods)`: sends a single key press. Unclaimed `Tab` and `Shift+Tab` presses move focus just as in a live window.
 - `h.Keys(names...)`: sends multiple key presses in a single frame before settling.
+- `h.KeyCode("KeyQ", "A", 0)`: presses a physical key as another layout types it (here AZERTY), for bindings by place; `h.Key` sends no physical code, so those bindings see the US layout.
 - `h.Chord("Shortcut+K")`: parses and sends a key chord (`"Shortcut"` resolves to `Cmd` on macOS and `Ctrl` on Windows and Linux).
 - `h.Tab(back)`: presses `Tab` (`false`) or `Shift+Tab` (`true`).
 - `h.Type(text)`: inserts text into the focused `widget.Editor`.

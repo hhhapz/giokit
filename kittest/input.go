@@ -184,6 +184,19 @@ func (h *Harness) Key(name key.Name, mods key.Modifiers) {
 	h.after(fmt.Sprintf("key %v%v", mods, name))
 }
 
+// KeyCode presses and releases the physical key code, which the simulated
+// keyboard layout types as name: KeyCode("KeyQ", "A", 0) is the top-left
+// letter on AZERTY. It tests bindings by place (see key.Code) on other
+// layouts; Key sends no code, so such bindings see the US layout.
+func (h *Harness) KeyCode(code key.Code, name key.Name, mods key.Modifiers) {
+	h.tb.Helper()
+	h.router.Queue(
+		key.Event{Name: name, Code: code, Modifiers: mods, State: key.Press},
+		key.Event{Name: name, Code: code, Modifiers: mods, State: key.Release},
+	)
+	h.after(fmt.Sprintf("key %v%v (%v)", mods, name, code))
+}
+
 // KeyDown presses a key and holds it: a held modifier ("Ctrl" while
 // testing a hint that shows during the hold). Release it with KeyUp.
 func (h *Harness) KeyDown(name key.Name, mods key.Modifiers) {

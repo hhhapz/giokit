@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/hhhapz/giokit/gio/f32"
+	"github.com/hhhapz/giokit/gio/internal/keylayout"
 	"github.com/hhhapz/giokit/gio/io/event"
 	"github.com/hhhapz/giokit/gio/io/key"
 	"github.com/hhhapz/giokit/gio/io/pointer"
@@ -30,6 +31,27 @@ func TestAllMatchKeyFilter(t *testing.T) {
 	}
 	// Only specific filters match system events.
 	assertEventSequence(t, events(r, -1, key.Filter{Name: "A"}), ke)
+}
+
+// TestPhysicalKeys matches filters by physical key, whatever the layout
+// types with it, and learns what it types.
+func TestPhysicalKeys(t *testing.T) {
+	defer keylayout.Reset()
+	azertyQ := key.Event{Name: "A", Code: "KeyQ", State: key.Press} // AZERTY types A in QWERTY's Q place
+	r := new(Router)
+	r.Event(key.Filter{Code: "KeyQ"})
+	r.Queue(azertyQ, key.Event{Name: "Q", Code: "KeyA", State: key.Press})
+	assertEventSequence(t, events(r, -1, key.Filter{Code: "KeyQ"}), azertyQ)
+	if n := key.Code("KeyQ").Name(); n != "A" {
+		t.Errorf("KeyQ is named %q after an AZERTY press, want A", n)
+	}
+
+	// Without a reported code, the key's place on a US layout counts.
+	r = new(Router)
+	r.Event(key.Filter{Code: "KeyW"})
+	plain := key.Event{Name: "W"}
+	r.Queue(plain)
+	assertEventSequence(t, events(r, -1, key.Filter{Code: "KeyW"}), plain)
 }
 
 func TestInputHint(t *testing.T) {

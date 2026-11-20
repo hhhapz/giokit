@@ -144,6 +144,33 @@ func TestOKLCHRoundTrip(t *testing.T) {
 	}
 }
 
+// TestPhysicalChord binds a key by place: it fires for whatever the layout
+// types there, and shows what that is.
+func TestPhysicalChord(t *testing.T) {
+	var km Keymap
+	km.MustBind("KeyQ", "Top left", func() {})
+	km.MustBind("Shift+keyw", "Shifted", func() {})
+	press := func(n key.Name, c key.Code, m key.Modifiers) bool {
+		_, ok := km.match(key.Event{Name: n, Code: c, Modifiers: m, State: key.Press})
+		return ok
+	}
+	if !press("A", "KeyQ", 0) || press("Q", "KeyA", 0) || !press("Z", "KeyW", key.ModShift) || press("Z", "KeyW", 0) {
+		t.Fatal("physical chords matched by name, or ignored modifiers")
+	}
+	if !press("Q", "", 0) {
+		t.Fatal("an event without a code missed the key in its US place")
+	}
+	if h := km.Hint("Top left"); h != "Q" {
+		t.Fatalf("before learning the layout, KeyQ shows %q, want Q", h)
+	}
+	var r input.Router
+	r.Queue(key.Event{Name: "A", Code: "KeyQ", State: key.Press}) // an AZERTY keyboard
+	defer r.Queue(key.Event{Name: "Q", Code: "KeyQ", State: key.Press})
+	if h, b := km.Hint("Top left"), km.Bindings()[0].Chord; h != "A" || b != "A" {
+		t.Fatalf("on AZERTY, KeyQ shows %q (Bindings %q), want A", h, b)
+	}
+}
+
 func TestParseChord(t *testing.T) {
 	cases := []struct {
 		in   string

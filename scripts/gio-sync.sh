@@ -6,7 +6,7 @@
 # merge of a new snapshot on top of it, and our changes are the commits
 # after it. No branch is needed; never squash a snapshot commit away.
 #
-#   scripts/gio-sync.sh update [gio] [shader] [x]
+#   scripts/gio-sync.sh update [gio] [shader] [x] [cmd]
 #        commit a snapshot of upstream at these versions (default: the
 #        base's) on top of the base, and merge it into HEAD. Versions are
 #        anything go mod download takes: v0.11.0, a commit hash.
@@ -20,8 +20,9 @@
 #        verify the base's gio/ is exactly the snapshot of its versions, and
 #        that no module requires upstream gioui.org
 #
-# The rewrite is one text substitution on Go files, "gioui.org/ -> "$path/,
-# so trees and patches rewrite identically. Doc comments keep upstream names.
+# The rewrite is one text substitution on Go files, "gioui.org/ -> "$path/
+# (and gogio's -X gioui.org/ linker flags), so trees and patches rewrite
+# identically. Doc comments keep upstream names.
 set -euo pipefail
 export LC_ALL=C
 root=$(cd "$(dirname "$0")/.." && pwd)
@@ -29,18 +30,22 @@ path=github.com/hhhapz/giokit/gio
 subject="gio: upstream" # snapshot commits' subject prefix
 
 # What each upstream module contributes: module, destination under gio/,
-# and the paths kept (shader's piet compute shaders and most of x are unused).
+# the paths kept (shader's piet compute shaders and most of x are unused),
+# and tar patterns excluded from them. From cmd only gogio, the app
+# packager, without its tests: they are end-to-end runs needing browsers,
+# emulators and chromedp.
 modules=(
-	"gioui.org|.|*"
-	"gioui.org/shader|shader|LICENSE README.md shader.go gio cmd"
-	"gioui.org/x|x|LICENSE styledtext"
+	"gioui.org|.|*|"
+	"gioui.org/shader|shader|LICENSE README.md shader.go gio cmd|"
+	"gioui.org/x|x|LICENSE styledtext|"
+	"gioui.org/cmd|cmd|LICENSE gogio|*_test.go gogio/internal"
 )
 
 rewrite() { # stdin -> stdout: upstream import paths to ours
-	sed -e "s#\"gioui.org/#\"$path/#g" -e "s#\"gioui.org\"#\"$path\"#g"
+	sed -e "s#\"gioui.org/#\"$path/#g" -e "s#\"gioui.org\"#\"$path\"#g" -e "s#-X gioui.org/#-X $path/#g"
 }
 unrewrite() {
-	sed -e "s#\"$path/#\"gioui.org/#g" -e "s#\"$path\"#\"gioui.org\"#g"
+	sed -e "s#\"$path/#\"gioui.org/#g" -e "s#\"$path\"#\"gioui.org\"#g" -e "s#-X $path/#-X gioui.org/#g"
 }
 
 base() { # the newest snapshot commit reachable from HEAD
@@ -50,7 +55,7 @@ base() { # the newest snapshot commit reachable from HEAD
 	echo "$b"
 }
 
-versions() { # "gio shader x" from commit $1's gio/UPSTREAM
+versions() { # "gio shader x cmd" from commit $1's gio/UPSTREAM
 	git -C "$root" show "$1:gio/UPSTREAM" | awk '{print $2}' | paste -sd' '
 }
 
@@ -59,15 +64,18 @@ download() { # module version -> its directory in the module cache
 		sed -n 's/^\t"Dir": "\(.*\)",$/\1/p'
 }
 
-snapshot() { # dest gio shader x: write the rewritten upstream tree to dest
-	local dest=$1 m mod sub keep dir v f
+snapshot() { # dest gio shader x cmd: write the rewritten upstream tree to dest
+	local dest=$1 m mod sub keep skip dir v f p
 	shift
 	rm -rf "$dest" && mkdir -p "$dest"
 	: >"$dest/UPSTREAM"
 	for m in "${modules[@]}"; do
-		IFS='|' read -r mod sub keep <<<"$m"
-		v=${1:?missing version for $mod}
-		shift
+		IFS='|' read -r mod sub keep skip <<<"$m"
+		local excludes=()
+		for p in $skip; do excludes+=("--exclude=$p"); done
+		v=${1:-}
+		[ $# -gt 0 ] && shift
+		[ -n "$v" ] || continue # not in this snapshot (an older base)
 		dir=$(download "$mod" "$v")
 		[ -d "$dir" ] || { echo "cannot download $mod@$v" >&2; exit 1; }
 		# The resolved version: a commit hash becomes its pseudo-version.
@@ -78,7 +86,7 @@ snapshot() { # dest gio shader x: write the rewritten upstream tree to dest
 		if [ "$keep" = "*" ]; then
 			(cd "$dir" && tar -c --exclude=go.mod --exclude=go.sum --exclude='flake.*' --exclude=.builds --exclude=.gitattributes .) | tar -x -C "$dest/$sub"
 		else
-			(cd "$dir" && tar -c $keep) | tar -x -C "$dest/$sub"
+			(cd "$dir" && tar -c "${excludes[@]}" $keep) | tar -x -C "$dest/$sub"
 		fi
 		# The module cache is read-only, and tar keeps its modes.
 		chmod -R u+w "$dest"
@@ -99,15 +107,15 @@ update)
 		exit 1
 	fi
 	b=$(base)
-	read -r g s x <<<"$(versions "$b")"
-	g=${1:-$g} s=${2:-$s} x=${3:-$x}
+	read -r g s x c <<<"$(versions "$b")"
+	g=${1:-$g} s=${2:-$s} x=${3:-$x} c=${4:-$c}
 	wt=$(mktemp -d)
 	trap 'git -C "$root" worktree remove --force "$wt" 2>/dev/null || true; rm -rf "$wt"' EXIT
 	git -C "$root" worktree add -q --detach "$wt" "$b"
-	snapshot "$wt/gio" "$g" "$s" "$x"
+	snapshot "$wt/gio" "$g" "$s" "$x" "$c"
 	git -C "$wt" add -A gio
 	if git -C "$wt" diff --cached --quiet; then
-		echo "the base already is upstream $g, shader $s, x $x"
+		echo "the base already is upstream $g, shader $s, x $x, cmd $c"
 		exit 0
 	fi
 	what=$(awk '{print $1 "@" $2}' "$wt/gio/UPSTREAM" | paste -sd' ')
@@ -133,9 +141,9 @@ export)
 	;;
 check)
 	b=$(base)
-	read -r g s x <<<"$(versions "$b")"
-	if [ "$(versions HEAD)" != "$g $s $x" ]; then
-		echo "gio/UPSTREAM says $(versions HEAD), but the base $b is $g $s $x" >&2
+	read -r g s x c <<<"$(versions "$b")"
+	if [ "$(versions HEAD)" != "$(versions "$b")" ]; then
+		echo "gio/UPSTREAM says $(versions HEAD), but the base $b is $(versions "$b")" >&2
 		exit 1
 	fi
 	if [ -n "$(git -C "$root" diff --name-only "$b^" "$b" -- . ':!gio/')" ]; then
@@ -144,11 +152,11 @@ check)
 	fi
 	tmp=$(mktemp -d)
 	trap 'chmod -R u+w "$tmp"; rm -rf "$tmp"' EXIT
-	snapshot "$tmp/gio" "$g" "$s" "$x"
+	snapshot "$tmp/gio" "$g" "$s" "$x" "$c"
 	mkdir "$tmp/base"
 	git -C "$root" archive "$b" gio | tar -x -C "$tmp/base"
 	diff -r "$tmp/gio" "$tmp/base/gio" >/dev/null || {
-		echo "the base $b is not the snapshot of $g $s $x" >&2
+		echo "the base $b is not the snapshot of $(versions "$b")" >&2
 		diff -rq "$tmp/gio" "$tmp/base/gio" >&2 || true
 		exit 1
 	}
@@ -156,7 +164,7 @@ check)
 		echo "a module requires upstream Gio: two Gios cannot link into one binary" >&2
 		exit 1
 	fi
-	echo "ok: base $(git -C "$root" rev-parse --short "$b") is upstream $g, shader $s, x $x"
+	echo "ok: base $(git -C "$root" rev-parse --short "$b") is upstream $(versions "$b")"
 	;;
 *)
 	sed -n '2,/^set -euo/p' "$0" | sed '$d; s/^# \{0,1\}//'

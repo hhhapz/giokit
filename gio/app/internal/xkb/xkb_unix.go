@@ -177,6 +177,13 @@ func (x *Context) DispatchKey(keyCode uint32, state key.State) (symbol uint32, e
 		}
 		events = append(events, cmd)
 	}
+	// Only advance the compose state machine on key PRESS. Feeding it on
+	// RELEASE resolves a pending dead key into its raw glyph (e.g. '~')
+	// and leaks it as a spurious EditEvent. xkbcommon documents that the
+	// keysym to feed is "usually obtained after a key-press event".
+	if state != key.Press {
+		return
+	}
 	C.xkb_compose_state_feed(x.compState, sym)
 	var str []byte
 	switch C.xkb_compose_state_get_status(x.compState) {
@@ -274,6 +281,8 @@ func convertKeysym(s C.xkb_keysym_t) (key.Name, bool) {
 		n = key.NamePageUp
 	case C.XKB_KEY_Page_Down:
 		n = key.NamePageDown
+	case C.XKB_KEY_Insert:
+		n = key.NameInsert
 	case C.XKB_KEY_F1:
 		n = key.NameF1
 	case C.XKB_KEY_F2:
@@ -346,8 +355,7 @@ func convertKeysym(s C.xkb_keysym_t) (key.Name, bool) {
 	case C.XKB_KEY_KP_Begin:
 		n = key.NameHome
 	case C.XKB_KEY_KP_Insert:
-		// not supported
-		return "", false
+		n = key.NameInsert
 	case C.XKB_KEY_KP_Delete:
 		n = key.NameDeleteForward
 	case C.XKB_KEY_KP_Multiply:

@@ -76,7 +76,8 @@ type Window struct {
 		*material.Theme
 		*widget.Decorations
 	}
-	nocontext bool
+	fileDropEnabled bool
+	nocontext       bool
 	// semantic data, lazily evaluated if requested by a backend to speed up
 	// the cases where semantic data is not needed.
 	semantic struct {
@@ -202,6 +203,13 @@ func (w *Window) validateAndProcess(size image.Point, sync bool, frame *op.Ops, 
 		if w.gpu != nil {
 			err = w.ctx.Present()
 			w.ctx.Unlock()
+			if errors.Is(err, gpu.ErrDeviceLost) {
+				// The frame is already released to the client and can't be
+				// retried. Re-create the GPU context in the next frame.
+				w.destroyGPU()
+				w.setNextFrame(time.Time{})
+				return nil
+			}
 		}
 		return err
 	}
@@ -245,6 +253,10 @@ func (w *Window) updateState() {
 	}
 	w.semantic.uptodate = false
 	q := &w.queue
+	if accept := q.AcceptsTransfer("text/uri-list"); accept != w.fileDropEnabled {
+		w.fileDropEnabled = accept
+		w.driver.SetFileDropEnabled(accept)
+	}
 	switch q.TextInputState() {
 	case input.TextInputOpen:
 		w.driver.ShowTextInput(true)
@@ -255,7 +267,11 @@ func (w *Window) updateState() {
 		w.driver.SetInputHint(hint)
 	}
 	if mime, txt, ok := q.WriteClipboard(); ok {
-		w.driver.WriteClipboard(mime, txt)
+		w.driver.WriteClipboard(clipboardContent{
+			mime:      mime,
+			data:      txt,
+			sensitive: q.ClipboardSensitive(),
+		})
 	}
 	if q.ClipboardRequested() {
 		w.driver.ReadClipboard()

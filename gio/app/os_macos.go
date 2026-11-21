@@ -44,11 +44,32 @@ __attribute__ ((visibility ("hidden"))) CFTypeRef gio_createView(int presentWith
 __attribute__ ((visibility ("hidden"))) CFTypeRef gio_createWindow(CFTypeRef viewRef, CGFloat width, CGFloat height);
 __attribute__ ((visibility ("hidden"))) void gio_viewSetHandle(CFTypeRef viewRef, uintptr_t handle);
 
-static void writeClipboard(CFTypeRef str) {
+static void setFileDrop(CFTypeRef viewRef, bool accept) {
+	@autoreleasepool {
+		NSView *view = (__bridge NSView *)viewRef;
+		if (accept) {
+			[view registerForDraggedTypes:@[NSPasteboardTypeFileURL, NSFilenamesPboardType]];
+		} else {
+			[view unregisterDraggedTypes];
+		}
+	}
+}
+
+static void writeClipboard(CFTypeRef str, int sensitive) {
 	@autoreleasepool {
 		NSString *s = (__bridge NSString *)str;
 		NSPasteboard *p = NSPasteboard.generalPasteboard;
-		[p declareTypes:@[NSPasteboardTypeString] owner:nil];
+		// The marker types of the nspasteboard.org convention, with empty
+		// data, tell clipboard managers to keep no history of sensitive
+		// content. They are set before the content itself.
+		NSArray<NSPasteboardType> *markers = @[];
+		if (sensitive) {
+			markers = @[@"org.nspasteboard.ConcealedType", @"org.nspasteboard.TransientType"];
+		}
+		[p declareTypes:[markers arrayByAddingObject:NSPasteboardTypeString] owner:nil];
+		for (NSPasteboardType t in markers) {
+			[p setData:[NSData data] forType:t];
+		}
 		[p setString:s forType:NSPasteboardTypeString];
 	}
 }
@@ -59,6 +80,11 @@ static CFTypeRef readClipboard(void) {
 		NSString *content = [p stringForType:NSPasteboardTypeString];
 		return (__bridge_retained CFTypeRef)content;
 	}
+}
+
+static CFTypeRef fileDropPath(CFTypeRef paths, NSUInteger index) {
+	NSArray<NSString *> *array = (__bridge NSArray *)paths;
+	return (__bridge CFTypeRef)array[index];
 }
 
 static CGFloat viewHeight(CFTypeRef viewRef) {
@@ -410,10 +436,14 @@ func (w *window) ReadClipboard() {
 	})
 }
 
-func (w *window) WriteClipboard(mime string, s []byte) {
-	cstr := stringToNSString(string(s))
+func (w *window) WriteClipboard(c clipboardContent) {
+	cstr := stringToNSString(string(c.data))
 	defer C.CFRelease(cstr)
-	C.writeClipboard(cstr)
+	var sens C.int
+	if c.sensitive {
+		sens = 1
+	}
+	C.writeClipboard(cstr, sens)
 }
 
 func (w *window) updateWindowMode() {
@@ -501,8 +531,13 @@ func (w *window) Configure(options []Option) {
 		barTrans = C.YES
 		titleVis = C.NSWindowTitleHidden
 	}
-	if cnf.TopMost {
-		C.setWindowLevel(window, C.NSFloatingWindowLevel)
+	if cnf.TopMost != w.config.TopMost {
+		if cnf.TopMost {
+			C.setWindowLevel(window, C.NSFloatingWindowLevel)
+		} else {
+			C.setWindowLevel(window, C.NSNormalWindowLevel)
+		}
+		w.config.TopMost = cnf.TopMost
 	}
 	C.setWindowTitlebarAppearsTransparent(window, barTrans)
 	C.setWindowTitleVisibility(window, titleVis)
@@ -554,6 +589,10 @@ func (w *window) EditorStateChanged(old, new editorState) {
 	if old.Selection.Caret != new.Selection.Caret || old.Selection.Transform != new.Selection.Transform {
 		C.invalidateCharacterCoordinates(w.view)
 	}
+}
+
+func (w *window) SetFileDropEnabled(enabled bool) {
+	C.setFileDrop(w.view, C.bool(enabled))
 }
 
 func (w *window) ShowTextInput(show bool) {}
@@ -691,6 +730,10 @@ func gio_onMouse(h C.uintptr_t, evt C.CFTypeRef, cdir C.int, cbtn C.NSInteger, x
 		btn = pointer.ButtonSecondary
 	case 2:
 		btn = pointer.ButtonTertiary
+	case 3:
+		btn = pointer.ButtonQuaternary
+	case 4:
+		btn = pointer.ButtonQuinary
 	}
 	var typ pointer.Kind
 	switch cdir {
@@ -724,6 +767,21 @@ func gio_onMouse(h C.uintptr_t, evt C.CFTypeRef, cdir C.int, cbtn C.NSInteger, x
 		Scroll:    f32.Point{X: dxf, Y: dyf},
 		Modifiers: convertMods(mods),
 	})
+}
+
+//export gio_onFileDrop
+func gio_onFileDrop(h C.uintptr_t, paths C.CFTypeRef, count C.NSUInteger, x, y C.CGFloat) {
+	w := windowFor(h)
+	files := make([]string, 0, int(count))
+	for i := range int(count) {
+		if path := nsstringToString(C.fileDropPath(paths, C.NSUInteger(i))); path != "" {
+			files = append(files, path)
+		}
+	}
+	if len(files) > 0 {
+		pos := f32.Point{X: float32(x) * w.scale, Y: float32(y) * w.scale}
+		w.ProcessEvent(fileDropEvent(pos, files))
+	}
 }
 
 //export gio_onDraw
@@ -965,6 +1023,10 @@ func (w *window) Invalidate() {
 }
 
 func (w *window) Run(f func()) {
+	if isMainThread() {
+		f()
+		return
+	}
 	w.loop.Run(f)
 }
 
@@ -1166,6 +1228,10 @@ func convertKey(k rune) (key.Name, bool) {
 		n = key.NameF11
 	case C.NSF12FunctionKey:
 		n = key.NameF12
+	case C.NSInsertFunctionKey, C.NSHelpFunctionKey:
+		// The Insert key of PC keyboards produces NSHelpFunctionKey,
+		// and Apple keyboards used to have Help in its place.
+		n = key.NameInsert
 	case 0x20:
 		n = key.NameSpace
 	default:

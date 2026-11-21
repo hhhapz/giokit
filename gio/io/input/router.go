@@ -119,6 +119,22 @@ type SystemEvent struct {
 	Event event.Event
 }
 
+// DropEvent reports data dropped onto a window from another application.
+// Router sends [transfer.InitiateEvent] and [transfer.CancelEvent] to matching
+// targets. The target at Position also receives a [transfer.DataEvent].
+type DropEvent struct {
+	// Position is the drop location in window coordinates, in pixels.
+	Position f32.Point
+	// Type is the MIME type of the offered data.
+	Type string
+	// Open returns a new reader on each call so Router can replay the event.
+	// The data must remain available until the event is processed.
+	// Router closes unused readers. The target closes readers it opens.
+	Open func() io.ReadCloser
+}
+
+func (DropEvent) ImplementsEvent() {}
+
 // handler contains the per-handler state tracked by a [Router].
 type handler struct {
 	// active tracks whether the handler was active in the current
@@ -485,6 +501,9 @@ func (q *Router) processEvent(e event.Event, system bool) {
 		cstate, evts := q.cqueue.Push(state.clipboardState, e)
 		state.clipboardState = cstate
 		q.changeState(e, state, evts)
+	case DropEvent:
+		evts := q.pointer.queue.drop(q.handlers, e)
+		q.changeState(e, state, evts)
 	default:
 		panic("unknown event type")
 	}
@@ -557,7 +576,7 @@ func (q *Router) executeCommand(c Command) stateChange {
 	case key.SnippetCmd:
 		state.keyState = q.key.queue.setSnippet(state.keyState, req)
 	case transfer.OfferCmd:
-		state.pointerState, evts = q.pointer.queue.offerData(q.handlers, state.pointerState, req)
+		state.pointerState, evts = q.pointer.queue.offer(q.handlers, state.pointerState, req)
 	case clipboard.WriteCmd:
 		q.cqueue.ProcessWriteClipboard(req)
 	case clipboard.ReadCmd:
@@ -717,6 +736,16 @@ func (q *Router) ClickFocus() {
 	q.changeState(nil, state, q.pointer.queue.Deliver(q.handlers, area, e))
 }
 
+// AcceptsTransfer reports whether a target in the most recent frame accepts mime.
+func (q *Router) AcceptsTransfer(mime string) bool {
+	for _, h := range q.handlers {
+		if h.pointer.areaPlusOne != 0 && slices.Contains(h.filter.pointer.targetMimes, mime) {
+			return true
+		}
+	}
+	return false
+}
+
 // TextInputState returns the input state from the most recent
 // call to Frame.
 func (q *Router) TextInputState() TextInputState {
@@ -736,6 +765,12 @@ func (q *Router) TextInputHint() (key.InputHint, bool) {
 // to the clipboard, if any.
 func (q *Router) WriteClipboard() (mime string, content []byte, ok bool) {
 	return q.cqueue.WriteClipboard()
+}
+
+// ClipboardSensitive reports whether the content most recently returned by
+// WriteClipboard is marked as sensitive, see [clipboard.WriteCmd].
+func (q *Router) ClipboardSensitive() bool {
+	return q.cqueue.sensitive
 }
 
 // ClipboardRequested reports if any new handler is waiting

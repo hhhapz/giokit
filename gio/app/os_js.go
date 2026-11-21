@@ -868,14 +868,14 @@ func (w *window) ReadClipboard() {
 	}
 }
 
-func (w *window) WriteClipboard(mime string, s []byte) {
+func (w *window) WriteClipboard(c clipboardContent) {
 	if w.clipboard.IsUndefined() {
 		return
 	}
 	if w.clipboard.Get("writeText").IsUndefined() {
 		return
 	}
-	w.clipboard.Call("writeText", string(s))
+	w.clipboard.Call("writeText", string(c.data))
 }
 
 func (w *window) Configure(options []Option) {
@@ -941,6 +941,8 @@ func (w *window) SetCursor(cursor pointer.Cursor) {
 	style := w.cnv.Get("style")
 	style.Set("cursor", webCursor[cursor])
 }
+
+func (w *window) SetFileDropEnabled(enabled bool) {}
 
 func (w *window) ShowTextInput(show bool) {
 	// Run in a goroutine to avoid a deadlock if the
@@ -1107,6 +1109,8 @@ func translateKey(k string) (key.Name, bool) {
 		n = key.NamePageUp
 	case "PageDown":
 		n = key.NamePageDown
+	case "Insert":
+		n = key.NameInsert
 	case "Tab":
 		n = key.NameTab
 	case " ":

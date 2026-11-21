@@ -137,8 +137,8 @@ type wlSeat struct {
 	// source represents the clipboard content of the most recent
 	// clipboard write, if any.
 	source *C.struct_wl_data_source
-	// content is the data belonging to source.
-	content []byte
+	// content is the content belonging to source.
+	content clipboardContent
 }
 
 type repeatState struct {
@@ -287,7 +287,7 @@ func newWLWindow(callbacks *callbacks, options []Option) error {
 	return nil
 }
 
-func (d *wlDisplay) writeClipboard(content []byte) error {
+func (d *wlDisplay) writeClipboard(content clipboardContent) error {
 	s := d.seat
 	if s == nil {
 		return nil
@@ -296,7 +296,7 @@ func (d *wlDisplay) writeClipboard(content []byte) error {
 	if s.source != nil {
 		C.wl_data_source_destroy(s.source)
 		s.source = nil
-		s.content = nil
+		s.content = clipboardContent{}
 	}
 	if d.dataDeviceManager == nil || s.dataDev == nil {
 		return nil
@@ -304,6 +304,13 @@ func (d *wlDisplay) writeClipboard(content []byte) error {
 	s.content = content
 	s.source = C.wl_data_device_manager_create_data_source(d.dataDeviceManager)
 	C.wl_data_source_add_listener(s.source, &C.gio_data_source_listener, unsafe.Pointer(s.seat))
+	// The hint is offered before the content, like the markers on the
+	// other platforms.
+	if content.sensitive {
+		hint := C.CString(passwordManagerHintType)
+		C.wl_data_source_offer(s.source, hint)
+		C.free(unsafe.Pointer(hint))
+	}
 	for _, mime := range clipboardMimeTypes {
 		C.wl_data_source_offer(s.source, C.CString(mime))
 	}
@@ -360,6 +367,10 @@ func (d *wlDisplay) createNativeWindow(options []Option) (*window, error) {
 		ppsp:      ppdp,
 		wakeups:   make(chan struct{}, 1),
 		clipReads: make(chan transfer.DataEvent, 1),
+	}
+	// Default to server-side decorations.
+	if w.decor != nil {
+		w.config.Decorated = true
 	}
 	w.surf = C.wl_compositor_create_surface(d.compositor)
 	if w.surf == nil {
@@ -1077,8 +1088,8 @@ func (w *window) ReadClipboard() {
 	}()
 }
 
-func (w *window) WriteClipboard(mime string, s []byte) {
-	w.disp.writeClipboard(s)
+func (w *window) WriteClipboard(c clipboardContent) {
+	w.disp.writeClipboard(c)
 }
 
 func (w *window) Configure(options []Option) {
@@ -1087,6 +1098,13 @@ func (w *window) Configure(options []Option) {
 	cnf := w.config
 	cnf.apply(cfg, options)
 	w.config.decoHeight = cnf.decoHeight
+	if w.decor != nil && prev.Decorated != cnf.Decorated {
+		if cnf.Decorated {
+			C.zxdg_toplevel_decoration_v1_set_mode(w.decor, C.ZXDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE)
+		} else {
+			C.zxdg_toplevel_decoration_v1_set_mode(w.decor, C.ZXDG_TOPLEVEL_DECORATION_V1_MODE_CLIENT_SIDE)
+		}
+	}
 
 	switch cnf.Mode {
 	case Fullscreen:
@@ -1792,7 +1810,15 @@ func gio_onDataSourceTarget(data unsafe.Pointer, source *C.struct_wl_data_source
 //export gio_onDataSourceSend
 func gio_onDataSourceSend(data unsafe.Pointer, source *C.struct_wl_data_source, mime *C.char, fd C.int32_t) {
 	s := callbackLoad(data).(*wlSeat)
-	content := s.content
+	content := s.content.data
+	if C.GoString(mime) == passwordManagerHintType {
+		// The hint is all a clipboard manager asking for it gets, never the
+		// content.
+		content = nil
+		if s.content.sensitive {
+			content = []byte(passwordManagerHintValue)
+		}
+	}
 	go func() {
 		defer syscall.Close(int(fd))
 		syscall.Write(int(fd), content)
@@ -1803,7 +1829,7 @@ func gio_onDataSourceSend(data unsafe.Pointer, source *C.struct_wl_data_source, 
 func gio_onDataSourceCancelled(data unsafe.Pointer, source *C.struct_wl_data_source) {
 	s := callbackLoad(data).(*wlSeat)
 	if s.source == source {
-		s.content = nil
+		s.content = clipboardContent{}
 		s.source = nil
 	}
 	C.wl_data_source_destroy(source)
@@ -1999,6 +2025,8 @@ func (w *window) surface() (*C.struct_wl_surface, int, int) {
 	sz, _ := w.getConfig()
 	return w.surf, sz.X, sz.Y
 }
+
+func (w *window) SetFileDropEnabled(enabled bool) {}
 
 func (w *window) ShowTextInput(show bool) {
 	w.textInput = show

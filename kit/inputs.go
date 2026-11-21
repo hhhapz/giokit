@@ -93,17 +93,27 @@ type EditorField struct {
 	Role Role
 }
 
+// TextInput declares e, laid out this frame, a text input. Components
+// that draw an editor their own way (a code entry drawn as boxes, an
+// editor kept invisible behind custom text) call it each frame they lay
+// it out; EditorField does it for its own. While e has focus, keymaps
+// leave printable keys to it, so typing never runs single-key shortcuts,
+// and keys it leaves resolve from the KeyContext it was laid out in.
+func TextInput(gtx layout.Context, e *widget.Editor) {
+	trackFocus(gtx, e)
+	if gtx.Focused(e) {
+		if f := frameOf(gtx); f != nil {
+			f.typing = true
+		}
+	}
+}
+
 // EditorField lays out e as a field: theme chrome, a ring while focused,
 // and the whole field (padding included) as the click target that focuses
 // the editor. ui.TextField, ui.TextArea and every editor-based component
 // are built on it.
 func (t *Theme) EditorField(gtx layout.Context, e *widget.Editor, id string, f EditorField) layout.Dimensions {
-	trackFocus(gtx, e) // keys the editor leaves resolve from this context
-	if gtx.Focused(e) {
-		if f := frameOf(gtx); f != nil {
-			f.typing = true // printable keys are text, not shortcuts
-		}
-	}
+	TextInput(gtx, e)
 	// A press anywhere in the field, padding included, focuses the editor:
 	// the target is the whole field, not just the text line. Read it before
 	// drawing (rule 1). The tag is an address inside the editor, so it is

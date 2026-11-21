@@ -46,6 +46,8 @@ type Window struct {
 
 	ctx context
 	gpu gpu.GPU
+	// giokit: frame statistics, giokit_stats.go.
+	giokitGPU gpuStats
 	// timer tracks the delayed invalidate goroutine.
 	timer struct {
 		// quit is shuts down the goroutine.
@@ -184,6 +186,7 @@ func (w *Window) validateAndProcess(size image.Point, sync bool, frame *op.Ops, 
 			gt0 := time.Now()
 			err := w.frame(frame, size)
 			gtrace("gpu_frame", "ms", float64(time.Since(gt0).Microseconds())/1000, "w", size.X, "h", size.Y)
+			w.recordGPU(time.Since(gt0)) // giokit: for App.LastFrame overlays
 			if err != nil {
 				w.ctx.Unlock()
 				if errors.Is(err, errOutOfDate) {

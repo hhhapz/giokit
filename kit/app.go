@@ -7,10 +7,15 @@ import (
 	"sync/atomic"
 	"time"
 
+	"image"
+	"image/color"
+
 	"github.com/hhhapz/giokit/gio/app"
 	"github.com/hhhapz/giokit/gio/io/system"
 	"github.com/hhhapz/giokit/gio/layout"
 	"github.com/hhhapz/giokit/gio/op"
+	"github.com/hhhapz/giokit/gio/op/clip"
+	"github.com/hhhapz/giokit/gio/op/paint"
 	"github.com/hhhapz/giokit/gio/unit"
 )
 
@@ -28,16 +33,53 @@ type App struct {
 	Title string
 	// Width and Height are the initial window size.
 	Width, Height unit.Dp
+	// Background, if not transparent, fills the whole window before each
+	// frame, including the strips under system bars that frames never
+	// reach: on phones, frame's gtx covers only the safe area inside the
+	// status and navigation bars and any display cutout, and the strips
+	// outside it would show white. It is also the colour of Android's
+	// status and navigation bars where the system draws them opaque, with
+	// their icons dark or light to suit. Read every frame, so it may change.
+	Background color.NRGBA
 	// OnPanic, if set, receives a panic from a Post callback (Spawn's done
 	// included) instead of letting it crash the program; the other queued
 	// callbacks still run. Log it and keep going, or show an error.
 	OnPanic func(recovered any)
 
 	win      *app.Window
+	last     FrameStats // the last frame's build and submit times
 	mu       sync.Mutex
 	posts    []func()
 	running  []func()
 	inflight atomic.Int64 // Spawn work not yet posted back
+	blurred  atomic.Bool  // the window has lost focus (see Focused)
+}
+
+// FrameStats describes the last frame App drew, for performance overlays.
+type FrameStats struct {
+	// Build is the time spent in the frame function, on the UI goroutine.
+	Build time.Duration
+	// Submit is the time handing the frame to the window took (encoding
+	// and submitting it to the GPU, where the platform renders inline).
+	Submit time.Duration
+	// Render is the renderer's time encoding and submitting the frame to
+	// the GPU, on the CPU. No backend reports the GPU's own time.
+	Render time.Duration
+	// PathBuilds is the running count of shapes the GPU flattened and
+	// uploaded; subtract an earlier reading for the shapes built since.
+	// Shapes rebuilt every frame are drawing that defeats the caches
+	// (see kit.DrawCache).
+	PathBuilds uint64
+}
+
+// LastFrame returns the figures for the last frame drawn; zero before the
+// first. Call it from the UI goroutine, in a frame, to show the previous
+// frame's figures.
+func (a *App) LastFrame() FrameStats {
+	s := a.last
+	g := a.win.GPUStats()
+	s.Render, s.PathBuilds = g.Render, g.PathBuilds
+	return s
 }
 
 // Pending reports Spawn work still running (not yet posted back to the UI
@@ -74,6 +116,11 @@ func (a *App) Post(f func()) {
 
 // Quit closes the window, which makes Run return. Safe from any goroutine.
 func (a *App) Quit() { a.win.Perform(system.ActionClose) }
+
+// Focused reports whether the window has keyboard focus. Input that isn't
+// routed through the window, such as gamepads (kit/pad), checks it so a
+// background window doesn't react. It is safe from any goroutine.
+func (a *App) Focused() bool { return !a.blurred.Load() }
 
 // Invalidate requests a frame. Safe from any goroutine: wire a
 // paint.Stream's OnFrame to it so new video frames get drawn.
@@ -190,11 +237,14 @@ func (a *App) Run(frame func(gtx layout.Context)) error {
 	var ops op.Ops
 	var win Window
 	var pacing framePacing
+	var barColor color.NRGBA
 	for {
 		switch e := a.win.Event().(type) {
 		case app.DestroyEvent:
 			traceFlush()
 			return e.Err
+		case app.ConfigEvent:
+			a.blurred.Store(!e.Config.Focused)
 		case app.FrameEvent:
 			start := time.Now()
 			if traceEnabled {
@@ -203,17 +253,33 @@ func (a *App) Run(frame func(gtx layout.Context)) error {
 					"size", fmt.Sprintf("%dx%d", e.Size.X, e.Size.Y), "dpi", e.Metric.PxPerDp)
 			}
 			a.Drain()
-			gtx := win.Begin(app.NewContext(&ops, e))
+			if bg := a.Background; bg != barColor {
+				barColor = bg
+				a.win.Option(app.StatusColor(bg), app.NavigationColor(bg))
+			}
+			ctx := app.NewContext(&ops, e)
+			if a.Background.A > 0 {
+				fillWindow(ctx, e, a.Background)
+			}
+			gtx := win.Begin(ctx)
 			frame(gtx)
 			win.End(gtx)
 			built := time.Now()
 			e.Frame(gtx.Ops)
+			a.last.Build, a.last.Submit = built.Sub(start), time.Since(built)
 			if traceEnabled {
 				tracef("frame_end", "build_ms", ms(built.Sub(start)), "submit_ms", ms(time.Since(built)))
 				pacing.frame(e.Now, built.Sub(start))
 			}
 		}
 	}
+}
+
+// fillWindow fills the whole window with c, insets included. NewContext has
+// already moved the origin to the safe area's corner.
+func fillWindow(gtx layout.Context, e app.FrameEvent, c color.NRGBA) {
+	o := image.Pt(e.Metric.Dp(e.Insets.Left), e.Metric.Dp(e.Insets.Top))
+	paint.FillShape(gtx.Ops, c, clip.Rect{Min: o.Mul(-1), Max: e.Size.Sub(o)}.Op())
 }
 
 // Main hands the main goroutine to the platform's event loop (Gio's

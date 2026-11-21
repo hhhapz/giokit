@@ -573,6 +573,8 @@ func (q *Router) executeCommand(c Command) stateChange {
 		state.keyState = q.key.queue.setSelection(state.keyState, req)
 	case key.FocusCmd:
 		state.keyState, evts = q.key.queue.Focus(q.handlers, state.keyState, req.Tag)
+	case key.MoveFocusCmd: // giokit: focus moves from non-keyboard input (gamepads)
+		state.keyState, evts = q.key.queue.MoveFocus(q.handlers, state.keyState, req.Dir)
 	case key.SoftKeyboardCmd:
 		state.keyState = state.keyState.softKeyboard(req.Show)
 	case key.SnippetCmd:

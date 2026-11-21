@@ -1,6 +1,6 @@
 ---
 name: giokit
-description: Build, debug, or test Go desktop GUIs with giokit (Gio-based, GPUI-style). Use when writing or changing a giokit/Gio UI, adding components, fixing hover/click/redraw bugs, or verifying a UI headlessly with kittest.
+description: Build, debug, or test Go desktop and mobile GUIs with giokit (Gio-based, GPUI-style). Use when writing or changing a giokit/Gio UI, adding components, fixing hover/click/redraw bugs, or verifying a UI headlessly with kittest.
 ---
 
 # giokit
@@ -27,7 +27,7 @@ Docs: `$(go list -m -f '{{.Dir}}' github.com/hhhapz/giokit)/docs/`. Read only wh
 14. **Outlines are fills, never `clip.Stroke`.** Use `kit.Border` and filled icon polygons; `clip.Stroke` re-tessellates on the CPU every frame.
 15. **Disabled is `th.Disable(gtx, cond, w)`,** never just a gray color: it blocks input, removes controls from `Tab` order, and sets disabled semantics.
 16. **Floating surfaces use kit overlays** (`Popover`, `Menu`, `Select`, `ContextMenu`, `Modal`, `ToastHost`), never raw `op.Defer`: they flip at window edges, trap focus, and dismiss on `Escape`.
-17. **Import Gio from giokit's fork, `github.com/hhhapz/giokit/gio/...`,** never `gioui.org` (two Gios cannot link). Linux builds need Vulkan headers, or `-tags novulkan`.
+17. **Import Gio from giokit's fork, `github.com/hhhapz/giokit/gio/...`,** never `gioui.org` (two Gios cannot link). Linux builds need Vulkan headers, or `-tags novulkan`. Package Android/iOS apps with the fork's packager, never stock `gogio`: `go get -tool github.com/hhhapz/giokit/gio/cmd/gogio`, then `go tool gogio -target android -appid ... ./cmd/app` (needs `ANDROID_HOME`, `ANDROID_NDK_ROOT`; see `docs/gio-patches.md`).
 18. **Custom buttons must be Tab-reachable:** Give icon-only controls a human label (`TagLabel` or `ui.IconButton{Label: ...}`) and verify with `h.ExpectTabReachable()`.
 19. **Alternative text is not painted text:** Tag artwork with `kit.TagImage(gtx, id, label)` (`RoleImage`) so screen readers announce it and the pixel contrast audit skips it.
 20. **Spacing comes from the `kit.SpaceN` scale** (`kit.Space2` = 8dp, `kit.Space3` = 12dp) passed through `th.Space(...)` or `kit.Flex{Gap, Pad}` so `th.Density` applies.
@@ -35,7 +35,15 @@ Docs: `$(go list -m -f '{{.Dir}}' github.com/hhhapz/giokit)/docs/`. Read only wh
 22. **Streaming images (video, camera, remote screens) use `paint.Stream` + `video.Video`,** never `paint.NewImageOp` per frame. Submit frames from any goroutine and wire `stream.OnFrame = app.Invalidate`.
 23. **Call every conditional component's `Update` on every frame,** even while hidden, after the input that toggles its visibility; otherwise it appears one frame late (`ProblemStaleFrame`).
 24. **Custom state `Update` methods run outside `th.Disable`:** Record `!gtx.Enabled()` during `Layout`, register no input handlers when disabled, and ignore events in `Update`.
-25. **Custom drawing that rarely changes goes through `kit.DrawCache`.** Shapes drawn straight into `gtx.Ops` are re-flattened and re-uploaded to the GPU every frame (one buffer per shape); a cached recording is reused, even when replayed under a moving `op.Offset`.
+25. **Shapes you draw yourself go through `kit.DrawCache`, unless they really change every frame.** A `clip.Outline`, `clip.Path`, `clip.RRect` or hand-rolled pixel rect drawn straight into `gtx.Ops` is flattened and uploaded to the GPU again on every frame that draws it. Harmless on a static screen, it stutters anything redrawn continuously: scrolling, dragging, animation, hover fades, and the web worst of all. "Rarely changes" means its *look*, not its position:
+    - **Static content:** one recording, keyed on what it shows.
+    - **Scrolled or sliding content:** record it unscrolled and replay it under `op.Offset`. Translation doesn't break the cache; scale, rotation and shear do.
+    - **Custom controls:** cache each control's look keyed on its state (size, stepped hover, pressed, focused, label), recorded inside the `th.Press` callback. The clickable and tags stay outside the recording.
+    - **Moving or recurring shapes** (outlines, cursors, sprites' shadows, animated letters): record once at the origin, replay under `op.Offset`.
+    - **Keys that change every frame still rebuild:** the GPU frees geometry not drawn for one frame. Keep fast-changing values like colour out of the key: record the shape with `paint.PaintOp` alone and add the `paint.ColorOp` before replaying it.
+    - **Check it:** wrap a scroll or drag in `h.ExpectPathBuilds(max, act)`; a well-cached frame builds next to nothing.
+26. **Persist app data through `kit/store`:** `st, err := store.Open("myapp")`, then `st.Load(name)` / `st.Save(name, b)` (atomic; `store.IsNotExist` before the first save). Never `os.UserConfigDir` or `localStorage` directly: Android has neither. Tests pass `store.Dir(t.TempDir())` to survive a simulated restart, or `store.Memory()`.
+27. **Phones: the frame is the safe area.** `kit.App` lays the frame out inside the status and navigation bars and display cutouts; set `App.Background` so the strips under them aren't white (it also colours Android's opaque bars). Android's Back arrives as the `"Back"` key: attach a keymap binding it only while something can close (a menu, a panel, a selection), since an unclaimed Back leaves the app. On-screen keyboards send text (`key.EditEvent`), not key presses, so letter keymaps never see it: text entry needs a focused `widget.Editor` (tapping it opens the keyboard). A field drawn your own way lays one out under it with transparent materials and calls `kit.TextInput(gtx, &editor)` so typing doesn't run shortcuts.
 
 ## Verify Every UI Change Headlessly
 
@@ -53,6 +61,7 @@ h.ExpectClean() // Audits: unlabeled controls, tiny targets, occlusion, duplicat
 - **Background work:** Pass `h.App()` to `kit.Spawn`/`Post` and call `h.RunTasks()` to wait for tasks and callbacks to settle.
 - **Strict mode (`h.Strict`):** Enabled by default; re-renders after each input and fails if anything changes on the extra frame (catching rules 1 to 3 automatically).
 - **Visual inspection:** Call `h.Snap(label)` at key steps and `h.SaveSheet(path, cols, scale)` to inspect a contact sheet PNG, or run `KITTEST_SHOTS=dir go test`.
+- **GPU path builds (rule 25):** For anything that scrolls, drags or animates, warm up one frame, then `h.ExpectPathBuilds(2, func() { h.ScrollID("list", 120) })`; `h.PathBuildsDuring(act)` returns the raw counts for profiling.
 - **Debugging missing IDs:** Run `h.Dump(os.Stdout)`.
 - **Virtual clock:** `Settle` finishes finite animations automatically; use `h.Wait(d)` for timers (tooltips, toasts).
 - **Out of reach headlessly:** OS compositor cursor rendering and physical monitor scaling; ask the user to verify those on a desktop session.

@@ -83,6 +83,7 @@ type drawOps struct {
 	imageOps     []imageOp
 	pathOps      []*pathOp
 	pathOpCache  []pathOp
+	pathBuilds   uint64 // giokit: shapes flattened and uploaded, for ReadStats
 	qs           quadSplitter
 	pathCache    *opCache
 }
@@ -1075,6 +1076,7 @@ func (d *drawOps) buildPaths(ctx driver.Device) {
 	for _, p := range d.pathOps {
 		if v, exists := d.pathCache.get(p.pathKey); !exists || v.data.data == nil {
 			data := buildPath(ctx, p.pathVerts)
+			d.pathBuilds++ // giokit: counted for ReadStats
 			d.pathCache.put(p.pathKey, opCacheValue{
 				data:   data,
 				bounds: p.bounds,
@@ -1214,7 +1216,7 @@ loop:
 					d.pathCache.put(quads.key, opCacheValue{bounds: bounds})
 				}
 			} else {
-				quads.aux, bounds, _ = d.boundsForTransformedRect(bounds, trans)
+				quads.aux, bounds, _ = d.boundsForTransformedRect(bounds, trans, false)
 				quads.key = opKey{Key: encOp.Key}
 				quads.key = quads.key.SetTransform(trans)
 			}
@@ -1249,7 +1251,7 @@ loop:
 				sz := state.image.src.Rect.Size()
 				dst = f32.Rectangle{Max: layout.FPt(sz)}
 			}
-			clipData, bnd, partialTrans := d.boundsForTransformedRect(dst, t)
+			clipData, bnd, partialTrans := d.boundsForTransformedRect(dst, t, state.matType == materialTexture) // giokit: image flag
 			cl := viewport.Intersect(bnd.Add(off))
 			if state.cpath != nil {
 				cl = state.cpath.intersect.Intersect(cl)
@@ -1676,11 +1678,22 @@ func decodeToOutlineQuads(qs *quadSplitter, tr f32.Affine2D, pathData []byte) {
 }
 
 // create GPU vertices for transformed r, find the bounds and establish texture transform.
-func (d *drawOps) boundsForTransformedRect(r f32.Rectangle, tr f32.Affine2D) (aux []byte, bnd f32.Rectangle, ptr f32.Affine2D) {
+func (d *drawOps) boundsForTransformedRect(r f32.Rectangle, tr f32.Affine2D, image bool) (aux []byte, bnd f32.Rectangle, ptr f32.Affine2D) {
 	ptr = f32.AffineId()
 	if tr == f32.AffineId() {
 		// fast-path to allow blitting of pure rectangles.
 		bnd = r
+		return
+	}
+	// giokit: an image under an axis-aligned scale (no shear, rotation or
+	// mirroring) stays a rectangle, so it needs no clip path either; its
+	// texture coordinates already come from the pixel-rounded bounds
+	// (materialFor). Upstream built a path for any transform, and a path
+	// drawn into a frame's ops is rebuilt on the GPU every frame: every
+	// scaled image (sprites at a fractional zoom) cost a path upload per
+	// draw. Colour fills keep the path, which antialiases fractional edges.
+	if sx, hx, _, hy, sy, _ := tr.Elems(); image && hx == 0 && hy == 0 && sx > 0 && sy > 0 {
+		bnd = f32.Rectangle{Min: tr.Transform(r.Min), Max: tr.Transform(r.Max)}
 		return
 	}
 

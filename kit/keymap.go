@@ -34,7 +34,7 @@ import (
 // typing.
 //
 // Chords: modifiers joined with "+", then a key: "Ctrl+K", "Shift+Ctrl+P",
-// "Alt+Up", "F1", "Escape", "Shortcut+S", "Ctrl++". Shortcut is Cmd on macOS
+// "Alt+Up", "F1", "Escape", "Back" (Android), "Shortcut+S", "Ctrl++". Shortcut is Cmd on macOS
 // and Ctrl elsewhere. A key written as a physical key code ("KeyQ",
 // "Shift+Digit1"; see key.Code) binds the key in that place whatever the
 // keyboard layout types with it: bind by place for keys chosen for where
@@ -116,6 +116,9 @@ var keyNames = map[string]key.Name{
 	"tab": key.NameTab, "space": key.NameSpace, "backspace": key.NameDeleteBackward, "delete": key.NameDeleteForward,
 	"up": key.NameUpArrow, "down": key.NameDownArrow, "left": key.NameLeftArrow, "right": key.NameRightArrow,
 	"home": key.NameHome, "end": key.NameEnd, "pageup": key.NamePageUp, "pagedown": key.NamePageDown,
+	// Android's back button or gesture. Unclaimed, it leaves the app: bind
+	// it only while there is something for it to close.
+	"back": key.NameBack,
 }
 
 // Gio names function keys F1 to F12 only; others are never delivered.

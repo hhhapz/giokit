@@ -21,7 +21,11 @@ Put detail in `docs/`, and add a pitfall here only as a one-line rule.
   `selection` shared by `list`, `tree`, `datatable`, plus `reorder`). `ui.go`
   holds the value/event contract. **`kit/x/`:** specialised widgets (`LogView`,
   `Lyrics`); **`kit/x/video`:** draws `paint.Stream`. **`kit/fonts/`:** bundled
-  font sets. **`desktop/`:** native file choosers and links (`desktop.Platform`), with a `Fake`.
+  font sets. **`kit/pad/`:** game controllers (evdev, XInput, GameController,
+  Gamepad API; `Fake` for tests), `Map` bindings and `Nav` focus driving.
+  **`kit/store/`:** persistent app data (`store.Open(name)`: the app data
+  dir, Android's files dir, or localStorage; `Dir` and `Memory` for tests).
+  **`desktop/`:** native file choosers and links (`desktop.Platform`), with a `Fake`.
 - **`kittest/`:** headless harness: `kittest.go` (lifecycle, `Settle`, `RunTasks`),
   `input`, `query`, `assert`, `audit`, `stale` (strict check), `a11y`,
   `contrast`, `golden`, `sheet`; `conform/` is the control contract suite. Its
@@ -31,7 +35,8 @@ Put detail in `docs/`, and add a pitfall here only as a one-line rule.
 - **`examples/gallery/`:** every component, plus its tests. `nav.go` groups
   demos into pages and pages into sidebar categories; "All components" shows
   every demo on one page. New components land as a demo with a test.
-- **`gio/`:** our hard fork of Gio (`github.com/hhhapz/giokit/gio/...`), synced
+- **`gio/`:** our hard fork of Gio (`github.com/hhhapz/giokit/gio/...`), with
+  `gio/cmd/gogio` (the app packager: `go tool gogio -target android`), synced
   from upstream by `gio: upstream` snapshot commits (`scripts/gio-sync.sh`,
   `docs/gio-patches.md`). Never squash a snapshot commit.
 - **`skills/giokit/SKILL.md`:** portable skill for projects that use giokit.

@@ -93,6 +93,21 @@ h.ExpectText("Loaded 42 items")
 
 After each input settles, `kittest` renders one extra frame with no input and compares the semantic snapshot (IDs, labels, classes, roles, selected/disabled flags, focus groups, focused ID, bounds) and pixels against the settled frame. Any difference fails the test with `ProblemStaleFrame`, naming the changed semantic field or pixel rectangle. This catches drawing before handling input, reading hover outside a widget callback, and mutating state mid-frame without calling `kit.Notify(gtx)`.
 
+### GPU Path Builds (`h.ExpectPathBuilds`)
+
+The renderer caches a filled shape by the operation that drew it, so shapes drawn straight into `gtx.Ops` are flattened and uploaded again every frame (pitfall 26). `h.PathBuilds()` is the harness GPU's running count of shapes built, and `h.PathBuildsDuring(act)` returns the shapes built and frames drawn while `act` ran. `h.ExpectPathBuilds(max, act)` fails if those frames built more than `max` shapes each, on average. Use it on frames that move things rather than change them (scrolling, dragging, sliding panels, hover), after one warm-up frame of the same kind so first recordings aren't counted:
+
+```go
+h.ScrollID("settings", 120) // warm up
+h.ExpectPathBuilds(2, func() {
+	for range 5 {
+		h.ScrollID("settings", 120)
+	}
+})
+```
+
+It is not part of `ExpectClean`: kit's own rounded backgrounds and borders are drawn uncached, which is fine for screens that only redraw on input.
+
 ### Structural and Pixel Audits (`h.Audit()` / `h.ExpectClean()`)
 
 | Kind | Meaning |

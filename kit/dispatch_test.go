@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/hhhapz/giokit/gio/f32"
+	"github.com/hhhapz/giokit/gio/font"
 	"github.com/hhhapz/giokit/gio/io/event"
 	"github.com/hhhapz/giokit/gio/io/input"
 	"github.com/hhhapz/giokit/gio/io/key"
@@ -219,6 +220,7 @@ func TestParseChordPlusAndFunctionKeys(t *testing.T) {
 		{in: "F1", name: key.NameF1},
 		{in: "f12", name: key.NameF12},
 		{in: "Shift+F5", name: key.NameF5, mods: key.ModShift},
+		{in: "Back", name: key.NameBack},
 	} {
 		n, m, err := ParseChord(c.in)
 		if err != nil || n != c.name || m != c.mods {
@@ -315,6 +317,34 @@ func TestTypingKeepsPrintableKeys(t *testing.T) {
 	wr.press(draw, "1", 0)
 	if ran != "1" {
 		t.Fatalf("outside a field ran %q, want 1", ran)
+	}
+}
+
+// An editor drawn by the app itself, declared with TextInput, keeps
+// printable keys from shortcuts as EditorField does.
+func TestTextInputKeepsPrintableKeys(t *testing.T) {
+	var wr windowRunner
+	ran := ""
+	var km Keymap
+	km.MustBind("M", "Mute", func() { ran += "m" })
+	var e widget.Editor
+	var c Clickable
+	th := Dark()
+	draw := func(gtx layout.Context) {
+		km.Attach(gtx)
+		e.Layout(gtx, th.Shaper, font.Font{}, 12, op.CallOp{}, op.CallOp{})
+		TextInput(gtx, &e)
+		c.Layout(gtx, func(gtx layout.Context) layout.Dimensions { return layout.Dimensions{Size: image.Pt(10, 10)} })
+	}
+	wr.focus(draw, &e)
+	wr.press(draw, "M", 0)
+	if ran != "" {
+		t.Fatalf("typing in a custom editor ran %q", ran)
+	}
+	wr.focus(draw, &c)
+	wr.press(draw, "M", 0)
+	if ran != "m" {
+		t.Fatalf("outside it ran %q, want m", ran)
 	}
 }
 

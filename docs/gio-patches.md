@@ -1,10 +1,19 @@
 # Gio Fork (`gio/`)
 
-`giokit` carries a hard fork of [Gio](https://gioui.org) in `gio/`, imported as `github.com/hhhapz/giokit/gio/...`: `go get github.com/hhhapz/giokit` brings it along, with no `replace` directive. Apps import `github.com/hhhapz/giokit/gio/app`, `.../gio/layout` and so on instead of `gioui.org/...`. It holds upstream `gioui.org`, the `gioui.org/shader` packages Gio uses (`shader`, `shader/gio`, `cmd/convertshaders`) and `gioui.org/x/styledtext`; `gio/UPSTREAM` records the upstream versions. Gio's license (Unlicense OR MIT) stays in `gio/LICENSE`.
+`giokit` carries a hard fork of [Gio](https://gioui.org) in `gio/`, imported as `github.com/hhhapz/giokit/gio/...`: `go get github.com/hhhapz/giokit` brings it along, with no `replace` directive. Apps import `github.com/hhhapz/giokit/gio/app`, `.../gio/layout` and so on instead of `gioui.org/...`. It holds upstream `gioui.org`, the `gioui.org/shader` packages Gio uses (`shader`, `shader/gio`, `cmd/convertshaders`), `gioui.org/x/styledtext`, and `gogio` from `gioui.org/cmd` (without its end-to-end tests); `gio/UPSTREAM` records the upstream versions. Gio's license (Unlicense OR MIT) stays in `gio/LICENSE`.
 
 Nothing in an app's dependency graph may import upstream `gioui.org`: two Gios cannot link into one binary (their cgo exports collide), and their types never mix. Bring a Gio library into `gio/` (add it to `modules` in `scripts/gio-sync.sh`) rather than depending on it.
 
 Linker flags name the fork's path: `-ldflags="-X 'github.com/hhhapz/giokit/gio/app.ID=com.example.App'"`.
+
+Package apps for Android, iOS and the other targets with the fork's `gogio` (`gio/cmd/gogio`): stock `gogio` looks for `gioui.org/app` to find Gio's Java and Objective-C glue, which the fork moves. Pin it as a tool in the app's module and run it from there:
+
+```sh
+go get -tool github.com/hhhapz/giokit/gio/cmd/gogio
+go tool gogio -target android -appid com.example.app -icon icon.png -o app.apk ./cmd/app
+```
+
+Android builds need `ANDROID_HOME` (the SDK, with a platform and build-tools) and `ANDROID_NDK_ROOT`. A `~/.android/debug.keystore` (password `android`) signs every debug build with the same key; without one, each build gets a new key and `adb install -r` refuses to replace the previous build.
 
 ## Working With Upstream (`scripts/gio-sync.sh`)
 
@@ -22,22 +31,24 @@ Rules for changes in `gio/`:
 2. Prefer new files (`giokit_*.go`) over edits to upstream files; keep edits to upstream files small. Merge conflicts grow with the lines changed in upstream's files, not with what we add.
 3. Mark edits inside upstream files with a `giokit:` comment saying why.
 
-`go test ./...` runs Gio's tests too. `TestIndexPositionRunes/many_newlines` is skipped: it fails on upstream v0.10.3.
+`go test ./...` runs Gio's tests too.
 
 ## Changes
 
-Our changes to upstream v0.10.3, by area:
+Our changes to upstream (the versions in `gio/UPSTREAM`), by area:
 
 | Area | Change |
 |---|---|
 | Vulkan | Asks for Vulkan 1.1 and adds `GIOKIT_GPU` backend selection to headless rendering. |
 | Wayland | Wayland cursor reload on scale change, even high-resolution wheel scaling, Vulkan before EGL, and `app.GiokitTrace` hooks. |
 | Labels | Clips `widget.Label` semantic bounds to laid-out text size. |
-| Input | Adds `Source.Bounds` and `Source.FocusedTag` on `input.Source`; keeps semantics on areas whose handler asks for no gestures. |
+| Input | Adds `Source.Bounds` and `Source.FocusedTag` on `input.Source`; keeps semantics on areas whose handler asks for no gestures; adds `key.MoveFocusCmd` so non-keyboard input (gamepads) can move focus. |
 | Semantics | Adds `semantic.Image` and WAI-ARIA role classes (`Link`, `Slider`, `Tab`, `MenuItem`, ...) to `io/semantic`. |
 | Editor | Adds `Ctrl+Backspace`/`Delete` word delete (Windows, Linux), selection collapse on `Left`/`Right`, and single-line `Up`/`Down`. |
 | Keys | Adds physical keys: `key.Code` (named like the web's `KeyboardEvent.code`) on `key.Event` and `key.Filter`, reported on the web, X11, Wayland, Windows and macOS, with the US place standing in elsewhere; `Code.Name` gives what the current layout types there, from the platform (web where supported, xkb, Windows) or learned from presses, where one press that reveals a common layout (QWERTZ, AZERTY, Dvorak, Colemak, Workman) relabels every key. |
 | Streams | Adds cross-platform `paint.Stream` (Metal, Direct3D 11, OpenGL ES, Vulkan, WebGL) plus zero-copy Linux DMA-BUF texture import (OpenGL ES and Vulkan). |
+| GPU stats | Adds `gpu.ReadStats` and `headless.Window.Stats`: shapes flattened and uploaded per GPU, for `kittest`'s path-build checks (pitfall 26). |
+| Scaled images | An image painted under an axis-aligned scale (no shear, rotation or mirroring) gets no clip path; upstream built one for any non-identity transform, so every scaled image drawn into a frame was a path upload per frame. Colour fills keep the path, which antialiases fractional edges. |
 | Headless | Falls back to WARP on Direct3D 11 without a GPU; `GIOKIT_GPU=warp` forces it. |
 | Web | Delivers key events from the window when no text input has focus, so shortcuts and key handlers work in the browser (upstream only listens on the hidden textarea, which is focused only for text input). |
 

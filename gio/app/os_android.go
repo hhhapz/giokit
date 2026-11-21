@@ -130,6 +130,7 @@ import (
 	"runtime"
 	"runtime/cgo"
 	"runtime/debug"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -233,6 +234,8 @@ var android struct {
 	mwriteClipboard   C.jmethodID
 	mreadClipboard    C.jmethodID
 	mwakeupMainThread C.jmethodID
+	mstartForeground  C.jmethodID
+	mstopForeground   C.jmethodID
 
 	// android.view.accessibility.AccessibilityNodeInfo class.
 	accessibilityNodeInfo struct {
@@ -401,6 +404,16 @@ func Java_org_gioui_Gio_runGoMain(env *C.JNIEnv, class C.jclass, jdataDir C.jbyt
 	runMain()
 }
 
+//export Java_org_gioui_Gio_onAllActivitiesStopped
+func Java_org_gioui_Gio_onAllActivitiesStopped(env *C.JNIEnv, class C.jclass) {
+	processGlobalEvent(BackgroundEvent{})
+}
+
+//export Java_org_gioui_Gio_onFirstActivityStarted
+func Java_org_gioui_Gio_onFirstActivityStarted(env *C.JNIEnv, class C.jclass) {
+	processGlobalEvent(ForegroundEvent{})
+}
+
 func initJVM(env *C.JNIEnv, gio C.jclass, ctx C.jobject) {
 	android.mu.Lock()
 	defer android.mu.Unlock()
@@ -428,9 +441,11 @@ func initJVM(env *C.JNIEnv, gio C.jclass, ctx C.jobject) {
 	cls = findClass(env, "android/graphics/Rect")
 	android.rect.cls = C.jclass(C.jni_NewGlobalRef(env, C.jobject(cls)))
 	android.rect.cons = getMethodID(env, cls, "<init>", "(IIII)V")
-	android.mwriteClipboard = getStaticMethodID(env, gio, "writeClipboard", "(Landroid/content/Context;Ljava/lang/String;)V")
+	android.mwriteClipboard = getStaticMethodID(env, gio, "writeClipboard", "(Landroid/content/Context;Ljava/lang/String;Z)V")
 	android.mreadClipboard = getStaticMethodID(env, gio, "readClipboard", "(Landroid/content/Context;)Ljava/lang/String;")
 	android.mwakeupMainThread = getStaticMethodID(env, gio, "wakeupMainThread", "()V")
+	android.mstartForeground = getStaticMethodID(env, gio, "startForeground", "(Landroid/content/Context;Ljava/lang/String;Ljava/lang/String;)V")
+	android.mstopForeground = getStaticMethodID(env, gio, "stopForeground", "(Landroid/content/Context;)V")
 
 	intern := func(s string) C.jstring {
 		ref := C.jni_NewGlobalRef(env, C.jobject(javaString(env, s)))
@@ -499,10 +514,13 @@ func Java_org_gioui_GioView_onCreateView(env *C.JNIEnv, class C.jclass, view C.j
 		w.callbacks.SetDriver(w)
 		cnf.apply(unit.Metric{}, wopts.options)
 		windows[wopts.window] = w
+		mainWindow.windows <- struct{}{}
 	} else {
+		// The view was re-created for an existing window, for example
+		// when Android re-creates the activity after a configuration
+		// change. newWindow is not waiting for this view.
 		cnf = w.config
 	}
-	mainWindow.windows <- struct{}{}
 	if w.view != 0 {
 		w.detach(env)
 	}
@@ -959,27 +977,85 @@ func convertKeyCode(code C.jint) (key.Name, bool) {
 		n = key.NameLeftArrow
 	case C.AKEYCODE_DPAD_RIGHT:
 		n = key.NameRightArrow
+	case C.AKEYCODE_TAB:
+		n = key.NameTab
+	case C.AKEYCODE_ESCAPE:
+		n = key.NameEscape
+	case C.AKEYCODE_MOVE_HOME:
+		n = key.NameHome
+	case C.AKEYCODE_MOVE_END:
+		n = key.NameEnd
+	case C.AKEYCODE_PAGE_UP:
+		n = key.NamePageUp
+	case C.AKEYCODE_PAGE_DOWN:
+		n = key.NamePageDown
+	case C.AKEYCODE_SPACE:
+		n = key.NameSpace
 	default:
-		return "", false
+		// Letters, digits and symbols are named by their character.
+		switch c := int(code); {
+		case c >= C.AKEYCODE_A && c <= C.AKEYCODE_Z:
+			n = key.Name(rune('A' + c - C.AKEYCODE_A))
+		case c >= C.AKEYCODE_0 && c <= C.AKEYCODE_9:
+			n = key.Name(rune('0' + c - C.AKEYCODE_0))
+		case c >= C.AKEYCODE_F1 && c <= C.AKEYCODE_F12:
+			n = key.Name("F" + strconv.Itoa(c-C.AKEYCODE_F1+1))
+		default:
+			s, ok := symbolKeys[c]
+			if !ok {
+				return "", false
+			}
+			n = s
+		}
 	}
 	return n, true
 }
 
+// symbolKeys names the symbol keys of a keyboard by their unshifted character.
+var symbolKeys = map[int]key.Name{
+	C.AKEYCODE_GRAVE: "`", C.AKEYCODE_MINUS: "-", C.AKEYCODE_EQUALS: "=",
+	C.AKEYCODE_LEFT_BRACKET: "[", C.AKEYCODE_RIGHT_BRACKET: "]", C.AKEYCODE_BACKSLASH: "\\",
+	C.AKEYCODE_SEMICOLON: ";", C.AKEYCODE_APOSTROPHE: "'", C.AKEYCODE_COMMA: ",",
+	C.AKEYCODE_PERIOD: ".", C.AKEYCODE_SLASH: "/",
+}
+
+// convertMeta is an Android key event's meta state as modifiers. Only the left
+// Alt is Alt: the right one is AltGr on many layouts, which types characters.
+func convertMeta(meta C.jint) key.Modifiers {
+	var m key.Modifiers
+	if meta&C.AMETA_CTRL_ON != 0 {
+		m |= key.ModCtrl
+	}
+	if meta&C.AMETA_SHIFT_ON != 0 {
+		m |= key.ModShift
+	}
+	if meta&C.AMETA_ALT_LEFT_ON != 0 {
+		m |= key.ModAlt
+	}
+	if meta&C.AMETA_META_ON != 0 {
+		m |= key.ModSuper
+	}
+	return m
+}
+
 //export Java_org_gioui_GioView_onKeyEvent
-func Java_org_gioui_GioView_onKeyEvent(env *C.JNIEnv, class C.jclass, handle C.jlong, keyCode, r C.jint, pressed C.jboolean, t C.jlong) {
+func Java_org_gioui_GioView_onKeyEvent(env *C.JNIEnv, class C.jclass, handle C.jlong, keyCode, r, meta C.jint, pressed C.jboolean, t C.jlong) {
 	w := cgo.Handle(handle).Value().(*window)
 	if pressed == C.JNI_TRUE && keyCode == C.AKEYCODE_DPAD_CENTER {
 		w.callbacks.ClickFocus()
 		return
 	}
+	mods := convertMeta(meta)
 	if n, ok := convertKeyCode(keyCode); ok {
 		state := key.Release
 		if pressed == C.JNI_TRUE {
 			state = key.Press
 		}
-		w.processEvent(key.Event{Name: n, State: state})
+		w.processEvent(key.Event{Name: n, Modifiers: mods, State: state})
 	}
-	if pressed == C.JNI_TRUE && r != 0 && r != '\n' { // Checking for "\n" to prevent duplication with key.NameEnter (gio#224).
+	// A control character is a key event, as Enter is (gio#224), and a chord with
+	// Ctrl or Meta is a shortcut, not text.
+	if pressed == C.JNI_TRUE && r >= 0x20 && r != 0x7f && mods&(key.ModCtrl|key.ModAlt|key.ModSuper) == 0 {
 		w.callbacks.EditorInsert(string(rune(r)))
 	}
 }
@@ -1168,6 +1244,8 @@ func (w *window) EditorStateChanged(old, new editorState) {
 	})
 }
 
+func (w *window) SetFileDropEnabled(enabled bool) {}
+
 func (w *window) ShowTextInput(show bool) {
 	runInJVM(javaVM(), func(env *C.JNIEnv) {
 		if show {
@@ -1327,11 +1405,15 @@ func newWindow(window *callbacks, options []Option) {
 	<-mainWindow.windows
 }
 
-func (w *window) WriteClipboard(mime string, s []byte) {
+func (w *window) WriteClipboard(c clipboardContent) {
 	runInJVM(javaVM(), func(env *C.JNIEnv) {
-		jstr := javaString(env, string(s))
+		jstr := javaString(env, string(c.data))
+		jsensitive := jvalue(C.JNI_FALSE)
+		if c.sensitive {
+			jsensitive = jvalue(C.JNI_TRUE)
+		}
 		callStaticVoidMethod(env, android.gioCls, android.mwriteClipboard,
-			jvalue(android.appCtx), jvalue(jstr))
+			jvalue(android.appCtx), jvalue(jstr), jsensitive)
 	})
 }
 
@@ -1499,4 +1581,19 @@ func (AndroidViewEvent) implementsViewEvent() {}
 func (AndroidViewEvent) ImplementsEvent()     {}
 func (a AndroidViewEvent) Valid() bool {
 	return a != (AndroidViewEvent{})
+}
+
+func startForeground(opts ForegroundOptions) error {
+	var err error
+	runInJVM(javaVM(), func(env *C.JNIEnv) {
+		err = callStaticVoidMethod(env, android.gioCls, android.mstartForeground,
+			jvalue(android.appCtx), jvalue(javaString(env, opts.Title)), jvalue(javaString(env, opts.Text)))
+	})
+	return err
+}
+
+func stopForeground() {
+	runInJVM(javaVM(), func(env *C.JNIEnv) {
+		callStaticVoidMethod(env, android.gioCls, android.mstopForeground, jvalue(android.appCtx))
+	})
 }

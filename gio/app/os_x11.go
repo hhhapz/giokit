@@ -77,6 +77,8 @@ type x11Window struct {
 		clipboard C.Atom
 		// "PRIMARY".
 		primary C.Atom
+		// "x-kde-passwordManagerHint", offered for sensitive content.
+		passwordManagerHint C.Atom
 		// "CLIPBOARD_CONTENT", the clipboard destination property.
 		clipboardContent C.Atom
 		// "WM_DELETE_WINDOW"
@@ -107,9 +109,7 @@ type x11Window struct {
 
 	pointerBtns pointer.Buttons
 
-	clipboard struct {
-		content []byte
-	}
+	clipboard clipboardContent
 	cursor    pointer.Cursor
 	config    Config
 	closing   *ClosingEvent
@@ -161,8 +161,8 @@ func (w *x11Window) ReadClipboard() {
 	C.XConvertSelection(w.x, w.atoms.clipboard, w.atoms.utf8string, w.atoms.clipboardContent, w.xw, C.CurrentTime)
 }
 
-func (w *x11Window) WriteClipboard(mime string, s []byte) {
-	w.clipboard.content = s
+func (w *x11Window) WriteClipboard(c clipboardContent) {
+	w.clipboard = c
 	C.XSetSelectionOwner(w.x, w.atoms.clipboard, w.xw, C.CurrentTime)
 	C.XSetSelectionOwner(w.x, w.atoms.primary, w.xw, C.CurrentTime)
 }
@@ -333,6 +333,8 @@ func (w *x11Window) SetCursor(cursor pointer.Cursor) {
 	// XDefineCursor will use the default cursor.
 	C.XDefineCursor(w.x, w.xw, c)
 }
+
+func (w *x11Window) SetFileDropEnabled(enabled bool) {}
 
 func (w *x11Window) ShowTextInput(show bool) {}
 
@@ -694,7 +696,16 @@ func (h *x11EventHandler) handleEvents() bool {
 				// scroll right
 				ev.Kind = pointer.Scroll
 				ev.Scroll.X = +scrollScale * 2
+			case 8:
+				btn = pointer.ButtonQuaternary
+			case 9:
+				btn = pointer.ButtonQuinary
 			default:
+				continue
+			}
+			if ev.Kind == pointer.Scroll && _type == C.ButtonRelease {
+				// The X server sends a press and a release for every wheel
+				// notch; only the press scrolls, or each notch counts twice.
 				continue
 			}
 			switch _type {
@@ -718,17 +729,23 @@ func (h *x11EventHandler) handleEvents() bool {
 				Time:      time.Duration(mevt.time) * time.Millisecond,
 				Modifiers: w.xkb.Modifiers(),
 			})
+		case C.LeaveNotify:
+			cevt := (*C.XCrossingEvent)(unsafe.Pointer(xev))
+			if w.pointerBtns == 0 && cevt.detail != C.NotifyInferior {
+				w.ProcessEvent(pointer.Event{Kind: pointer.Cancel})
+			}
 		case C.Expose: // update
 			// redraw only on the last expose event
 			redraw = (*C.XExposeEvent)(unsafe.Pointer(xev)).count == 0
-		case C.FocusIn:
-			w.config.Focused = true
+		case C.FocusIn, C.FocusOut:
+			// NotifyPointer reports that keys reach the window through the pointer
+			// while focus is on an ancestor, not that the window has focus.
+			if (*C.XFocusChangeEvent)(unsafe.Pointer(xev)).detail == C.NotifyPointer {
+				break
+			}
+			w.config.Focused = _type == C.FocusIn
 			w.ProcessEvent(ConfigEvent{Config: w.config})
-			w.ibus.Focused(true)
-		case C.FocusOut:
-			w.config.Focused = false
-			w.ProcessEvent(ConfigEvent{Config: w.config})
-			w.ibus.Focused(false)
+			w.ibus.Focused(w.config.Focused)
 		case C.ConfigureNotify: // window configuration change
 			cevt := (*C.XConfigureEvent)(unsafe.Pointer(xev))
 			if sz := image.Pt(int(cevt.width), int(cevt.height)); sz != w.config.Size {
@@ -763,11 +780,10 @@ func (h *x11EventHandler) handleEvents() bool {
 			})
 		case C.SelectionRequest:
 			cevt := (*C.XSelectionRequestEvent)(unsafe.Pointer(xev))
-			if (cevt.selection != w.atoms.clipboard && cevt.selection != w.atoms.primary) || cevt.property == C.None {
-				// Unsupported clipboard or obsolete requestor.
-				break
-			}
-			notify := func() {
+			// reply tells the requestor that the data is in property, or,
+			// with None, that the request is refused. Every request needs
+			// a reply, or the requestor waits for it (ICCCM 2.2).
+			reply := func(property C.Atom) {
 				var xev C.XEvent
 				ev := (*C.XSelectionEvent)(unsafe.Pointer(&xev))
 				*ev = C.XSelectionEvent{
@@ -776,36 +792,62 @@ func (h *x11EventHandler) handleEvents() bool {
 					requestor: cevt.requestor,
 					selection: cevt.selection,
 					target:    cevt.target,
-					property:  cevt.property,
+					property:  property,
 					time:      cevt.time,
 				}
 				C.XSendEvent(w.x, cevt.requestor, 0, 0, &xev)
+			}
+			notify := func() { reply(cevt.property) }
+			if (cevt.selection != w.atoms.clipboard && cevt.selection != w.atoms.primary) || cevt.property == C.None {
+				// Unsupported clipboard or obsolete requestor.
+				reply(C.None)
+				break
 			}
 			switch cevt.target {
 			case w.atoms.targets:
 				// The requestor wants the supported clipboard
 				// formats. First write the targets...
-				formats := [...]C.long{
-					C.long(w.atoms.targets),
+				formats := []C.long{C.long(w.atoms.targets)}
+				// The hint comes before the content, like the
+				// markers on the other platforms.
+				if w.clipboard.sensitive {
+					formats = append(formats, C.long(w.atoms.passwordManagerHint))
+				}
+				formats = append(formats,
 					C.long(w.atoms.utf8string),
 					C.long(w.atoms.plaintext),
 					// GTK clients need this.
 					C.long(w.atoms.gtk_text_buffer_contents),
-				}
+				)
 				C.XChangeProperty(w.x, cevt.requestor, cevt.property, w.atoms.atom,
 					32 /* bitwidth of formats */, C.PropModeReplace,
-					(*C.uchar)(unsafe.Pointer(&formats)), C.int(len(formats)),
+					(*C.uchar)(unsafe.Pointer(unsafe.SliceData(formats))), C.int(len(formats)),
 				)
 				// ...then notify the requestor.
 				notify()
 			case w.atoms.plaintext, w.atoms.utf8string, w.atoms.gtk_text_buffer_contents:
-				content := w.clipboard.content
+				content := w.clipboard.data
 				ptr := (*C.uchar)(unsafe.Pointer(unsafe.SliceData(content)))
 				C.XChangeProperty(w.x, cevt.requestor, cevt.property, cevt.target,
 					8 /* bitwidth */, C.PropModeReplace,
 					ptr, C.int(len(content)),
 				)
 				notify()
+			case w.atoms.passwordManagerHint:
+				if !w.clipboard.sensitive {
+					// Offered only for sensitive content.
+					reply(C.None)
+					break
+				}
+				hint := []byte(passwordManagerHintValue)
+				C.XChangeProperty(w.x, cevt.requestor, cevt.property, cevt.target,
+					8 /* bitwidth */, C.PropModeReplace,
+					(*C.uchar)(unsafe.Pointer(unsafe.SliceData(hint))), C.int(len(hint)),
+				)
+				notify()
+			default:
+				// A target that is not offered.
+				reply(C.None)
 			}
 		case C.ClientMessage: // extensions
 			cevt := (*C.XClientMessageEvent)(unsafe.Pointer(xev))
@@ -879,6 +921,7 @@ func newX11Window(gioWin *callbacks, options []Option) error {
 			C.KeyPressMask | C.KeyReleaseMask | // keyboard
 			C.ButtonPressMask | C.ButtonReleaseMask | // mouse clicks
 			C.PointerMotionMask | // mouse movement
+			C.LeaveWindowMask | // pointer leaving the window
 			C.StructureNotifyMask, // resize
 		background_pixmap: C.None,
 		override_redirect: C.False,
@@ -926,6 +969,7 @@ func newX11Window(gioWin *callbacks, options []Option) error {
 	w.atoms.clipboardContent = w.atom("CLIPBOARD_CONTENT", false)
 	w.atoms.atom = w.atom("ATOM", false)
 	w.atoms.targets = w.atom("TARGETS", false)
+	w.atoms.passwordManagerHint = w.atom(passwordManagerHintType, false)
 	w.atoms.wmName = w.atom("_NET_WM_NAME", false)
 	w.atoms.wmState = w.atom("_NET_WM_STATE", false)
 	w.atoms.wmStateFullscreen = w.atom("_NET_WM_STATE_FULLSCREEN", false)

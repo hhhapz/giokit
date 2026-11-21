@@ -223,6 +223,8 @@ const (
 	HTBOTTOMLEFT  = 16
 	HTBOTTOMRIGHT = 17
 
+	IACE_DEFAULT = 0x0010
+
 	IDC_APPSTARTING = 32650 // Standard arrow and small hourglass
 	IDC_ARROW       = 32512 // Standard arrow
 	IDC_CROSS       = 32515 // Crosshair
@@ -289,6 +291,7 @@ const (
 	VK_END    = 0x23
 	VK_ESCAPE = 0x1b
 	VK_HOME   = 0x24
+	VK_INSERT = 0x2d
 	VK_LEFT   = 0x25
 	VK_NEXT   = 0x22
 	VK_PRIOR  = 0x21
@@ -368,9 +371,14 @@ const (
 	WM_NCACTIVATE            = 0x0086
 	WM_NCHITTEST             = 0x0084
 	WM_NCCALCSIZE            = 0x0083
+	WM_NCPOINTERUPDATE       = 0x0241
+	WM_NCPOINTERDOWN         = 0x0242
+	WM_NCPOINTERUP           = 0x0243
+	WM_DROPFILES             = 0x0233
 	WM_PAINT                 = 0x000F
 	WM_POINTERCAPTURECHANGED = 0x024C
 	WM_POINTERDOWN           = 0x0246
+	WM_POINTERLEAVE          = 0x024A
 	WM_POINTERUP             = 0x0247
 	WM_POINTERUPDATE         = 0x0245
 	WM_POINTERWHEEL          = 0x024E
@@ -444,7 +452,7 @@ var (
 	_GlobalUnlock     = kernel32.NewProc("GlobalUnlock")
 
 	user32                        = syscall.NewLazySystemDLL("user32.dll")
-	_AdjustWindowRectEx           = user32.NewProc("AdjustWindowRectEx")
+	_AdjustWindowRectExForDpi     = user32.NewProc("AdjustWindowRectExForDpi")
 	_CallMsgFilter                = user32.NewProc("CallMsgFilterW")
 	_CloseClipboard               = user32.NewProc("CloseClipboard")
 	_CreateWindowEx               = user32.NewProc("CreateWindowExW")
@@ -469,6 +477,7 @@ var (
 	_GetWindowLong                = user32.NewProc("GetWindowLongPtrW")
 	_GetWindowLong32              = user32.NewProc("GetWindowLongW")
 	_GetWindowPlacement           = user32.NewProc("GetWindowPlacement")
+	_KillTimer                    = user32.NewProc("KillTimer")
 	_LoadCursor                   = user32.NewProc("LoadCursorW")
 	_LoadImage                    = user32.NewProc("LoadImageW")
 	_MonitorFromPoint             = user32.NewProc("MonitorFromPoint")
@@ -479,15 +488,14 @@ var (
 	_PeekMessage                  = user32.NewProc("PeekMessageW")
 	_PostMessage                  = user32.NewProc("PostMessageW")
 	_PostQuitMessage              = user32.NewProc("PostQuitMessage")
-	_ReleaseCapture               = user32.NewProc("ReleaseCapture")
 	_RegisterClassExW             = user32.NewProc("RegisterClassExW")
+	_RegisterClipboardFormat      = user32.NewProc("RegisterClipboardFormatW")
 	_RegisterTouchWindow          = user32.NewProc("RegisterTouchWindow")
 	_ReleaseDC                    = user32.NewProc("ReleaseDC")
 	_ScreenToClient               = user32.NewProc("ScreenToClient")
 	_ShowWindow                   = user32.NewProc("ShowWindow")
 	_IsIconic                     = user32.NewProc("IsIconic")
 	_SendMessage                  = user32.NewProc("SendMessageW")
-	_SetCapture                   = user32.NewProc("SetCapture")
 	_SetCursor                    = user32.NewProc("SetCursor")
 	_SetClipboardData             = user32.NewProc("SetClipboardData")
 	_SetForegroundWindow          = user32.NewProc("SetForegroundWindow")
@@ -510,6 +518,7 @@ var (
 	_GetDeviceCaps = gdi32.NewProc("GetDeviceCaps")
 
 	imm32                    = syscall.NewLazySystemDLL("imm32")
+	_ImmAssociateContextEx   = imm32.NewProc("ImmAssociateContextEx")
 	_ImmGetContext           = imm32.NewProc("ImmGetContext")
 	_ImmGetCompositionString = imm32.NewProc("ImmGetCompositionStringW")
 	_ImmNotifyIME            = imm32.NewProc("ImmNotifyIME")
@@ -519,10 +528,46 @@ var (
 
 	dwmapi                        = syscall.NewLazySystemDLL("dwmapi")
 	_DwmExtendFrameIntoClientArea = dwmapi.NewProc("DwmExtendFrameIntoClientArea")
+
+	shell32          = syscall.NewLazySystemDLL("shell32")
+	_DragAcceptFiles = shell32.NewProc("DragAcceptFiles")
+	_DragQueryFileW  = shell32.NewProc("DragQueryFileW")
+	_DragQueryPoint  = shell32.NewProc("DragQueryPoint")
+	_DragFinish      = shell32.NewProc("DragFinish")
 )
 
-func AdjustWindowRectEx(r *Rect, dwStyle uint32, bMenu int, dwExStyle uint32) {
-	_AdjustWindowRectEx.Call(uintptr(unsafe.Pointer(r)), uintptr(dwStyle), uintptr(bMenu), uintptr(dwExStyle))
+func AdjustWindowRectExForDpi(r *Rect, dwStyle uint32, bMenu int, dwExStyle uint32, dpi int) {
+	_AdjustWindowRectExForDpi.Call(uintptr(unsafe.Pointer(r)), uintptr(dwStyle), uintptr(bMenu), uintptr(dwExStyle), uintptr(dpi))
+}
+
+// DragAcceptFiles enables or disables file drops for a window.
+func DragAcceptFiles(hwnd syscall.Handle, accept bool) {
+	var enabled uintptr
+	if accept {
+		enabled = 1
+	}
+	_DragAcceptFiles.Call(uintptr(hwnd), enabled)
+}
+
+func DragQueryFile(hDrop syscall.Handle, index uint32, buf []uint16) uint32 {
+	r, _, _ := _DragQueryFileW.Call(
+		uintptr(hDrop),
+		uintptr(index),
+		uintptr(unsafe.Pointer(unsafe.SliceData(buf))),
+		uintptr(len(buf)),
+	)
+	return uint32(r)
+}
+
+// DragQueryPoint reports the drop position and whether it is in the client area.
+func DragQueryPoint(hDrop syscall.Handle) (Point, bool) {
+	var point Point
+	r, _, _ := _DragQueryPoint.Call(uintptr(hDrop), uintptr(unsafe.Pointer(&point)))
+	return point, r != 0
+}
+
+func DragFinish(hDrop syscall.Handle) {
+	_DragFinish.Call(uintptr(hDrop))
 }
 
 func CallMsgFilter(m *Msg, nCode uintptr) bool {
@@ -685,7 +730,7 @@ func GetSystemDPI() int {
 		if err != nil {
 			return 96
 		}
-		defer ReleaseDC(screenDC)
+		defer ReleaseDC(0, screenDC)
 		return getDeviceCaps(screenDC, LOGPIXELSX)
 	}
 }
@@ -760,6 +805,11 @@ func GetWindowLong(hwnd syscall.Handle, index uintptr) (val uintptr) {
 		val, _, _ = _GetWindowLong.Call(uintptr(hwnd), index)
 	}
 	return
+}
+
+func ImmAssociateContextEx(hwnd, imc syscall.Handle, flags uint32) bool {
+	r, _, _ := _ImmAssociateContextEx.Call(uintptr(hwnd), uintptr(imc), uintptr(flags))
+	return r != 0
 }
 
 func ImmGetContext(hwnd syscall.Handle) syscall.Handle {
@@ -864,7 +914,7 @@ func GlobalUnlock(h syscall.Handle) {
 }
 
 func KillTimer(hwnd syscall.Handle, nIDEvent uintptr) error {
-	r, _, err := _SetTimer.Call(uintptr(hwnd), uintptr(nIDEvent), 0, 0)
+	r, _, err := _KillTimer.Call(uintptr(hwnd), uintptr(nIDEvent))
 	if r == 0 {
 		return fmt.Errorf("KillTimer failed: %v", err)
 	}
@@ -934,11 +984,6 @@ func PostMessage(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) error 
 	return nil
 }
 
-func ReleaseCapture() bool {
-	r, _, _ := _ReleaseCapture.Call()
-	return r != 0
-}
-
 func RegisterClassEx(cls *WndClassEx) (uint16, error) {
 	a, _, err := _RegisterClassExW.Call(uintptr(unsafe.Pointer(cls)))
 	if a == 0 {
@@ -947,8 +992,20 @@ func RegisterClassEx(cls *WndClassEx) (uint16, error) {
 	return uint16(a), nil
 }
 
-func ReleaseDC(hdc syscall.Handle) {
-	_ReleaseDC.Call(uintptr(hdc))
+func RegisterClipboardFormat(name string) (uint32, error) {
+	n, err := syscall.UTF16PtrFromString(name)
+	if err != nil {
+		return 0, err
+	}
+	r, _, err := _RegisterClipboardFormat.Call(uintptr(unsafe.Pointer(n)))
+	if r == 0 {
+		return 0, fmt.Errorf("RegisterClipboardFormatW: %v", err)
+	}
+	return uint32(r), nil
+}
+
+func ReleaseDC(hwnd, hdc syscall.Handle) {
+	_ReleaseDC.Call(uintptr(hwnd), uintptr(hdc))
 }
 
 func SendMessage(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) error {
@@ -969,11 +1026,6 @@ func SetFocus(hwnd syscall.Handle) {
 
 func SetThreadDpiAwarenessContext() {
 	_SetThreadDpiAwarenessContext.Call(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2)
-}
-
-func SetCapture(hwnd syscall.Handle) syscall.Handle {
-	r, _, _ := _SetCapture.Call(uintptr(hwnd))
-	return syscall.Handle(r)
 }
 
 func SetClipboardData(format uint32, mem syscall.Handle) error {

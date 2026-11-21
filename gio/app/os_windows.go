@@ -18,6 +18,7 @@ import (
 	"sync"
 	"time"
 	"unicode"
+	"unicode/utf16"
 	"unicode/utf8"
 	"unsafe"
 
@@ -50,6 +51,17 @@ type window struct {
 
 	animating bool
 
+	// highSurrogate holds the first half of a UTF-16 surrogate pair until
+	// the WM_CHAR with its second half arrives.
+	highSurrogate rune
+
+	// Clipboard work waiting for another program to close the clipboard.
+	clipboard struct {
+		read  bool
+		write *clipboardContent
+		tries int
+	}
+
 	borderSize image.Point
 	config     Config
 	// frameDims stores the last seen window frame width and height.
@@ -58,6 +70,13 @@ type window struct {
 }
 
 const _WM_WAKEUP = windows.WM_USER + iota
+
+// UTF-16 surrogate ranges, from unicode/utf16.
+const (
+	surr1 = 0xd800
+	surr2 = 0xdc00
+	surr3 = 0xe000
+)
 
 const copyDataURLType = 0xffffff00
 
@@ -214,6 +233,7 @@ func (w *window) init() error {
 		return err
 	}
 	w.hwnd = hwnd
+	w.ShowTextInput(false)
 	return nil
 }
 
@@ -268,7 +288,19 @@ func windowProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) uintptr
 		}
 		fallthrough
 	case windows.WM_CHAR:
-		if r := rune(wParam); unicode.IsPrint(r) {
+		// Surrogate pairs arrive as two WM_CHAR messages, high bits first.
+		r := rune(wParam)
+		switch {
+		// Handle first half of a surrogate pair.
+		case surr1 <= r && r < surr2:
+			w.highSurrogate = r
+			return windows.TRUE
+		// Handle second half of a surrogate pair.
+		case surr2 <= r && r < surr3:
+			r = utf16.DecodeRune(w.highSurrogate, r)
+		}
+		w.highSurrogate = 0
+		if unicode.IsPrint(r) {
 			w.w.EditorInsert(string(r))
 		}
 		// The message is processed.
@@ -311,32 +343,16 @@ func windowProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) uintptr
 				return 0
 			}
 		}
-	case windows.WM_POINTERDOWN, windows.WM_POINTERUP, windows.WM_POINTERUPDATE, windows.WM_POINTERCAPTURECHANGED:
+	case windows.WM_POINTERDOWN, windows.WM_POINTERUP, windows.WM_POINTERUPDATE,
+		windows.WM_POINTERLEAVE, windows.WM_POINTERCAPTURECHANGED,
+		windows.WM_NCPOINTERUPDATE, windows.WM_NCPOINTERDOWN, windows.WM_NCPOINTERUP:
 		pid := getPointerIDwParam(wParam)
 		pi, err := windows.GetPointerInfo(uint32(pid))
 		if err != nil {
 			panic(err)
 		}
-		switch msg {
-		case windows.WM_POINTERDOWN:
-			windows.SetCapture(w.hwnd)
-		case windows.WM_POINTERUP:
-			windows.ReleaseCapture()
-		}
 
-		kind := pointer.Move
-		switch pi.ButtonChangeType {
-		case windows.POINTER_CHANGE_FIRSTBUTTON_DOWN, windows.POINTER_CHANGE_SECONDBUTTON_DOWN, windows.POINTER_CHANGE_THIRDBUTTON_DOWN, windows.POINTER_CHANGE_FOURTHBUTTON_DOWN, windows.POINTER_CHANGE_FIFTHBUTTON_DOWN:
-			kind = pointer.Press
-		case windows.POINTER_CHANGE_FIRSTBUTTON_UP, windows.POINTER_CHANGE_SECONDBUTTON_UP, windows.POINTER_CHANGE_THIRDBUTTON_UP, windows.POINTER_CHANGE_FOURTHBUTTON_UP, windows.POINTER_CHANGE_FIFTHBUTTON_UP:
-			kind = pointer.Release
-		}
-
-		if (pi.PointerFlags&windows.POINTER_FLAG_CANCELED != 0) || (msg == windows.WM_POINTERCAPTURECHANGED) {
-			kind = pointer.Cancel
-		}
-
-		w.pointerUpdate(pi, pid, kind, lParam)
+		w.pointerUpdate(pi, pid, pointerKind(msg, pi), lParam)
 	case windows.WM_CANCELMODE:
 		w.ProcessEvent(pointer.Event{
 			Kind: pointer.Cancel,
@@ -374,7 +390,8 @@ func windowProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) uintptr
 		w.ProcessEvent(DestroyEvent{})
 		w.w = nil
 		if w.hdc != 0 {
-			windows.ReleaseDC(w.hdc)
+			// ReleaseDC has no effect on this window's CS_OWNDC device context.
+			windows.ReleaseDC(w.hwnd, w.hdc)
 			w.hdc = 0
 		}
 		// The system destroys the HWND for us.
@@ -405,6 +422,17 @@ func windowProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) uintptr
 			return 0
 		}
 		szp.Rgrc[0] = mi.WorkArea
+		return 0
+	case windows.WM_DROPFILES:
+		hDrop := syscall.Handle(wParam)
+		defer windows.DragFinish(hDrop)
+		point, client := windows.DragQueryPoint(hDrop)
+		if !client {
+			return 0
+		}
+		if paths := dragQueryFiles(hDrop); len(paths) > 0 {
+			w.ProcessEvent(fileDropEvent(f32.Pt(float32(point.X), float32(point.Y)), paths))
+		}
 		return 0
 	case windows.WM_PAINT:
 		w.draw(true)
@@ -444,6 +472,12 @@ func windowProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) uintptr
 	case _WM_WAKEUP:
 		w.loop.Wakeup()
 		w.loop.FlushEvents()
+	case windows.WM_TIMER:
+		if wParam == clipboardTimer {
+			windows.KillTimer(w.hwnd, clipboardTimer)
+			w.flushClipboard()
+			return 0
+		}
 	case windows.WM_IME_STARTCOMPOSITION:
 		imc := windows.ImmGetContext(w.hwnd)
 		if imc == 0 {
@@ -536,6 +570,26 @@ func windowProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) uintptr
 	}
 
 	return windows.DefWindowProc(hwnd, msg, wParam, lParam)
+}
+
+func dragQueryFiles(hDrop syscall.Handle) []string {
+	count := windows.DragQueryFile(hDrop, 0xffffffff, nil)
+	paths := make([]string, 0, count)
+	for i := range count {
+		size := windows.DragQueryFile(hDrop, i, nil)
+		if size == 0 {
+			continue
+		}
+		// The returned length excludes the NUL; the buffer needs room for it.
+		buf := make([]uint16, size+1)
+		if windows.DragQueryFile(hDrop, i, buf) == 0 {
+			continue
+		}
+		if path := syscall.UTF16ToString(buf); path != "" {
+			paths = append(paths, path)
+		}
+	}
+	return paths
 }
 
 // getModifiers reports the currently pressed modifier keys.
@@ -654,8 +708,31 @@ func (w *window) hitTest(x, y int) uintptr {
 	return windows.HTCLIENT
 }
 
+func pointerKind(msg uint32, pi windows.PointerInfo) pointer.Kind {
+	if pi.PointerFlags&windows.POINTER_FLAG_CANCELED != 0 || msg == windows.WM_POINTERCAPTURECHANGED {
+		return pointer.Cancel
+	}
+	switch msg {
+	case windows.WM_POINTERLEAVE, windows.WM_NCPOINTERUPDATE, windows.WM_NCPOINTERDOWN, windows.WM_NCPOINTERUP:
+		// Treat non-client input as leaving the client area.
+		return pointer.Leave
+	}
+	switch pi.ButtonChangeType {
+	case windows.POINTER_CHANGE_FIRSTBUTTON_DOWN, windows.POINTER_CHANGE_SECONDBUTTON_DOWN,
+		windows.POINTER_CHANGE_THIRDBUTTON_DOWN, windows.POINTER_CHANGE_FOURTHBUTTON_DOWN,
+		windows.POINTER_CHANGE_FIFTHBUTTON_DOWN:
+		return pointer.Press
+	case windows.POINTER_CHANGE_FIRSTBUTTON_UP, windows.POINTER_CHANGE_SECONDBUTTON_UP,
+		windows.POINTER_CHANGE_THIRDBUTTON_UP, windows.POINTER_CHANGE_FOURTHBUTTON_UP,
+		windows.POINTER_CHANGE_FIFTHBUTTON_UP:
+		return pointer.Release
+	default:
+		return pointer.Move
+	}
+}
+
 func (w *window) pointerUpdate(pi windows.PointerInfo, pid pointer.ID, kind pointer.Kind, lParam uintptr) {
-	if !w.config.Focused {
+	if !w.config.Focused && kind != pointer.Leave {
 		windows.SetFocus(w.hwnd)
 	}
 
@@ -826,32 +903,53 @@ func (w *window) NewContext() (context, error) {
 }
 
 func (w *window) ReadClipboard() {
-	w.readClipboard()
+	w.clipboard.read = true
+	w.flushClipboard()
 }
 
-func (w *window) readClipboard() (cerr error) {
-	defer func() {
-		if cerr != nil {
-			w.processDataEvent("")
-		}
-	}()
-
-	if err := windows.OpenClipboard(w.hwnd); err != nil {
-		return err
-	}
-	defer windows.CloseClipboard()
+func (w *window) readClipboard() (string, error) {
 	mem, err := windows.GetClipboardData(windows.CF_UNICODETEXT)
 	if err != nil {
-		return err
+		return "", err
 	}
 	ptr, err := windows.GlobalLock(mem)
 	if err != nil {
-		return err
+		return "", err
 	}
 	defer windows.GlobalUnlock(mem)
-	content := gowindows.UTF16PtrToString((*uint16)(unsafe.Pointer(ptr)))
-	w.processDataEvent(content)
-	return nil
+	return gowindows.UTF16PtrToString((*uint16)(unsafe.Pointer(ptr))), nil
+}
+
+const clipboardTimer = 1
+
+// flushClipboard does the pending clipboard work. While another program has
+// the clipboard open, it retries with backoff for a few seconds.
+func (w *window) flushClipboard() {
+	if !w.clipboard.read && w.clipboard.write == nil {
+		return
+	}
+	err := windows.OpenClipboard(w.hwnd)
+	if err != nil && w.clipboard.tries < 7 {
+		w.clipboard.tries++
+		windows.SetTimer(w.hwnd, clipboardTimer, 10<<w.clipboard.tries, 0)
+		return
+	}
+	w.clipboard.tries = 0
+	var content string
+	if err == nil {
+		if c := w.clipboard.write; c != nil {
+			w.writeClipboard(string(c.data), c.sensitive)
+		}
+		if w.clipboard.read {
+			content, _ = w.readClipboard()
+		}
+		windows.CloseClipboard()
+	}
+	w.clipboard.write = nil
+	if w.clipboard.read {
+		w.clipboard.read = false
+		w.processDataEvent(content)
+	}
 }
 
 func (w *window) processDataEvent(content string) {
@@ -868,16 +966,18 @@ func (w *window) Configure(options []Option) {
 	metric := configForDPI(dpi)
 	cnf := w.config
 	cnf.apply(metric, options)
+	decorated := w.config.Decorated
 	w.config.Title = cnf.Title
 	w.config.Decorated = cnf.Decorated
 	w.config.MinSize = cnf.MinSize
 	w.config.MaxSize = cnf.MaxSize
 	windows.SetWindowText(w.hwnd, cnf.Title)
 
-	style := windows.GetWindowLong(w.hwnd, windows.GWL_STYLE)
+	oldStyle := windows.GetWindowLong(w.hwnd, windows.GWL_STYLE)
+	style := oldStyle
 	var showMode int32
 	var x, y, width, height int32
-	swpStyle := uintptr(windows.SWP_FRAMECHANGED)
+	swpStyle := uintptr(windows.SWP_NOMOVE | windows.SWP_NOSIZE)
 	if cnf.TopMost == w.config.TopMost {
 		// Don't change the z-order if TopMost didn't change.
 		swpStyle |= windows.SWP_NOZORDER
@@ -892,12 +992,10 @@ func (w *window) Configure(options []Option) {
 	switch cnf.Mode {
 	case Minimized:
 		style |= winStyle
-		swpStyle |= windows.SWP_NOMOVE | windows.SWP_NOSIZE
 		showMode = windows.SW_SHOWMINIMIZED
 
 	case Maximized:
 		style |= winStyle
-		swpStyle |= windows.SWP_NOMOVE | windows.SWP_NOSIZE
 		showMode = windows.SW_SHOWMAXIMIZED
 
 	case Windowed:
@@ -917,16 +1015,18 @@ func (w *window) Configure(options []Option) {
 				Right:  width,
 				Bottom: height,
 			}
-			windows.AdjustWindowRectEx(&r, uint32(style), 0, dwExStyle)
+			windows.AdjustWindowRectExForDpi(&r, uint32(style), 0, dwExStyle, dpi)
 			width = r.Right - r.Left
 			height = r.Bottom - r.Top
 		} else {
 			// Enable drop shadows when we draw decorations.
 			windows.DwmExtendFrameIntoClientArea(w.hwnd, windows.Margins{-1, -1, -1, -1})
 		}
+		if wr.Right-wr.Left != width || wr.Bottom-wr.Top != height {
+			swpStyle &^= windows.SWP_NOMOVE | windows.SWP_NOSIZE
+		}
 
 	case Fullscreen:
-		swpStyle |= windows.SWP_NOMOVE | windows.SWP_NOSIZE
 		showMode = windows.SW_SHOWMAXIMIZED
 	}
 
@@ -941,20 +1041,33 @@ func (w *window) Configure(options []Option) {
 
 	// Note: these invocation all trigger the windows callback method which may process a pending system.ActionCenter
 	// action, so SetWindowPos should come first so as to not "overwrite" system.ActionCenter.
+	if style != oldStyle || cnf.Decorated != decorated {
+		swpStyle |= windows.SWP_FRAMECHANGED
+	}
 	windows.SetWindowPos(w.hwnd, hwndAfter, x, y, width, height, swpStyle)
 	windows.SetWindowLong(w.hwnd, windows.GWL_STYLE, style)
-	windows.ShowWindow(w.hwnd, showMode)
-}
-
-func (w *window) WriteClipboard(mime string, s []byte) {
-	w.writeClipboard(string(s))
-}
-
-func (w *window) writeClipboard(s string) error {
-	if err := windows.OpenClipboard(w.hwnd); err != nil {
-		return err
+	// ShowWindow(SW_SHOWNORMAL) moves a snapped window back to its unsnapped
+	// position, so skip it when the window is already in the requested state.
+	p := windows.GetWindowPlacement(w.hwnd)
+	shown := int32(windows.SW_SHOWNORMAL)
+	switch {
+	case p.IsMinimized():
+		shown = windows.SW_SHOWMINIMIZED
+	case p.IsMaximized():
+		shown = windows.SW_SHOWMAXIMIZED
 	}
-	defer windows.CloseClipboard()
+	// GetWindowPlacement reports SW_SHOWNORMAL for a window not yet shown.
+	if oldStyle&windows.WS_VISIBLE == 0 || shown != showMode {
+		windows.ShowWindow(w.hwnd, showMode)
+	}
+}
+
+func (w *window) WriteClipboard(c clipboardContent) {
+	w.clipboard.write = &c
+	w.flushClipboard()
+}
+
+func (w *window) writeClipboard(s string, sensitive bool) error {
 	if err := windows.EmptyClipboard(); err != nil {
 		return err
 	}
@@ -962,8 +1075,33 @@ func (w *window) writeClipboard(s string) error {
 	if err != nil {
 		return err
 	}
+	if sensitive {
+		// These registered formats with the DWORD 0 keep the content out of
+		// clipboard monitors, the clipboard history (Win+V) and the cloud
+		// clipboard. They are set before the content itself. A format that
+		// cannot be set leaves the content unmarked for that purpose only.
+		formats := [...]string{
+			"ExcludeClipboardContentFromMonitorProcessing",
+			"CanIncludeInClipboardHistory",
+			"CanUploadToCloudClipboard",
+		}
+		for _, name := range formats {
+			format, err := windows.RegisterClipboardFormat(name)
+			if err != nil {
+				continue
+			}
+			var v uint32
+			setClipboardData(format, unsafe.Slice((*byte)(unsafe.Pointer(&v)), unsafe.Sizeof(v)))
+		}
+	}
 	n := len(u16) * int(unsafe.Sizeof(u16[0]))
-	mem, err := windows.GlobalAlloc(n)
+	text := unsafe.Slice((*byte)(unsafe.Pointer(unsafe.SliceData(u16))), n)
+	return setClipboardData(windows.CF_UNICODETEXT, text)
+}
+
+// setClipboardData puts a copy of data on the open clipboard in format.
+func setClipboardData(format uint32, data []byte) error {
+	mem, err := windows.GlobalAlloc(len(data))
 	if err != nil {
 		return err
 	}
@@ -972,10 +1110,9 @@ func (w *window) writeClipboard(s string) error {
 		windows.GlobalFree(mem)
 		return err
 	}
-	u16v := unsafe.Slice((*uint16)(ptr), len(u16))
-	copy(u16v, u16)
+	copy(unsafe.Slice((*byte)(ptr), len(data)), data)
 	windows.GlobalUnlock(mem)
-	if err := windows.SetClipboardData(windows.CF_UNICODETEXT, mem); err != nil {
+	if err := windows.SetClipboardData(format, mem); err != nil {
 		windows.GlobalFree(mem)
 		return err
 	}
@@ -1034,7 +1171,24 @@ func loadCursor(cursor pointer.Cursor) (syscall.Handle, error) {
 	}
 }
 
-func (w *window) ShowTextInput(show bool) {}
+func (w *window) SetFileDropEnabled(enabled bool) {
+	windows.DragAcceptFiles(w.hwnd, enabled)
+}
+
+func (w *window) ShowTextInput(show bool) {
+	if show {
+		windows.ImmAssociateContextEx(w.hwnd, 0, windows.IACE_DEFAULT)
+		return
+	}
+	imc := windows.ImmGetContext(w.hwnd)
+	if imc == 0 {
+		return
+	}
+	// Close the candidate window before detaching the input context.
+	windows.ImmNotifyIME(imc, windows.NI_COMPOSITIONSTR, windows.CPS_CANCEL, 0)
+	windows.ImmReleaseContext(w.hwnd, imc)
+	windows.ImmAssociateContextEx(w.hwnd, 0, 0)
+}
 
 func (w *window) SetInputHint(_ key.InputHint) {}
 
@@ -1126,6 +1280,8 @@ func convertKeyCode(code uintptr) (key.Name, bool) {
 		r = key.NamePageUp
 	case windows.VK_NEXT:
 		r = key.NamePageDown
+	case windows.VK_INSERT:
+		r = key.NameInsert
 	case windows.VK_F1:
 		r = key.NameF1
 	case windows.VK_F2:

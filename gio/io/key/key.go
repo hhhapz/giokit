@@ -206,6 +206,7 @@ const (
 	NameDeleteForward  Name = "⌦"
 	NamePageUp         Name = "⇞"
 	NamePageDown       Name = "⇟"
+	NameInsert         Name = "Insert"
 	NameTab            Name = "Tab"
 	NameSpace          Name = "Space"
 	NameCtrl           Name = "Ctrl"
